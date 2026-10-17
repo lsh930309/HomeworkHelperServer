@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import os
 import sys
@@ -18,8 +18,10 @@ from src.core.game_audio import GameAudioCoordinator, GameAudioObservation, Game
 from src.core.game_focus import AutoFocusTracker, WindowsGameFocusNative
 from src.core.media_policy import BgmPolicy
 from src.core.media_sessions import (
-    MediaSessionInfo, WindowsMediaSessions, is_spotify_session, launch_spotify,
+    MediaSessionInfo, WindowsMediaSessions, is_spotify_session,
 )
+from src.core.spotify_app import launch_spotify, spotify_processes
+from src.core.spotify_audio import SpotifyAudioController, SpotifyAudioSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,7 @@ class MediaCenterSnapshot:
     error: str = ""
     game_audio: tuple[GameAudioObservation, ...] = ()
     running: bool = False
+    spotify_audio: SpotifyAudioSnapshot = SpotifyAudioSnapshot()
 
 
 @dataclass(frozen=True)
@@ -47,12 +50,14 @@ class _Request:
     action: str
     session_id: str | None
     epoch: int
+    value: int | bool | None = None
 
 
 @dataclass(frozen=True)
-class _PendingPlay:
+class _PendingPreparation:
     generation: int
     deadline: float
+    intent: str
     automatic: bool
     session_id: str | None = None
 
@@ -66,17 +71,22 @@ class MediaCenterRuntime:
 
     POLL_SECONDS = 0.25
     IO_TIMEOUT_SECONDS = 1.0
-    PREPARE_TIMEOUT_SECONDS = 15.0
+    PREPARE_TIMEOUT_SECONDS = 60.0
 
     def __init__(self, on_change=None, *, backend_factory=WindowsMediaSessions,
                  audio_factory=GameAudioCoordinator, focus_factory=AutoFocusTracker,
-                 native_factory=WindowsGameFocusNative, spotify_launcher=launch_spotify):
+                 native_factory=WindowsGameFocusNative, spotify_launcher=launch_spotify,
+                 dj_launcher=None, spotify_process_reader=spotify_processes,
+                 spotify_audio_factory=SpotifyAudioController):
         self._on_change = on_change
         self._backend_factory = backend_factory
         self._audio_factory = audio_factory
         self._focus_factory = focus_factory
         self._native_factory = native_factory
         self._spotify_launcher = spotify_launcher
+        self._dj_launcher = dj_launcher if dj_launcher is not None else lambda: launch_spotify(dj=True)
+        self._spotify_process_reader = spotify_process_reader
+        self._spotify_audio_factory = spotify_audio_factory
         self._lock = threading.Lock()
         self._thread = None
         self._loop = None
@@ -139,20 +149,31 @@ class MediaCenterRuntime:
             if options == self._options:
                 return True
             self._options = options
-            self._generation += 1
         self._notify_worker()
         return True
 
-    def request(self, action: str, session_id: str | None = None) -> bool:
-        if action not in {"prepare", "select", "play", "pause", "previous", "next"}:
+    def request(self, action: str, session_id: str | None = None, *, value=None) -> bool:
+        if action not in {"prepare", "select", "play", "pause", "previous", "next", "dj", "volume", "mute"}:
             return False
         if action == "select" and not session_id:
+            return False
+        if action == "volume" and (type(value) is not int or not 0 <= value <= 100):
+            return False
+        if action == "mute" and type(value) is not bool:
+            return False
+        if action not in {"volume", "mute"} and value is not None:
+            return False
+        if action in {"dj", "volume", "mute"} and session_id is not None:
             return False
         with self._lock:
             if self._stop.is_set() or self._thread is None or not self._thread.is_alive():
                 return False
-            self._generation += 1
-            self._requests.append(_Request(action, session_id, self._epoch))
+            request = _Request(action, session_id, self._epoch, value)
+            if action in {"prepare", "play", "dj"} and self._requests and request == self._requests[-1]:
+                return True
+            if action in {"pause", "select", "previous", "next"}:
+                self._generation += 1
+            self._requests.append(request)
         self._notify_worker()
         return True
 
@@ -193,6 +214,7 @@ class MediaCenterRuntime:
             self._sessions, self._selected, self._inputs()[1],
             self._policy.media_hold, self._error, self._observations,
             not self._stop.is_set(),
+            self._spotify_audio_state,
         )
         with self._lock:
             if snapshot == self._snapshot:
@@ -226,6 +248,7 @@ class MediaCenterRuntime:
         self._error = ""
         self._error_source = None
         self._pending = None
+        self._spotify_audio_state = SpotifyAudioSnapshot()
         self._policy = BgmPolicy()
         loop = asyncio.new_event_loop()
         try:
@@ -264,6 +287,7 @@ class MediaCenterRuntime:
             audio = self._audio_factory()
             focus = self._focus_factory(started_at_wall=time.time(), native=self._native)
             self._backend, self._audio, self._focus = backend, audio, focus
+            self._spotify_audio = self._spotify_audio_factory()
             tasks = [asyncio.create_task(self._game_loop()),
                      asyncio.create_task(self._media_loop())]
             await asyncio.gather(*tasks)
@@ -353,6 +377,7 @@ class MediaCenterRuntime:
             self._wake.clear()
             _, options, generation = self._inputs()
             self._policy.set_enabled(options.auto_bgm)
+            observed_pending = self._pending
             try:
                 self._sessions = tuple(await asyncio.wait_for(
                     self._backend.snapshot(), self.IO_TIMEOUT_SECONDS))
@@ -372,42 +397,50 @@ class MediaCenterRuntime:
             with self._lock:
                 commands = tuple(self._requests)
                 self._requests.clear()
+            fresh = True
             for command in commands:
                 if self._stop.is_set():
                     break
                 if command.epoch == self._epoch:
-                    self._pending = None
-                    await self._execute(command, valid)
-            if not commands and automatic is not None and not self._stop.is_set():
+                    await self._execute(command, valid, fresh=fresh)
+                    if command.action in {"play", "pause", "previous", "next", "dj"}:
+                        fresh = False
+            policy_commands = any(command.action not in {"prepare", "volume", "mute"} for command in commands)
+            if not policy_commands and automatic is not None and not self._stop.is_set():
                 if automatic == "pause" and self._selected is not None:
                     await self._control(self._selected, "pause", generation)
                 elif automatic == "play":
                     await self._play(automatic=True, generation=generation)
-            if self._pending is not None and not self._stop.is_set():
-                pending = self._pending
-                if time.monotonic() >= pending.deadline:
-                    self._pending = None
-                    self._failure("Spotify 준비 대기가 만료되었습니다. 자동 재요청하지 않습니다.")
-                elif (pending.generation != self._inputs()[2]
-                        or (pending.automatic and not self._policy.permits_automatic_play(
-                            game_audible=self._game_audible, other_playing=other_playing))):
-                    self._pending = None
-                elif valid and self._selected is not None:
-                    self._pending = None
-                    if pending.session_id is None or pending.session_id == self._selected:
-                        await self._control(self._selected, "play", pending.generation,
-                                            automatic=pending.automatic)
+            # URI 실행·의도 변경 이전에 얻은 세션 관측으로 새 준비를 완료하지 않는다.
+            if not self._stop.is_set():
+                await self._advance_pending(valid and self._pending is observed_pending)
+            self._refresh_spotify_audio()
             self._publish()
             try:
                 await asyncio.wait_for(self._wake.wait(), self.POLL_SECONDS)
             except asyncio.TimeoutError:
                 pass
 
-    async def _execute(self, command, valid):
+    async def _execute(self, command, valid, *, fresh=True):
         action, session_id = command.action, command.session_id
-        if action == "prepare":
-            self._launch()
+        if action in {"volume", "mute"}:
+            try:
+                method = self._spotify_audio.set_volume if action == "volume" else self._spotify_audio.set_mute
+                if not method(command.value):
+                    self._failure("Spotify 음량·음소거가 실제로 적용됐는지 확인하지 못했습니다.", "spotify_audio_control")
+                else:
+                    self._clear_error("spotify_audio_control")
+            except Exception as exc:
+                self._failure(f"Spotify 음량·음소거 제어 실패: {exc}", "spotify_audio_control")
             return
+        if action == "prepare":
+            self._prepare("prepare", automatic=False, generation=self._inputs()[2])
+            return
+        if action in {"pause", "select", "previous", "next"}:
+            cancelled = self._pending is not None
+            self._pending = None
+        else:
+            cancelled = False
         if action == "select":
             if any(item.session_id == session_id and is_spotify_session(item) for item in self._sessions):
                 self._explicit_selection = session_id
@@ -418,21 +451,35 @@ class MediaCenterRuntime:
         if not valid:
             self._failure("최신 미디어 상태를 확인하지 못해 제어하지 않았습니다.")
             return
+        if action == "dj":
+            self._policy.manual_play()
+            self._prepare("dj", automatic=False, generation=self._inputs()[2])
+            return
         if action == "play" and (session_id is None or session_id == self._selected):
             self._policy.manual_play()
-            await self._play(automatic=False, generation=self._inputs()[2])
+            await self._play(automatic=False, generation=self._inputs()[2], session_id=session_id, fresh=fresh)
             return
         target_id = session_id or self._selected
         if target_id is None:
+            if action == "pause" and cancelled:
+                return
             self._failure("제어할 미디어 세션이 없습니다.")
             return
         await self._control(target_id, action)
 
-    def _launch(self):
+    def _refresh_spotify_audio(self):
+        try:
+            self._spotify_audio_state = self._spotify_audio.snapshot()
+            self._clear_error("spotify_audio_observation")
+        except Exception as exc:
+            self._spotify_audio_state = SpotifyAudioSnapshot()
+            self._failure(f"Spotify 실제 음량·음소거 조회 실패: {exc}", "spotify_audio_observation")
+
+    def _launch(self, *, dj=False):
         if self._stop.is_set():
             return False
         try:
-            if not self._spotify_launcher():
+            if not (self._dj_launcher if dj else self._spotify_launcher)():
                 raise RuntimeError("Spotify URI 요청이 거부되었습니다.")
             self._clear_error("command")
             return True
@@ -440,21 +487,99 @@ class MediaCenterRuntime:
             self._failure(f"Spotify 준비 실패: {exc}")
             return False
 
-    async def _play(self, *, automatic, generation):
+    def _prepare(self, intent, *, automatic, generation, session_id=None):
+        if self._stop.is_set() or generation != self._inputs()[2]:
+            return
+        pending = self._pending
+        if pending is not None and pending.generation != generation:
+            self._pending = pending = None
+        if pending is not None:
+            if intent == "prepare":
+                return  # prepare는 기존 재생 의도와 최초 deadline을 바꾸지 않는다.
+            dj_requested = intent == "dj" and pending.intent != "dj"
+            merged = "dj" if intent == "dj" or pending.intent == "dj" else "play"
+            updated = replace(pending, intent=merged,
+                              automatic=automatic if pending.intent == "prepare" else pending.automatic and automatic,
+                              session_id=session_id or pending.session_id)
+            self._pending = pending if updated == pending else updated
+            if dj_requested and not self._launch(dj=True):
+                self._pending = None
+            return
+        if intent == "prepare" and any(is_spotify_session(item) for item in self._sessions):
+            self._clear_error("command")
+            return
+        if intent != "dj":
+            try:
+                running = self._selected is not None or bool(self._spotify_process_reader())
+            except Exception as exc:
+                self._failure(f"Spotify 실행 상태 조회 실패: {exc}")
+                return  # 조회 오류를 미실행으로 바꿔 URI를 중복 실행하지 않는다.
+        else:
+            running = False  # 명시적인 DJ는 이미 실행 중이어도 콘텐츠 URI를 한 번 보낸다.
+        if self._stop.is_set() or generation != self._inputs()[2]:
+            return
+        dj = intent == "dj" or (intent == "play" and not running and self._selected is None)
+        actual_intent = "dj" if dj else intent
+        self._pending = _PendingPreparation(generation, time.monotonic() + self.PREPARE_TIMEOUT_SECONDS,
+                                            actual_intent, automatic, session_id)
+        if (not running and self._selected is None) or intent == "dj":
+            if not self._launch(dj=dj):
+                self._pending = None
+
+    async def _play(self, *, automatic, generation, session_id=None, fresh=True):
         if automatic and not self._automatic_allowed(generation):
             return
-        if self._selected is not None:
-            await self._control(self._selected, "play", generation, automatic=automatic)
+        if self._pending is not None:
+            self._prepare("play", automatic=automatic, generation=generation, session_id=session_id)
+        elif self._selected is not None:
+            selected = next(item for item in self._sessions if item.session_id == self._selected)
+            if selected.status == "playing" and fresh:
+                self._clear_error("command")
+                return
+            if selected.can_play:
+                await self._control(self._selected, "play", generation, automatic=automatic)
+            else:
+                self._prepare("play", automatic=automatic, generation=generation,
+                              session_id=session_id or self._selected)
         elif any(is_spotify_session(item) for item in self._sessions):
             self._failure("BGM으로 사용할 Spotify 세션을 먼저 선택해 주세요.")
         elif self._explicit_selection is not None:
             self._failure("이전 Spotify 세션을 새 세션으로 자동 대체하지 않습니다.")
-        elif self._launch():
-            self._pending = _PendingPlay(generation, time.monotonic() + self.PREPARE_TIMEOUT_SECONDS,
-                                         automatic)
+        else:
+            self._prepare("play", automatic=automatic, generation=generation, session_id=session_id)
+
+    async def _advance_pending(self, valid):
+        pending = self._pending
+        if pending is None:
+            return
+        if pending.generation != self._inputs()[2]:
+            self._pending = None
+        elif pending.automatic and not self._automatic_allowed(pending.generation):
+            self._pending = None
+        elif time.monotonic() >= pending.deadline:
+            self._pending = None
+            self._failure("Spotify 준비 대기가 만료되었습니다. 자동 재요청하지 않습니다.")
+        elif valid:
+            if pending.intent == "prepare":
+                if any(is_spotify_session(item) for item in self._sessions):
+                    self._pending = None
+                    self._clear_error("command")
+                return
+            selected = next((item for item in self._sessions if item.session_id == self._selected), None)
+            if selected is None:
+                return
+            if pending.session_id is not None and pending.session_id != selected.session_id:
+                self._pending = None
+                self._failure("미디어 세션이 변경되어 이전 재생 대기를 취소했습니다.")
+            elif selected.status == "playing":
+                self._pending = None
+                self._clear_error("command")
+            elif selected.can_play:
+                self._pending = None
+                await self._control(selected.session_id, "play", pending.generation, automatic=pending.automatic)
 
     def _automatic_allowed(self, generation):
-        return (not self._stop.is_set() and generation == self._inputs()[2]
+        return (not self._stop.is_set() and self._inputs()[1].auto_bgm and generation == self._inputs()[2]
                 and self._policy.permits_automatic_play(
                     game_audible=self._game_audible,
                     other_playing=any(item.status == "playing" and item.session_id != self._selected

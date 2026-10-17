@@ -1,6 +1,7 @@
 """GSMTC를 fake로 주입하여 OS·재생·설정에 접근하지 않고 계약을 검증한다."""
 import asyncio
 from dataclasses import FrozenInstanceError
+from datetime import datetime, timedelta, timezone
 from enum import IntEnum
 from types import SimpleNamespace
 
@@ -238,7 +239,7 @@ def test_metadata_change_while_fetching_is_observed_by_the_next_snapshot():
         session.fire("metadata")
         await asyncio.sleep(0)
         release.set()
-        assert (await pending)[0].title == "이전 곡"
+        assert (await pending)[0].title == ""
 
         async def current_metadata():
             return SimpleNamespace(title="새 곡", artist="")
@@ -287,18 +288,323 @@ def test_info_is_immutable():
 
 
 def test_constructor_does_not_touch_windows_and_nonwindows_calls_fail_explicitly(monkeypatch):
+    from src.core import spotify_app
     monkeypatch.setattr(module.sys, "platform", "darwin")
     backend = WindowsMediaSessions()
     with pytest.raises(OSError, match="Windows"):
         asyncio.run(backend.snapshot())
     backend.close()
     with pytest.raises(OSError, match="Windows"):
-        module.launch_spotify()
+        spotify_app.launch_spotify()
 
 
 def test_launch_requests_only_fixed_spotify_uri_once(monkeypatch):
+    from src.core import spotify_app
     requests = []
     monkeypatch.setattr(module.sys, "platform", "win32")
-    monkeypatch.setattr(module.os, "startfile", requests.append, raising=False)
-    assert module.launch_spotify()
-    assert requests == ["spotify:"]
+    monkeypatch.setattr(spotify_app.os, "startfile",
+                        lambda *args, **kwargs: requests.append((args, kwargs)), raising=False)
+    assert spotify_app.launch_spotify()
+    assert requests == [(("spotify:",), {"show_cmd": 7})]
+
+
+def timeline(*, start=0, end=240, position=60, updated=None):
+    return SimpleNamespace(
+        start_time=timedelta(seconds=start), end_time=timedelta(seconds=end),
+        position=timedelta(seconds=position),
+        last_updated_time=updated or datetime(2026, 10, 17, tzinfo=timezone.utc),
+    )
+
+
+def test_timeline_is_normalized_without_advancing_the_provider_observation():
+    async def scenario():
+        session = Session(1)
+        native_timeline = timeline(start=10, end=250, position=70)
+        session.get_timeline_properties = lambda: native_timeline
+        session.playback.playback_rate = 1.25
+        backend = WindowsMediaSessions(Manager(session))
+        first, = await backend.snapshot()
+        assert first.position_seconds == 60
+        assert first.duration_seconds == 240
+        assert first.timeline_updated_at == native_timeline.last_updated_time.timestamp()
+        assert first.playback_rate == 1.25
+        session.playback.playback_status = Status.PAUSED
+        second, = await backend.snapshot()
+        assert second.position_seconds == 60 and second.status == "paused"
+        backend.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("value", [
+    None, RuntimeError("timeline unavailable"), timeline(end=0), timeline(position=241),
+    timeline(start=-1), timeline(updated=datetime(2026, 10, 17)),
+    timeline(updated=datetime(1601, 1, 1, tzinfo=timezone.utc)),
+])
+def test_absent_or_invalid_timeline_never_disables_transport(value):
+    async def scenario():
+        session = Session(1)
+        def read():
+            if isinstance(value, Exception):
+                raise value
+            return value
+        session.get_timeline_properties = read
+        backend = WindowsMediaSessions(Manager(session))
+        info, = await backend.snapshot()
+        assert (info.position_seconds, info.duration_seconds, info.timeline_updated_at,
+                info.playback_rate) == (None, None, None, None)
+        assert info.status == "playing" and await backend.control(info.session_id, "pause")
+        backend.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("rate", [None, float("inf"), float("nan"), -1, "invalid"])
+def test_invalid_optional_rate_preserves_the_valid_timeline(rate):
+    async def scenario():
+        session = Session(1)
+        session.get_timeline_properties = lambda: timeline()
+        session.playback.playback_rate = rate
+        backend = WindowsMediaSessions(Manager(session))
+        info, = await backend.snapshot()
+        assert info.position_seconds == 60 and info.playback_rate is None
+        backend.close()
+    asyncio.run(scenario())
+
+
+class ThumbnailStream:
+    def __init__(self, data=b"image", *, size=None, load_error=None):
+        self.data = data
+        self.size = len(data) if size is None else size
+        self.load_error = load_error
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class Thumbnail:
+    def __init__(self, stream):
+        self.stream = stream
+        self.opens = 0
+
+    async def open_read_async(self):
+        self.opens += 1
+        return self.stream
+
+
+@pytest.fixture
+def native_reader(monkeypatch):
+    class Reader:
+        def __init__(self, stream):
+            self.stream = stream
+            self.closed = False
+
+        async def load_async(self, count):
+            if self.stream.load_error:
+                raise self.stream.load_error
+            return len(self.stream.data)
+
+        def read_bytes(self, buffer):
+            buffer[:] = self.stream.data
+
+        def detach_stream(self):
+            return self.stream
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setitem(module.sys.modules, "winrt.windows.storage.streams",
+                        SimpleNamespace(DataReader=Reader))
+
+
+def test_artwork_uses_native_reader_and_refreshes_only_with_metadata(native_reader):
+    async def scenario():
+        session = Session(1)
+        first = Thumbnail(ThumbnailStream(b"first image"))
+        session.metadata.thumbnail = first
+        backend = WindowsMediaSessions(Manager(session))
+        assert (await backend.snapshot())[0].artwork == b"first image"
+        assert (await backend.snapshot())[0].artwork == b"first image"
+        assert first.opens == 1 and first.stream.closed
+        second = Thumbnail(ThumbnailStream(b"second image"))
+        session.metadata = SimpleNamespace(title="다음 곡", artist="가수", thumbnail=second)
+        session.fire("metadata")
+        await asyncio.sleep(0)
+        info, = await backend.snapshot()
+        assert info.title == "다음 곡" and info.artwork == b"second image"
+        assert second.opens == 1 and second.stream.closed
+        backend.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stream", [
+    ThumbnailStream(b""), ThumbnailStream(size=module._MAX_ARTWORK_BYTES + 1),
+    ThumbnailStream(load_error=OSError("image unavailable")),
+    ThumbnailStream(b"short", size=20),
+])
+def test_artwork_failure_or_size_limit_does_not_disable_playback(native_reader, stream):
+    async def scenario():
+        session = Session(1)
+        session.metadata.thumbnail = Thumbnail(stream)
+        backend = WindowsMediaSessions(Manager(session))
+        info, = await backend.snapshot()
+        assert info.title == "곡" and info.artwork == b"" and stream.closed
+        assert await backend.control(info.session_id, "pause")
+        backend.close()
+    asyncio.run(scenario())
+
+
+def test_thumbnail_property_failure_keeps_title_and_transport_available():
+    async def scenario():
+        class Metadata:
+            title = "곡"
+            artist = "가수"
+            @property
+            def thumbnail(self):
+                raise OSError("thumbnail provider disconnected")
+        session = Session(1)
+        session.metadata = Metadata()
+        backend = WindowsMediaSessions(Manager(session))
+        info, = await backend.snapshot()
+        assert info.title == "곡" and info.artwork == b""
+        assert await backend.control(info.session_id, "play")
+        backend.close()
+    asyncio.run(scenario())
+
+
+def test_optional_artwork_timeout_keeps_transport_alive(monkeypatch):
+    async def scenario():
+        started, cancelled = asyncio.Event(), asyncio.Event()
+        async def slow_read(_reference):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        monkeypatch.setattr(module, "_read_artwork", slow_read)
+        monkeypatch.setattr(module, "_ARTWORK_BUDGET_SECONDS", 0.01)
+        session = Session(1)
+        session.metadata.thumbnail = object()
+        backend = WindowsMediaSessions(Manager(session))
+        info, = await backend.snapshot()
+        assert started.is_set() and cancelled.is_set()
+        assert info.title == "곡" and info.artwork == b""
+        assert await backend.control(info.session_id, "play")
+        backend.close()
+    asyncio.run(scenario())
+
+
+def test_one_slow_thumbnail_does_not_starve_other_sessions_artwork(monkeypatch):
+    async def scenario():
+        async def read_image(reference):
+            if reference == "slow":
+                await asyncio.Event().wait()
+            return b"fast image"
+        monkeypatch.setattr(module, "_read_artwork", read_image)
+        monkeypatch.setattr(module, "_ARTWORK_BUDGET_SECONDS", 0.01)
+        first, second = Session(1), Session(2)
+        first.metadata.thumbnail = "slow"
+        second.metadata.thumbnail = "fast"
+        backend = WindowsMediaSessions(Manager(first, second))
+        observed = await backend.snapshot()
+        assert [info.artwork for info in observed] == [b"", b""]
+        updated = await backend.snapshot()
+        assert [info.artwork for info in updated] == [b"", b"fast image"]
+        assert (first.reads, second.reads) == (1, 2)
+        backend.close()
+    asyncio.run(scenario())
+
+
+def test_metadata_change_during_artwork_discards_obsolete_image_and_title(monkeypatch):
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+        async def delayed_image(_reference):
+            started.set()
+            await release.wait()
+            return b"old image"
+        monkeypatch.setattr(module, "_read_artwork", delayed_image)
+        session = Session(1)
+        session.metadata.thumbnail = object()
+        backend = WindowsMediaSessions(Manager(session))
+        pending = asyncio.create_task(backend.snapshot())
+        await started.wait()
+        session.fire("metadata")
+        await asyncio.sleep(0)
+        release.set()
+        info, = await pending
+        assert info.title == "" and info.artwork == b""
+        session.metadata = SimpleNamespace(title="새 곡", artist="새 가수")
+        info, = await backend.snapshot()
+        assert info.title == "새 곡"
+        backend.close()
+    asyncio.run(scenario())
+
+
+def test_session_removed_during_artwork_is_not_returned_or_reused(monkeypatch):
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+        async def delayed_image(_reference):
+            started.set()
+            await release.wait()
+            return b"old image"
+        monkeypatch.setattr(module, "_read_artwork", delayed_image)
+        old = Session(1)
+        old.metadata.thumbnail = object()
+        manager = Manager(old)
+        backend = WindowsMediaSessions(manager)
+        pending = asyncio.create_task(backend.snapshot())
+        await started.wait()
+        manager.sessions = (Session(2, title="새 세션"),)
+        manager.fire("sessions")
+        await asyncio.sleep(0)
+        release.set()
+        assert await pending == () and not old.handlers
+        replacement, = await backend.snapshot()
+        assert replacement.title == "새 세션" and replacement.session_id == "media-2"
+        assert not await backend.control("media-1", "play")
+        backend.close()
+    asyncio.run(scenario())
+
+
+def test_cancelled_artwork_read_can_refresh_metadata_on_the_next_snapshot(monkeypatch):
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+        async def delayed_image(_reference):
+            started.set()
+            await release.wait()
+            return b"image"
+        monkeypatch.setattr(module, "_read_artwork", delayed_image)
+        session = Session(1)
+        session.metadata.thumbnail = object()
+        backend = WindowsMediaSessions(Manager(session))
+        pending = asyncio.create_task(backend.snapshot())
+        await started.wait()
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        release.set()
+        info, = await backend.snapshot()
+        assert info.title == "곡" and info.artwork == b"image" and session.reads == 2
+        backend.close()
+    asyncio.run(scenario())
+
+
+def test_close_during_artwork_read_does_not_resubscribe_or_publish(monkeypatch):
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+        async def delayed_image(_reference):
+            started.set()
+            await release.wait()
+            return b"image"
+        monkeypatch.setattr(module, "_read_artwork", delayed_image)
+        session = Session(1)
+        session.metadata.thumbnail = object()
+        manager = Manager(session)
+        backend = WindowsMediaSessions(manager)
+        pending = asyncio.create_task(backend.snapshot())
+        await started.wait()
+        backend.close()
+        release.set()
+        with pytest.raises(RuntimeError, match="closed"):
+            await pending
+        assert session.handlers == manager.handlers == {}
+    asyncio.run(scenario())

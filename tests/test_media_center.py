@@ -11,6 +11,7 @@ import pytest
 from src.core.game_audio import GameAudioObservation, GameAudioTarget
 from src.core.media_center import MediaCenterRuntime, MediaOptions
 from src.core.media_sessions import MediaSessionInfo
+from src.core.spotify_audio import SpotifyAudioSnapshot
 
 
 def session(session_id="spotify", app_id="Spotify.exe", status="paused"):
@@ -40,6 +41,9 @@ class Backend:
         self.control_cancelled = threading.Event()
         self.block_control = False
         self.accept = True
+        self.processes = ()
+        self.process_error = None
+        self.process_reads = 0
 
     async def snapshot(self):
         assert not self.busy, "snapshot/control must be serial"
@@ -108,6 +112,31 @@ class Audio:
         return self.cleanup_result
 
 
+class SpotifyAudio:
+    def __init__(self):
+        self.state = SpotifyAudioSnapshot(37, False, True)
+        self.commands, self.threads = [], set()
+        self.accept = True
+
+    def snapshot(self):
+        self.threads.add(threading.get_ident())
+        return self.state
+
+    def set_volume(self, value):
+        self.threads.add(threading.get_ident())
+        self.commands.append(("volume", value))
+        if self.accept:
+            self.state = replace(self.state, volume=value)
+        return self.accept
+
+    def set_mute(self, value):
+        self.threads.add(threading.get_ident())
+        self.commands.append(("mute", value))
+        if self.accept:
+            self.state = replace(self.state, muted=value)
+        return self.accept
+
+
 class Native:
     def __init__(self):
         self.current = (100, 1000)
@@ -130,9 +159,17 @@ class Focus:
 
 
 @contextmanager
-def running(sessions=None, *, options=MediaOptions(), targets=()):
+def running(sessions=None, *, options=MediaOptions(), targets=(), processes=()):
     backend, audio, native = Backend((session(),) if sessions is None else sessions), Audio(), Native()
     launches, changes, focuses = [], [], []
+    backend.processes = processes
+
+    def read_processes():
+        backend.process_reads += 1
+        backend.threads.add(threading.get_ident())
+        if backend.process_error:
+            raise backend.process_error
+        return tuple(backend.processes)
 
     def focus_factory(**kwargs):
         focus = Focus(**kwargs)
@@ -142,7 +179,9 @@ def running(sessions=None, *, options=MediaOptions(), targets=()):
     runtime = MediaCenterRuntime(
         changes.append, backend_factory=lambda: backend, audio_factory=lambda: audio,
         native_factory=lambda: native, focus_factory=focus_factory,
-        spotify_launcher=lambda: launches.append(True) or True,
+        spotify_launcher=lambda: launches.append("normal") or True,
+        dj_launcher=lambda: launches.append("dj") or True,
+        spotify_process_reader=read_processes, spotify_audio_factory=SpotifyAudio,
     )
     runtime.POLL_SECONDS = 0.01
     runtime.IO_TIMEOUT_SECONDS = 0.5
@@ -162,7 +201,8 @@ def test_constructor_and_inactive_configuration_have_no_io():
 
     runtime = MediaCenterRuntime(backend_factory=forbidden, audio_factory=forbidden,
                                  native_factory=forbidden, focus_factory=forbidden,
-                                 spotify_launcher=forbidden)
+                                 spotify_launcher=forbidden, dj_launcher=forbidden,
+                                 spotify_process_reader=forbidden, spotify_audio_factory=forbidden)
     assert runtime.configure(MediaOptions(False, False, False))
     runtime.update_targets(())
     assert not runtime.running and not runtime.request("play")
@@ -272,17 +312,18 @@ def test_media_metadata_delay_does_not_block_audio_and_all_io_stays_on_one_worke
     assert threading.get_ident() not in backend.threads
 
 
-def test_prepare_launches_once_without_play_and_missing_session_intent_expires():
+def test_prepare_and_play_share_one_launch_and_expired_intent_does_not_restart():
     with running((), options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
         assert runtime.request("prepare")
         wait_for(lambda: len(launches) == 1)
         assert not backend.commands
         assert runtime.request("play")
-        wait_for(lambda: len(launches) == 2)
+        time.sleep(.03)
+        assert len(launches) == 1
         wait_for(lambda: "만료" in runtime.snapshot.error)
         backend.sessions = (session(),)
         time.sleep(0.04)
-        assert not backend.commands and len(launches) == 2
+        assert not backend.commands and len(launches) == 1
 
 
 def test_pending_play_is_cancelled_by_manual_pause_before_spotify_appears():
@@ -395,7 +436,9 @@ def test_stop_reports_restore_failure_without_leaving_a_worker_alive():
     backend, audio = Backend(), Audio()
     audio.cleanup_result = False
     runtime = MediaCenterRuntime(backend_factory=lambda: backend, audio_factory=lambda: audio,
-                                 native_factory=Native, focus_factory=Focus)
+                                 native_factory=Native, focus_factory=Focus,
+                                 spotify_process_reader=lambda: (), spotify_audio_factory=SpotifyAudio,
+                                 spotify_launcher=lambda: True, dj_launcher=lambda: True)
     runtime.POLL_SECONDS = 0.01
     runtime.start(MediaOptions(False))
     wait_for(lambda: backend.reads > 0)
@@ -424,3 +467,246 @@ def test_runtime_can_restart_only_after_worker_finished_with_a_fresh_epoch():
         wait_for(lambda: runtime.running and runtime.snapshot.running)
         assert runtime._epoch == first_epoch + 1
         assert not runtime.snapshot.media_hold
+
+
+def test_cold_play_launches_dj_once_and_waits_for_play_capability():
+    with running(()) as (runtime, backend, _, _, launches, *_):
+        runtime.PREPARE_TIMEOUT_SECONDS = .5
+        wait_for(lambda: launches == ["dj"])
+        backend.sessions = (replace(session(), status="opened", can_play=False),)
+        wait_for(lambda: runtime.snapshot.sessions == backend.sessions)
+        before_deadline = runtime._pending.deadline
+        for _ in range(5):
+            assert runtime.request("prepare") and runtime.request("play")
+            time.sleep(.005)
+        wait_for(lambda: not runtime._requests)
+        assert not backend.commands and launches == ["dj"]
+        assert runtime._pending.deadline == before_deadline
+        backend.sessions = (session(),)
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        time.sleep(.03)
+        assert launches == ["dj"] and backend.commands == [("spotify", "play")]
+
+
+def test_login_autostart_process_waits_for_session_without_another_uri():
+    with running((), processes=(object(),)) as (runtime, backend, _, _, launches, *_):
+        wait_for(lambda: runtime._pending is not None)
+        assert backend.process_reads == 1 and launches == []
+        assert runtime.request("prepare") and runtime.request("play")
+        time.sleep(.03)
+        assert not backend.commands and not launches and backend.process_reads == 1
+        backend.sessions = (session(),)
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        assert threading.get_ident() not in backend.threads
+
+
+def test_already_playing_session_completes_cold_preparation_without_play_command():
+    with running(()) as (runtime, backend, _, _, launches, *_):
+        wait_for(lambda: launches == ["dj"])
+        backend.sessions = (session(status="playing"),)
+        wait_for(lambda: runtime.snapshot.sessions == backend.sessions and runtime._pending is None)
+        assert not backend.commands and launches == ["dj"]
+
+
+def test_warm_play_resumes_existing_session_without_dj_or_process_lookup():
+    with running(options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request("play")
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        for _ in range(5):
+            assert runtime.request("play")
+        time.sleep(.04)
+        assert backend.commands == [("spotify", "play")] and not launches and backend.process_reads == 0
+
+
+def test_prepare_only_opens_normal_app_once_and_never_creates_play_intent():
+    with running((), options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request("prepare")
+        wait_for(lambda: launches == ["normal"])
+        for _ in range(10):
+            assert runtime.request("prepare")
+        backend.sessions = (session(),)
+        wait_for(lambda: runtime.snapshot.sessions == backend.sessions and runtime._pending is None)
+        assert runtime.request("prepare")
+        time.sleep(.03)
+        assert launches == ["normal"] and not backend.commands
+
+
+def test_repeated_prepare_play_does_not_extend_initial_deadline():
+    with running((), options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request("prepare")
+        wait_for(lambda: launches == ["normal"])
+        deadline = runtime._pending.deadline
+        for _ in range(8):
+            assert runtime.request("play") and runtime.request("prepare")
+            time.sleep(.008)
+        assert runtime._pending.deadline == deadline
+        wait_for(lambda: "만료" in runtime.snapshot.error)
+        backend.sessions = (session(),)
+        time.sleep(.04)
+        assert launches == ["normal"] and not backend.commands
+
+
+def test_other_media_cancels_delayed_automatic_play_and_hold_survives_close():
+    with running(()) as (runtime, backend, _, _, launches, *_):
+        wait_for(lambda: launches == ["dj"])
+        backend.sessions = (session("firefox", "Firefox.exe", "playing"),)
+        wait_for(lambda: runtime.snapshot.media_hold and runtime._pending is None)
+        backend.sessions = (session(),)
+        time.sleep(.04)
+        assert not backend.commands and launches == ["dj"]
+
+
+def test_selection_cancels_preparation_instead_of_retargeting_late_play():
+    with running((), options=MediaOptions(False), processes=(object(),)) as (runtime, backend, *_):
+        assert runtime.request("play")
+        wait_for(lambda: runtime._pending is not None)
+        backend.sessions = (session("a"), session("b"))
+        wait_for(lambda: len(runtime.snapshot.sessions) == 2)
+        assert runtime.request("select", "b")
+        wait_for(lambda: runtime.snapshot.bgm_session_id == "b")
+        assert runtime._pending is None and not backend.commands
+
+
+def test_explicit_dj_sends_one_content_uri_and_does_not_enforce_it_periodically():
+    with running(options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        for _ in range(10):
+            assert runtime.request("dj")
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        assert launches == ["dj"]
+        backend.sessions = (session(status="paused"),)
+        time.sleep(.04)
+        assert launches == ["dj"] and backend.commands == [("spotify", "play")]
+
+
+def test_explicit_dj_upgrades_existing_preparation_without_resetting_deadline():
+    with running((), options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request("prepare")
+        wait_for(lambda: launches == ["normal"])
+        deadline = runtime._pending.deadline
+        assert runtime.request("dj")
+        wait_for(lambda: launches == ["normal", "dj"])
+        assert runtime._pending.deadline == deadline
+        assert runtime.request("dj") and runtime.request("prepare")
+        backend.sessions = (session(),)
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        assert launches == ["normal", "dj"]
+
+
+def test_process_observation_error_does_not_guess_absent_and_launch():
+    with running((), options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        backend.process_error = OSError("권한 없음")
+        assert runtime.request("play")
+        wait_for(lambda: "실행 상태 조회 실패" in runtime.snapshot.error)
+        assert not launches and not backend.commands and runtime._pending is None
+
+
+def test_spotify_volume_and_mute_are_real_worker_observations_without_autoplay():
+    with running(options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        wait_for(lambda: runtime.snapshot.spotify_audio == SpotifyAudioSnapshot(37, False, True))
+        controller = runtime._spotify_audio
+        generation = runtime._generation
+        assert runtime.request("volume", value=62) and runtime.request("mute", value=True)
+        wait_for(lambda: runtime.snapshot.spotify_audio == SpotifyAudioSnapshot(62, True, True))
+        assert controller.commands == [("volume", 62), ("mute", True)]
+        assert runtime._generation == generation and not backend.commands and not launches
+        controller.state = SpotifyAudioSnapshot(19, False, True)
+        wait_for(lambda: runtime.snapshot.spotify_audio == controller.state)
+        assert len(controller.commands) == 2 and threading.get_ident() not in controller.threads
+
+
+def test_volume_and_mute_do_not_cancel_pending_play_or_publish_unapplied_values():
+    with running(()) as (runtime, backend, _, _, launches, *_):
+        wait_for(lambda: launches == ["dj"])
+        controller, deadline = runtime._spotify_audio, runtime._pending.deadline
+        controller.accept = False
+        assert runtime.request("volume", value=81)
+        wait_for(lambda: "실제로 적용" in runtime.snapshot.error)
+        assert runtime.snapshot.spotify_audio.volume == 37
+        assert runtime._pending.deadline == deadline
+        controller.accept = True
+        assert runtime.request("mute", value=True)
+        backend.sessions = (session(),)
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        assert runtime.snapshot.spotify_audio == SpotifyAudioSnapshot(37, True, True)
+        assert launches == ["dj"]
+
+
+@pytest.mark.parametrize("action,value", [("volume", -1), ("volume", 101), ("volume", True),
+                                         ("volume", 1.1), ("volume", None), ("mute", 1), ("mute", None),
+                                         ("play", 42)])
+def test_invalid_spotify_mix_requests_do_not_queue_or_write(action, value):
+    with running(options=MediaOptions(False)) as (runtime, backend, *_):
+        assert not runtime.request(action, value=value)
+        assert not runtime._spotify_audio.commands and not backend.commands
+
+
+def test_play_pause_play_keeps_last_intent_and_does_not_use_pre_pause_playing_snapshot():
+    with running((session(status="playing"),), options=MediaOptions(False)) as (runtime, backend, *_):
+        backend.delay = .03
+        before = backend.reads
+        wait_for(lambda: backend.reads > before)
+        assert runtime.request("play") and runtime.request("pause") and runtime.request("play")
+        wait_for(lambda: backend.commands == [("spotify", "pause"), ("spotify", "play")])
+        assert backend.sessions[0].status == "playing"
+
+
+@pytest.mark.parametrize("action,status", [("prepare", "paused"), ("play", "playing")])
+def test_warm_success_clears_prior_command_failure_without_another_control(action, status):
+    with running(options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        backend.accept = False
+        assert runtime.request("play")
+        wait_for(lambda: "수락하지" in runtime.snapshot.error)
+        backend.sessions = (session(status=status),)
+        wait_for(lambda: runtime.snapshot.sessions == backend.sessions)
+        before = list(backend.commands)
+        assert runtime.request(action)
+        wait_for(lambda: not runtime.snapshot.error)
+        assert backend.commands == before and not launches
+
+
+@pytest.mark.parametrize("action,status", [("prepare", "paused"), ("play", "playing")])
+def test_new_preparation_after_timeout_clears_error_only_when_session_is_ready(action, status):
+    with running((), options=MediaOptions(False), processes=(object(),)) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request("prepare")
+        wait_for(lambda: "만료" in runtime.snapshot.error)
+        assert runtime.request(action)
+        wait_for(lambda: runtime._pending is not None)
+        assert "만료" in runtime.snapshot.error
+        backend.sessions = (session(status=status),)
+        wait_for(lambda: runtime._pending is None and not runtime.snapshot.error)
+        assert not backend.commands and not launches
+
+
+def test_warm_prepare_or_already_playing_does_not_clear_spotify_audio_failure():
+    with running(options=MediaOptions(False)) as (runtime, backend, *_):
+        runtime._spotify_audio.accept = False
+        assert runtime.request("volume", value=80)
+        wait_for(lambda: "실제로 적용" in runtime.snapshot.error)
+        error = runtime.snapshot.error
+        assert runtime.request("prepare")
+        backend.sessions = (session(status="playing"),)
+        wait_for(lambda: runtime.snapshot.sessions == backend.sessions)
+        assert runtime.request("play")
+        time.sleep(.03)
+        assert runtime.snapshot.error == error
+
+
+def test_same_play_on_every_ready_snapshot_does_not_starve_pending_completion(monkeypatch):
+    with running((), options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        runtime.PREPARE_TIMEOUT_SECONDS = .5
+        assert runtime.request("play")
+        wait_for(lambda: runtime._pending is not None)
+        deadline = runtime._pending.deadline
+        snapshot = backend.snapshot
+        repeated = []
+        async def ready_snapshot_with_same_request():
+            result = await snapshot()
+            repeated.append(runtime.request("play"))
+            return result
+        monkeypatch.setattr(backend, "snapshot", ready_snapshot_with_same_request)
+        backend.sessions = (session(),)
+        wait_for(lambda: backend.commands == [("spotify", "play")], timeout=.15)
+        assert time.monotonic() < deadline and runtime._pending is None
+        before = len(repeated)
+        wait_for(lambda: len(repeated) >= before + 4)
+        assert all(repeated) and backend.commands == [("spotify", "play")] and launches == ["dj"]
