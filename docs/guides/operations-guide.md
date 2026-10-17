@@ -224,6 +224,9 @@ Spotify의 시작 창 표시 문제를 명시적으로 조사할 때는 `spotify
 `spotify-window-startup-close`는 같은 cold 준비 흐름에서 첫 표시 창에 닫기만 한 번 요청한 뒤
 15초 동안 추가 창 조작 없이 관측한다. 첫 닫기가 시작 중의 복원을 막는지와 재생 유지 여부를
 별도로 판단하며, 창이 다시 나타나도 자동으로 다시 닫지 않는다.
+`spotify-window-startup-delayed-close`는 첫 표시 창에서 최소 5초가 지나고 Spotify의 실제
+Playing을 확인한 뒤 닫기를 한 번 요청한다. 이후 15초 동안 추가 창 조작 없이 관측한다.
+너무 이른 닫기와 준비 후 닫기의 영향을 같은 제품 준비 경계에서 분리하는 비교다.
 
 `bgm`은 이미 있는 명확한 단일 playing/paused Spotify 세션에서
 Play/Pause 전환을 관측한 뒤 원래 재생 상태로 복원한다. 세션 없음·복수·unknown·stopped처럼

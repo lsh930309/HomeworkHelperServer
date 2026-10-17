@@ -138,6 +138,19 @@ def test_reused_pid_never_counts_as_running_spotify(native):
     assert spotify_app.spotify_processes() == ()
 
 
+@pytest.mark.parametrize("still_running", [False, True])
+def test_native_session_error_only_becomes_absent_after_confirmed_process_exit(native, still_running):
+    processes, _ = native
+    ending = Process(failure=("owner", OSError))
+    ending.is_running = lambda: still_running
+    processes.extend((ending, Process(99)))
+    if still_running:
+        with pytest.raises(OSError, match="controlled native process failure"):
+            spotify_app.spotify_processes()
+    else:
+        assert [process.pid for process in spotify_app.spotify_processes()] == [99]
+
+
 @pytest.mark.parametrize("error", [Gone, Denied])
 @pytest.mark.parametrize("stage", ["owner", "create_time", "exe"])
 def test_process_disappearance_is_absent_but_denial_is_unknown(native, error, stage):

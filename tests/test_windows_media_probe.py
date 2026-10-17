@@ -267,9 +267,9 @@ def test_spotify_window_experiments_keep_warm_identity_and_trace_post_request_wi
     json.dumps(result)
 
 
-@pytest.mark.parametrize("condition", ["cold", "process", "session", "external", "no_window"])
-@pytest.mark.parametrize("first_action", ["minimize", "close"])
-def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_phases(tmp_path, monkeypatch, condition, first_action):
+@pytest.mark.parametrize("condition", ["cold", "later_playing", "process", "session", "external", "no_window"])
+@pytest.mark.parametrize("first_action, first_delay", [("minimize", 0), ("close", 0), ("close", 5)])
+def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_phases(tmp_path, monkeypatch, condition, first_action, first_delay):
     import asyncio
     from src.core import media_center, media_sessions, spotify_app
     clock, calls, phases = [0.0], [], {"cold": False, "minimizes": 0, "closed": False}
@@ -284,9 +284,11 @@ def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_ph
             return True
     class Runtime:
         running = False
+        pending_window = True
         def __init__(self, **kwargs):
             self.kwargs, self.backend = kwargs, kwargs["backend_factory"]()
             self.snapshot = media_center.MediaCenterSnapshot()
+            phases["runtime"] = self
         def start(self, options):
             assert not any((options.auto_bgm, options.background_mute, options.auto_focus))
             self.running = True
@@ -298,9 +300,10 @@ def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_ph
             assert action == "play" and self.kwargs["spotify_process_reader"]() == ()
             assert self.kwargs["dj_launcher"]()
             phases["cold"] = True
-            self.kwargs["spotify_window_minimizer"](1, is_current=lambda: self.running)
+            self.pending_window = not self.kwargs["spotify_window_minimizer"](1, is_current=lambda: self.running)
             assert asyncio.run(self.backend.control("spotify", "play"))
-            self.snapshot = media_center.MediaCenterSnapshot(sessions=(session,), running=True)
+            current_session = media_sessions.MediaSessionInfo("spotify", "Spotify.exe", status="paused") if condition == "later_playing" else session
+            self.snapshot = media_center.MediaCenterSnapshot(sessions=(current_session,), bgm_session_id="spotify", running=True)
             return True
         def stop(self, **kwargs):
             calls.append(("stop",))
@@ -328,8 +331,15 @@ def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_ph
     monkeypatch.setattr(probe, "_spotify_window_state", state)
     monkeypatch.setattr(probe, "_spotify_window_action", window_action)
     monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    result = probe._spotify_window_startup(tmp_path, None, first_action=first_action)
+    def sleep(seconds):
+        clock[0] += seconds
+        runtime = phases.get("runtime")
+        if condition == "later_playing" and clock[0] >= 7:
+            runtime.snapshot = media_center.MediaCenterSnapshot(sessions=(session,), bgm_session_id="spotify", running=True)
+        if phases["cold"] and runtime and runtime.pending_window:
+            runtime.pending_window = not runtime.kwargs["spotify_window_minimizer"](1, is_current=lambda: runtime.running)
+    monkeypatch.setattr(probe.time, "sleep", sleep)
+    result = probe._spotify_window_startup(tmp_path, None, first_action=first_action, first_delay=first_delay)
     assert result["cleanup_ok"] and not result["writes"] and calls[-1] == ("stop",)
     if condition in ("process", "session", "external"):
         assert not result["ok"] and not result["request_queued"]
@@ -339,14 +349,18 @@ def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_ph
         assert not any(row[0] == "window" for row in calls)
         assert [row for row in calls if row[0] == "uri"] == [("uri", {"dj": True})]
     else:
-        assert result["ok"] and clock[0] == 15
-        expected = [("request", "play"), ("uri", {"dj": True}),
-                    ("window", first_action, 0, False), ("control", "spotify", "play")]
+        delay = 7 if first_delay and condition == "later_playing" else first_delay
+        assert result["ok"] and clock[0] == 15 + delay
+        expected = [("request", "play"), ("uri", {"dj": True})]
+        if first_delay:
+            expected.extend([("control", "spotify", "play"), ("window", "close", delay, False)])
+        else:
+            expected.extend([("window", first_action, 0, False), ("control", "spotify", "play")])
         if first_action == "minimize":
             expected.extend([("window", "minimize", 5, False), ("window", "close", 10, True)])
         assert calls[:-1] == expected
-        timed = [row["at_ms"] for row in result["events"] if row["kind"] in ("initial_minimize", "initial_close", "late_minimize", "close")]
-        assert timed == ([0] if first_action == "close" else [0, 5000, 10000])
+        timed = [row["at_ms"] for row in result["events"] if row["kind"] in ("initial_minimize", "initial_close", "delayed_close", "late_minimize", "close")]
+        assert timed == ([delay * 1000] if first_delay else [0] if first_action == "close" else [0, 5000, 10000])
         assert not result["trace"][-1]["windows"][0]["visible"]
         assert result["final_media"]["sessions"][0]["status"] == "playing"
     json.dumps(result)

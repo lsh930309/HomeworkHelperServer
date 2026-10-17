@@ -71,6 +71,10 @@ def spotify_processes(*, appdata: str | None = None, local_appdata: str | None =
             continue
         except psutil.AccessDenied as error:
             raise OSError("Spotify 실행 상태를 확인할 권한이 없습니다.") from error
+        except OSError:
+            if not process.is_running():
+                continue  # 조회 중 종료가 확인된 프로세스만 제외한다. 살아 있는 조회 오류는 유지한다.
+            raise
     return tuple(result)
 
 

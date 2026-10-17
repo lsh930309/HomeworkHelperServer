@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import uuid
 
 
-SPOTIFY_WINDOW_SCENARIOS = ("spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-startup", "spotify-window-startup-close")
+SPOTIFY_WINDOW_SCENARIOS = ("spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-startup", "spotify-window-startup-close", "spotify-window-startup-delayed-close")
 SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare", "focus-uia", "focus-lifecycle", *SPOTIFY_WINDOW_SCENARIOS)
 GAME_FIELDS = ("name", "monitoring_path", "default_volume", "default_muted")
 DISPLAY_FIELDS = (
@@ -247,15 +247,15 @@ def _spotify_window_action(window: dict, action: str, *, is_current) -> dict:
     return {"attempted": True, "accepted": True}
 
 
-def _spotify_window_startup(source_appdata: Path, source_local_appdata: str | None, *, first_action="minimize") -> dict:
+def _spotify_window_startup(source_appdata: Path, source_local_appdata: str | None, *, first_action="minimize", first_delay=0) -> dict:
     """cold Play에서 최초 최소화+지연 조작 또는 최초 닫기 한 번을 비교한다."""
-    if first_action not in ("minimize", "close"):
+    if first_action not in ("minimize", "close") or first_delay not in (0, 5) or (first_delay and first_action != "close"):
         raise ValueError("지원하지 않는 cold Spotify 창 비교입니다.")
     from src.core.media_center import MediaCenterRuntime, MediaOptions
     from src.core.media_sessions import WindowsMediaSessions, is_spotify_session
     from src.core.spotify_app import launch_spotify
     ready = threading.Event()
-    observed, launches, events, trace, errors, first = [], [], [], [], [], {}
+    observed, launches, events, trace, errors, first, visible = [], [], [], [], [], {}, {}
     origin = time.monotonic()
     deadline = origin + 45
     def event(kind, **values):
@@ -294,7 +294,19 @@ def _spotify_window_startup(source_appdata: Path, source_local_appdata: str | No
         if not candidates:
             return False
         target = candidates[0]
-        row = event("initial_close" if first_action == "close" else "initial_minimize", target=target, started_after=started_after)
+        if first_delay:
+            if not visible:
+                visible.update(at=time.monotonic(), target=target)
+                event("first_visible", target=target)
+            if any(target[key] != visible["target"][key] for key in ("pid", "create_time", "path")):
+                return False
+            snapshot = runtime.snapshot
+            playing = any(item.session_id == snapshot.bgm_session_id and is_spotify_session(item)
+                          and item.status == "playing" for item in snapshot.sessions)
+            if time.monotonic() - visible["at"] < first_delay or not playing:
+                return False
+        kind = "delayed_close" if first_delay else "initial_close" if first_action == "close" else "initial_minimize"
+        row = event(kind, target=target, started_after=started_after)
         try:
             row.update(_spotify_window_action(target, first_action, is_current=lambda: is_current() and time.monotonic() < deadline))
         except Exception as error:
@@ -306,7 +318,7 @@ def _spotify_window_startup(source_appdata: Path, source_local_appdata: str | No
         spotify_process_reader=lambda: _spotify_probe_processes(source_appdata, source_local_appdata),
         spotify_window_minimizer=initial_minimize)
     result = {"ok": False, "supported": True,
-              "scenario": "spotify-window-startup-close" if first_action == "close" else "spotify-window-startup", "request_queued": False,
+              "scenario": "spotify-window-startup-delayed-close" if first_delay else "spotify-window-startup-close" if first_action == "close" else "spotify-window-startup", "request_queued": False,
               "launches": launches, "events": events, "trace": trace, "errors": errors, "writes": []}
     started, cleanup = False, False
     late_done = close_done = first_action == "close"
@@ -362,7 +374,8 @@ def _spotify_window_startup(source_appdata: Path, source_local_appdata: str | No
         result["cleanup_ok"] = cleanup
         result["ok"] = result["ok"] and cleanup
         result["limits"] = ["cold 제품 Play 1회이며 DJ URI와 실제 GSMTC Play 응답을 기록합니다.",
-                            ("최초 WM_CLOSE 한 번 뒤 15초까지 관측하며 재등장해도 추가로 닫거나 최소화하지 않습니다."
+                            ("최초 표시 후 5초 이상·선택한 Spotify Playing 확인 뒤 WM_CLOSE 한 번, 이후 15초 관측합니다."
+                             if first_delay else "최초 WM_CLOSE 한 번 뒤 15초까지 관측하며 재등장해도 추가로 닫거나 최소화하지 않습니다."
                              if first_action == "close" else "최초 최소화·5초 후 최소화·10초 후 WM_CLOSE를 각각 최대 1회 요청하며 15초까지 관측합니다."),
                             "창·재생 상태는 원상 복구하지 않습니다. 최종 trace와 final_media가 실제 종료 상태입니다.",
                             "ok는 비교 절차 완료이며 숨김·최소화 유지나 재생 성공을 뜻하지 않습니다."]
@@ -1880,9 +1893,10 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
     sys.path.insert(0, str(repo))
     if scenario == "observe":
         return _observe()
-    if scenario in ("spotify-window-startup", "spotify-window-startup-close"):
+    if scenario in ("spotify-window-startup", "spotify-window-startup-close", "spotify-window-startup-delayed-close"):
         return _spotify_window_startup(source_appdata, original_environment["LOCALAPPDATA"],
-                                       first_action="close" if scenario == "spotify-window-startup-close" else "minimize")
+                                       first_action="minimize" if scenario == "spotify-window-startup" else "close",
+                                       first_delay=5 if scenario == "spotify-window-startup-delayed-close" else 0)
     if scenario in SPOTIFY_WINDOW_SCENARIOS:
         if scenario != "spotify-window-observe":
             return _spotify_window_observe(source_appdata, original_environment["LOCALAPPDATA"], scenario)
