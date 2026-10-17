@@ -104,22 +104,26 @@ class VolumeDial(QAbstractButton):
         self.toggled.connect(self._on_mute_changed)
         self._describe_value()
 
-    def value(self) -> int:
+    def value(self) -> int | None:
         return self._value
 
-    def setValue(self, value: int) -> None:
-        value = max(0, min(100, round(value / 5) * 5))
+    def setValue(self, value: int | None) -> None:
+        # 관측된 37%를 35%로 바꾸지 않는다. 5%는 사용자 조작의 증분이다.
+        value = max(0, min(100, round(value))) if value is not None else None
         if value != self._value:
             self._value = value
             self._describe_value()
             self.update()
-            self.valueChanged.emit(value)
+            if value is not None:
+                self.valueChanged.emit(value)
 
     def is_silent(self) -> bool:
         return self.isChecked() or self._value == 0
 
     def _describe_value(self) -> None:
-        self.setAccessibleDescription(f"{self._value}%, {'음소거' if self.is_silent() else '음소거 안 됨'}")
+        self.setAccessibleDescription(
+            "음량 확인 불가" if self._value is None else
+            f"{self._value}%, {'음소거' if self.is_silent() else '음소거 안 됨'}")
 
     def _get_text_blend(self) -> float:
         return self._text_blend
@@ -137,6 +141,8 @@ class VolumeDial(QAbstractButton):
         self._fade.start()
 
     def _adjust(self, steps: int) -> None:
+        if self._value is None:
+            return
         self.setValue(self._value + steps * 5)
         self._fade_to(1.0)
         self._reveal_timer.start()
@@ -181,6 +187,10 @@ class VolumeDial(QAbstractButton):
         painter.setBrush(QColor("#161e29"))
         painter.setPen(QPen(QColor(255, 255, 255, 45), stroke))
         painter.drawEllipse(circle)
+        if self._value is None:
+            painter.setPen(QColor("#7c879a"))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "?")
+            return
         pen = QPen(QColor("#7c879a" if self.is_silent() else "#91b5e0"), stroke)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)

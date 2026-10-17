@@ -32,8 +32,8 @@ def panel(app):
     def on_options(value):
         options.append(value)
         return state["accepted"]
-    def on_command(action, session_id=None):
-        commands.append((action, session_id))
+    def on_command(action, session_id=None, *, value=None):
+        commands.append((action, session_id, value) if value is not None else (action, session_id))
         return state["accepted"]
     view = MediaCenterPanel(280, on_options=on_options, on_command=on_command)
     yield view, options, commands, state
@@ -151,6 +151,31 @@ def test_session_capabilities_disable_unavailable_controls(panel):
     assert not commands
 
 
+@pytest.mark.parametrize("status", ["opened", "paused", "stopped"])
+def test_explicit_play_can_wait_for_known_session_that_is_not_yet_play_enabled(panel, status):
+    view, _options, commands, _state = panel
+    session = replace(spotify(status=status), can_play=False, can_previous=False, can_next=False)
+    snapshot = MediaCenterSnapshot(sessions=(session,), bgm_session_id=session.session_id, running=True)
+    view.update_snapshot(snapshot)
+    assert view._play_button.isEnabled()
+    assert not view._previous_button.isEnabled() and not view._next_button.isEnabled()
+    view._play_button.click()
+    assert commands == [("play", session.session_id)]
+    assert view._snapshot is snapshot and view._snapshot.sessions[0].status == status
+
+
+def test_explicit_play_retries_empty_spotify_after_previous_preparation_or_observation_error(panel):
+    view, _options, commands, _state = panel
+    for error in ("Spotify 준비 대기 만료", "과거 조회 오류"):
+        snapshot = MediaCenterSnapshot(error=error, running=True)
+        view.update_snapshot(snapshot)
+        assert view._play_button.isEnabled()
+        view._play_button.click()
+        assert commands[-1] == ("play", None)
+        assert view._snapshot is snapshot and not snapshot.sessions
+    assert len(commands) == 2
+
+
 @pytest.mark.parametrize("status", ["unknown", "changing", "closed"])
 def test_unconfirmed_session_status_cannot_control_playback(panel, status):
     view, _options, commands, _state = panel
@@ -192,7 +217,8 @@ def test_option_callback_exception_restores_selection_and_command_exception_does
 def test_media_hold_and_runtime_failure_are_observations_not_play_triggers(panel):
     view, _options, commands, _state = panel
     observed(view, media_hold=True)
-    assert view._status_label.text()
+    assert "다른 미디어 우선" in view._auto_button.toolTip()
+    assert not hasattr(view, "_status_label")
     assert view._snapshot.media_hold
     view.update_snapshot(MediaCenterSnapshot(error="미디어 연결 실패", running=False))
     assert not view._previous_button.isEnabled() and not view._next_button.isEnabled()
@@ -258,3 +284,117 @@ def test_focus_icon_is_centered_and_includes_all_four_corners(app):
         assert opaque(x0,y0,x1,y1)
     assert all(image.pixelColor(x, y).alpha() == 0
                for x,y in [(0,0), (width-1,0), (0,height-1), (width-1,height-1)])
+
+
+def test_spotify_volume_projects_exact_native_value_without_writes_and_changes_by_five(panel):
+    from src.core.spotify_audio import SpotifyAudioSnapshot
+    view, _options, commands, state = panel
+    snapshot = observed(view, spotify_audio=SpotifyAudioSnapshot(37, False, True))
+    assert view._volume_dial.value() == 37 and not commands
+    view._volume_dial._adjust(1)
+    view._volume_dial._adjust(1)
+    assert commands == [("volume", None, 42), ("volume", None, 47)]
+    assert view._snapshot is snapshot and snapshot.spotify_audio.volume == 37
+    view.update_snapshot(snapshot)  # 실제 writer 실패 뒤 37%가 계속 관측된 경우
+    assert view._volume_dial.value() == 37 and len(commands) == 2
+    state["accepted"] = False
+    view._volume_dial._adjust(1)
+    assert view._volume_dial.value() == 37 and commands[-1] == ("volume", None, 42)
+    view._volume_dial.click()
+    assert commands[-1] == ("mute", None, True) and not view._volume_dial.isChecked()
+
+
+def test_unavailable_spotify_audio_has_no_fake_default_or_write(panel):
+    from src.core.spotify_audio import SpotifyAudioSnapshot
+    view, _options, commands, _state = panel
+    observed(view)
+    assert not view._volume_dial.isEnabled() and view._volume_dial.value() is None
+    view._volume_dial._adjust(1)
+    view._volume_dial.click()
+    assert commands == []
+    observed(view, spotify_audio=SpotifyAudioSnapshot(0, False, True))
+    assert view._volume_dial.value() == 0 and view._volume_dial.is_silent()
+
+
+def test_dj_request_is_explicit_and_does_not_claim_dj_playback(panel):
+    view, _options, commands, _state = panel
+    initial = observed(view)
+    menu = view._options_menu()
+    dj = next(action for action in menu.actions() if action.objectName() == "mediaPrepareDj")
+    assert dj.isEnabled() and not commands
+    dj.trigger()
+    assert commands == [("dj", None)]
+    assert view._snapshot is initial and view._snapshot.sessions[0].status == "paused"
+    assert "DJ" not in view._title_label.text()
+
+
+def test_album_art_bytes_and_official_fallback_are_projected_without_distortion(panel):
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QColor, QImage
+    view, _options, commands, _state = panel
+    image = QImage(80, 40, QImage.Format.Format_RGB32)
+    image.fill(QColor("red"))
+    buffer = QBuffer()
+    assert buffer.open(QIODevice.OpenModeFlag.WriteOnly) and image.save(buffer, "PNG")
+    session = replace(spotify(), artwork=bytes(buffer.data()))
+    snapshot = MediaCenterSnapshot(sessions=(session,), bgm_session_id=session.session_id, running=True)
+    view.update_snapshot(snapshot)
+    assert view._cover.pixmap().size().toTuple() == (80, 40)
+    previous = view._cover.pixmap().cacheKey()
+    view.update_snapshot(snapshot)
+    assert view._cover.pixmap().cacheKey() == previous
+    view.update_snapshot(replace(snapshot, sessions=(replace(session, artwork=b"invalid PNG"),)))
+    assert not view._default_cover.isNull()
+    assert view._cover.pixmap().cacheKey() == view._default_cover.cacheKey()
+    assert not commands
+
+
+def test_readonly_progress_uses_monotonic_continuity_freezes_paused_and_clamps(panel, monkeypatch, app):
+    from src.gui.sidebar import media_panel as module
+    view, _options, commands, _state = panel
+    clock = {"wall": 1002.0, "mono": 10.0}
+    monkeypatch.setattr(module, "time", SimpleNamespace(time=lambda: clock["wall"], monotonic=lambda: clock["mono"]))
+    session = replace(spotify(status="playing"), position_seconds=30, duration_seconds=200,
+                      timeline_updated_at=1000, playback_rate=1)
+    snapshot = MediaCenterSnapshot(sessions=(session,), bgm_session_id=session.session_id, running=True)
+    view.update_snapshot(snapshot)
+    assert view._position_at(clock["mono"]) == 32
+    assert not view._progress_timer.isActive()
+    view.show()
+    app.processEvents()
+    assert view._progress_timer.isActive()
+    clock["mono"] += 5
+    clock["wall"] += 50  # OS 시계 변화가 같은 표본을 50초 점프시키지 않는다.
+    view.update_snapshot(snapshot)
+    assert view._position_at(clock["mono"]) == 37
+    assert view._elapsed_label.text() == "0:37"
+    paused = replace(session, status="paused", position_seconds=37)
+    view.update_snapshot(replace(snapshot, sessions=(paused,)))
+    clock["mono"] += 30
+    view._refresh_progress()
+    assert view._position_at(clock["mono"]) == 37 and not view._progress_timer.isActive()
+    assert view._elapsed_label.text() == "0:37"
+    view.update_snapshot(replace(snapshot, sessions=(replace(session, timeline_updated_at=0),)))
+    assert view._position_at(clock["mono"]) == 200
+    assert view._progress_bar.value() == 1000
+    view.update_snapshot(replace(snapshot, sessions=(replace(session, duration_seconds=None),)))
+    assert view._progress_widget.isHidden() and not view._progress_timer.isActive()
+    assert not commands  # 진행 표시에는 탐색 명령이 없다.
+
+
+def test_long_title_and_artist_marquee_do_not_restart_on_same_snapshot_and_stop_hidden(panel, app):
+    view, _options, commands, _state = panel
+    session = replace(spotify(title="매우 긴 곡 제목 " * 12), artist="아주 긴 아티스트 이름 " * 12)
+    snapshot = MediaCenterSnapshot(sessions=(session,), bgm_session_id=session.session_id, running=True)
+    view.update_snapshot(snapshot)
+    view.resize(256, view.sizeHint().height())
+    view.show()
+    app.processEvents()
+    for label in (view._title_label, view._artist_label):
+        assert label._timer.isActive()
+        label._offset = 5
+    view.update_snapshot(snapshot)
+    assert view._title_label._offset == view._artist_label._offset == 5
+    view.hide()
+    assert not view._title_label._timer.isActive() and not view._artist_label._timer.isActive()
+    assert not view._progress_timer.isActive() and not commands

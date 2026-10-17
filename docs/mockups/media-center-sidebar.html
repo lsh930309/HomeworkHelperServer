@@ -1,7 +1,60 @@
-<div id="hh-media-center-proposal" class="viz-carousel viz-dotted-background" aria-label="사이드바 미디어 센터 배치 제안" data-previous-label="이전 배치" data-next-label="다음 배치">
-  <section data-variant="독립 재생 컨트롤" aria-label="독립 재생 컨트롤 배치"><div class="mc-stage" data-layout="standard"></div></section>
-  <section data-variant="한 줄 컴팩트" aria-label="한 줄 컴팩트 배치" hidden><div class="mc-stage" data-layout="compact"></div></section>
+<div id="hh-media-center-proposal" class="viz-dotted-background" aria-label="앨범·진행·Spotify 음량을 통합한 컴팩트 사이드바">
+  <div class="mc-stage" data-layout="compact"></div>
 </div>
+<template id="mc-enhanced-sidebar-template">
+  <div class="mc-scene" aria-hidden="true"></div>
+  <aside class="mc-panel" aria-label="HomeworkHelper 사이드바 목업">
+    <header class="mc-clock">
+      <div class="mc-clock-face"><div class="mc-time"><span>12</span><span class="mc-colon">:</span><span>34</span></div><span class="mc-seconds">56</span></div>
+      <div class="mc-date">10월 17일 토요일</div>
+    </header>
+    <div class="mc-body">
+      <section class="mc-games">
+        <div class="mc-section-title"><span class="mc-label"><i class="mc-icon" data-lucide="gamepad-2" aria-hidden="true"></i>게임</span><span class="mc-audio-heading"><i class="mc-icon" data-lucide="volume-2" aria-hidden="true"></i><span>음량</span></span></div>
+        <div class="mc-game-list"></div>
+      </section>
+      <div class="mc-spacer"></div>
+      <div class="mc-bottom">
+        <section class="mc-player" aria-label="Spotify 미디어 센터">
+          <div class="mc-player-head">
+            <span class="mc-player-heading mc-label"><i class="mc-icon" data-lucide="music-2" aria-hidden="true"></i>미디어</span>
+            <div class="mc-player-tools">
+              <button type="button" class="mc-button mc-auto cursor-interaction" data-action="auto" aria-pressed="true">BGM 자동</button>
+              <button type="button" class="mc-button mc-settings-button cursor-interaction" data-action="settings" aria-label="미디어 자동 동작 옵션"><i class="mc-icon" data-lucide="settings-2" aria-hidden="true"></i></button>
+            </div>
+          </div>
+          <div class="mc-track">
+            <div class="mc-cover" role="img" aria-label="앨범 표지 예시"></div>
+            <div class="mc-track-meta"><div class="mc-track-title mc-marquee"></div><div class="mc-artist mc-marquee"></div></div>
+            <div class="mc-playback">
+              <button type="button" class="mc-button cursor-interaction" data-action="previous" aria-label="이전 곡" data-tooltip="이전 곡"><i class="mc-icon" data-lucide="skip-back" aria-hidden="true"></i></button>
+              <button type="button" class="mc-button mc-play cursor-interaction" data-action="play" aria-label="BGM 일시정지"><i class="mc-icon" data-lucide="pause" aria-hidden="true"></i></button>
+              <button type="button" class="mc-button cursor-interaction" data-action="next" aria-label="다음 곡" data-tooltip="다음 곡"><i class="mc-icon" data-lucide="skip-forward" aria-hidden="true"></i></button>
+            </div>
+            <button type="button" class="mc-spotify-volume cursor-interaction" data-action="spotifyVolume" aria-label="Spotify 음량"></button>
+          </div>
+          <div class="mc-progress" data-tooltip="재생 위치 표시 · 탐색 조작 없음">
+            <div class="mc-progress-track" role="progressbar" aria-label="곡 재생 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow="38" aria-valuetext="1분 24초 / 3분 42초"><div class="mc-progress-fill"></div></div>
+            <div class="mc-progress-times" aria-hidden="true"><span>1:24</span><span>3:42</span></div>
+          </div>
+          <div class="mc-settings" role="group" aria-label="이번 실행의 미디어 옵션" hidden>
+            <div class="mc-settings-title"><span>미디어 자동 동작</span><button type="button" class="mc-button mc-settings-button cursor-interaction" data-action="settings" aria-label="옵션 닫기"><i class="mc-icon" data-lucide="x" aria-hidden="true"></i></button></div>
+            <label><span>비포커스 게임 음소거</span><input type="checkbox" data-option="backgroundMute" checked></label>
+            <label><span>새 게임 창 자동 포커스</span><input type="checkbox" data-option="autoFocus" checked></label>
+            <div class="mc-session-note">이번 호스트 앱 실행 동안 적용</div>
+          </div>
+        </section>
+        <section class="mc-capture" aria-label="촬영과 녹화">
+          <div class="mc-capture-row"><span class="mc-label"><i class="mc-icon" data-lucide="camera" aria-hidden="true"></i>스크린샷</span><button type="button" class="mc-button cursor-interaction">지금 촬영</button></div>
+          <div class="mc-capture-row"><span class="mc-label"><i class="mc-icon" data-lucide="video" aria-hidden="true"></i>녹화</span><span class="mc-capture-right"><span class="mc-connected">연결됨</span><button type="button" class="mc-button cursor-interaction">녹화 시작</button></span></div>
+        </section>
+        <div class="mc-tabs" role="group" aria-label="갤러리 종류"><button type="button" class="mc-button cursor-interaction" data-gallery="screenshot" aria-pressed="true">스크린샷</button><button type="button" class="mc-button cursor-interaction" data-gallery="recording" aria-pressed="false">녹화</button></div>
+        <div class="mc-gallery" aria-label="최대 두 행 공용 갤러리"></div>
+      </div>
+    </div>
+    <footer class="mc-footer"><button type="button" class="mc-button cursor-interaction"><i class="mc-icon" data-lucide="chevron-right" aria-hidden="true"></i>닫기</button></footer>
+  </aside>
+</template>
 <style>
   #hh-media-center-proposal .mc-stage { --mc-ink:#e9edf3; --mc-muted:#b6c0cd; --mc-line:#ffffff1b; --mc-control:#ffffff0c; --mc-selected:#356da03d; --mc-green:#87d7ab; --mc-accent:#a4caec; position:relative; width:100%; max-width:600px; min-height:900px; margin:auto; color:var(--mc-ink); font:400 14px/1.4 system-ui,"Malgun Gothic",sans-serif; }
   #hh-media-center-proposal .mc-scene { position:absolute; inset:0; overflow:hidden; border-radius:12px; background:radial-gradient(ellipse at 5% 28%,#3c6d79 0,transparent 46%),radial-gradient(ellipse at 35% 80%,#61616d 0,transparent 45%),linear-gradient(155deg,#172d44,#364a59 48%,#152633); }
@@ -41,21 +94,41 @@
   #hh-media-center-proposal .mc-player { position:relative; padding-top:4cqw; border-top:1px solid var(--mc-line); }
   #hh-media-center-proposal .mc-player-head { display:flex; align-items:center; justify-content:space-between; gap:2cqw; margin-bottom:2.5cqw; }
   #hh-media-center-proposal .mc-player-heading { min-width:0; color:var(--mc-muted); font-size:max(11px,3.8cqw); }
-  #hh-media-center-proposal .mc-player-tools { display:flex; align-items:center; gap:2cqw; }
+  #hh-media-center-proposal .mc-player-tools { display:flex; align-items:center; gap:1.6cqw; }
   #hh-media-center-proposal .mc-auto { min-height:7cqw; padding:0 2.2cqw; font-size:max(11px,3.5cqw); border-radius:2cqw; }
   #hh-media-center-proposal .mc-auto[aria-pressed="true"] { color:var(--mc-green); background:#60b9851b; border-color:#87d7ab36; }
   #hh-media-center-proposal .mc-settings-button { width:7cqw; min-height:0; aspect-ratio:1; padding:0; border:0; background:transparent; }
   #hh-media-center-proposal .mc-track { display:grid; grid-template-columns:15% minmax(0,1fr); align-items:center; gap:3%; }
-  #hh-media-center-proposal .mc-cover { width:100%; aspect-ratio:1; display:flex; align-items:center; justify-content:center; border-radius:2.1cqw; background:linear-gradient(145deg,#55766b,#263e48); }
+  #hh-media-center-proposal .mc-cover { width:100%; aspect-ratio:1; overflow:hidden; display:flex; align-items:center; justify-content:center; border-radius:2.1cqw; background:#172b2b; }
   #hh-media-center-proposal .mc-cover .mc-icon { width:7cqw; height:7cqw; color:#d1e9df; }
+  #hh-media-center-proposal .mc-cover-art { display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:#f5dfc3; font-size:2.5cqw; font-weight:500; text-align:center; letter-spacing:.06em; background:radial-gradient(ellipse at 72% 30%,#e0b572 0,transparent 27%),linear-gradient(135deg,#473f59,#1f5b57 58%,#bb9062); }
+  #hh-media-center-proposal .mc-cover-fallback { display:flex; align-items:center; justify-content:center; width:100%; height:100%; background:#172b2b; }
+  #hh-media-center-proposal .mc-cover-fallback img { width:72%; height:72%; object-fit:contain; }
   #hh-media-center-proposal .mc-track-meta { min-width:0; }
-  #hh-media-center-proposal .mc-track-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:max(12px,4.2cqw); font-weight:500; }
-  #hh-media-center-proposal .mc-artist { margin-top:.7cqw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--mc-muted); font-size:max(11px,3.4cqw); }
+  #hh-media-center-proposal .mc-track-title { overflow:hidden; white-space:nowrap; font-size:max(12px,4.2cqw); font-weight:500; }
+  #hh-media-center-proposal .mc-artist { margin-top:.7cqw; overflow:hidden; white-space:nowrap; color:var(--mc-muted); font-size:max(11px,3.4cqw); }
+  #hh-media-center-proposal .mc-marquee-track { display:flex; align-items:center; width:max-content; max-width:none; }
+  #hh-media-center-proposal .mc-marquee-copy { padding-left:10cqw; }
+  #hh-media-center-proposal [data-scroll="true"] .mc-marquee-track { animation:mc-track-marquee var(--mc-scroll-seconds,14s) linear infinite; }
+  #hh-media-center-proposal .mc-marquee:hover .mc-marquee-track { animation-play-state:paused; }
+  @keyframes mc-track-marquee { 0%,12% { transform:translateX(0); } 85%,100% { transform:translateX(calc(-1 * var(--mc-scroll-distance,0px))); } }
   #hh-media-center-proposal .mc-playback { display:flex; justify-content:center; align-items:center; gap:4cqw; margin-top:3cqw; }
   #hh-media-center-proposal .mc-playback .mc-button { width:10cqw; padding:0; aspect-ratio:1; min-height:0; }
   #hh-media-center-proposal .mc-playback .mc-play { background:#cce1f2; color:#172b3b; }
-  #hh-media-center-proposal .mc-status { display:flex; align-items:center; justify-content:center; gap:1.5cqw; min-height:6cqw; margin-top:1.5cqw; color:var(--mc-muted); font-size:max(11px,3.2cqw); }
-  #hh-media-center-proposal .mc-status .mc-icon { width:3.6cqw; height:3.6cqw; }
+  #hh-media-center-proposal .mc-progress { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:2cqw; margin-top:2.3cqw; }
+  #hh-media-center-proposal .mc-progress-track { grid-column:2; grid-row:1; width:100%; height:1.2cqw; border-radius:1cqw; overflow:hidden; background:#ffffff17; }
+  #hh-media-center-proposal .mc-progress-fill { height:100%; border-radius:inherit; background:#b7d8ca; }
+  #hh-media-center-proposal .mc-progress-times { display:contents; color:var(--mc-muted); font-size:max(11px,3.1cqw); font-variant-numeric:tabular-nums; }
+  #hh-media-center-proposal .mc-progress-times span:first-child { grid-column:1; grid-row:1; }
+  #hh-media-center-proposal .mc-progress-times span:last-child { grid-column:3; grid-row:1; }
+  #hh-media-center-proposal .mc-spotify-volume { position:relative; flex:none; width:100%; aspect-ratio:1; padding:0; border:0; border-radius:50%; color:var(--mc-ink); background:conic-gradient(#a7d8c0 var(--mc-angle,234deg),#ffffff22 0); }
+  #hh-media-center-proposal .mc-spotify-volume::before { content:""; position:absolute; inset:1.5px; border-radius:50%; background:#172b2b; }
+  #hh-media-center-proposal .mc-spotify-volume .mc-icon,#hh-media-center-proposal .mc-volume-value { position:absolute; inset:0; margin:auto; transition:opacity .18s ease; }
+  #hh-media-center-proposal .mc-spotify-volume .mc-icon { width:5.2cqw; height:5.2cqw; }
+  #hh-media-center-proposal .mc-volume-value { display:flex; align-items:center; justify-content:center; opacity:0; font-size:max(11px,3.5cqw); }
+  #hh-media-center-proposal .mc-spotify-volume[data-adjusting="true"] .mc-icon { opacity:0; }
+  #hh-media-center-proposal .mc-spotify-volume[data-adjusting="true"] .mc-volume-value { opacity:1; }
+  #hh-media-center-proposal .mc-spotify-volume[data-muted="true"] { color:var(--mc-muted); background:conic-gradient(#82958e var(--mc-angle,234deg),#ffffff22 0); }
   #hh-media-center-proposal .mc-settings { position:absolute; z-index:5; right:0; bottom:calc(100% - 5cqw); width:100%; padding:4cqw; border:1px solid #6e8499; border-radius:3cqw; background:#202d3c; box-shadow:0 8px 24px #0005; }
   #hh-media-center-proposal .mc-settings-title { display:flex; align-items:center; justify-content:space-between; margin-bottom:3cqw; font-size:max(12px,4cqw); font-weight:500; }
   #hh-media-center-proposal .mc-settings label { display:flex; align-items:center; justify-content:space-between; gap:4cqw; min-height:10cqw; font-size:max(11px,3.7cqw); }
@@ -74,26 +147,29 @@
   #hh-media-center-proposal .mc-thumb.mc-more { background:#ffffff0c; display:flex; flex-direction:column; gap:1cqw; }
   #hh-media-center-proposal .mc-footer { flex:none; padding:3cqw 4.5cqw 4cqw; }
   #hh-media-center-proposal .mc-footer .mc-button { width:100%; }
-  #hh-media-center-proposal [data-layout="compact"] .mc-track { grid-template-columns:12% minmax(0,1fr) 34%; gap:2.5%; }
+  #hh-media-center-proposal [data-layout="compact"] .mc-track { grid-template-columns:14% minmax(0,1fr) 31% 12%; gap:2%; }
   #hh-media-center-proposal [data-layout="compact"] .mc-playback { margin:0; gap:1cqw; }
-  #hh-media-center-proposal [data-layout="compact"] .mc-playback .mc-button { width:9cqw; }
+  #hh-media-center-proposal [data-layout="compact"] .mc-playback .mc-button { width:8.5cqw; }
   #hh-media-center-proposal [data-layout="compact"] .mc-track-title { font-size:max(11px,3.8cqw); }
   #hh-media-center-proposal [data-layout="compact"] .mc-artist { font-size:max(11px,3.2cqw); }
-  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-track { grid-template-columns:12% minmax(0,1fr) 34%; gap:2.5%; }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-track { grid-template-columns:14% minmax(0,1fr) 31% 12%; gap:2%; }
   #hh-media-center-proposal .mc-panel[data-short="true"] .mc-playback { margin:0; gap:1cqw; }
-  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-playback .mc-button { width:9cqw; }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-playback .mc-button { width:8.5cqw; }
   #hh-media-center-proposal .mc-panel[data-short="true"] .mc-track-title { font-size:max(11px,3.8cqw); }
   #hh-media-center-proposal .mc-panel[data-short="true"] .mc-clock { padding-top:4cqw; padding-bottom:3cqw; }
-  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-game-row { min-height:12cqw; padding-top:1cqw; padding-bottom:1cqw; }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-game-row { min-height:11.4cqw; padding-top:.35cqw; padding-bottom:.35cqw; }
   #hh-media-center-proposal .mc-panel[data-short="true"] .mc-bottom { gap:2cqw; }
   #hh-media-center-proposal .mc-panel[data-short="true"] .mc-player { padding-top:3cqw; }
   #hh-media-center-proposal [hidden] { display:none!important; }
+  @media(prefers-reduced-motion:reduce) { #hh-media-center-proposal .mc-marquee-track { animation:none!important; } #hh-media-center-proposal .mc-spotify-volume * { transition:none; } }
   @media(max-width:480px) { #hh-media-center-proposal .mc-stage { max-width:314px; } #hh-media-center-proposal .mc-panel { width:88%; } }
   @media(pointer:coarse) { #hh-media-center-proposal .mc-settings label { min-height:44px; } }
 </style>
 <script>
 (() => {
   const root = document.getElementById('hh-media-center-proposal');
+  // assets/icons/media/spotify.svg: Spotify 공식 배포 원본을 손실 없이 포함한다.
+  const spotifyLogo = 'data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz48c3ZnIGlkPSJMYXllcl8xIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMzYuMDUgMjI1LjI1Ij48ZGVmcz48c3R5bGU+LmNscy0xe2ZpbGw6IzFlZDc2MDtzdHJva2Utd2lkdGg6MHB4O308L3N0eWxlPjwvZGVmcz48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Im0xMjIuMzcsMy4zMUM2MS45OS45MSwxMS4xLDQ3LjkxLDguNzEsMTA4LjI5Yy0yLjQsNjAuMzgsNDQuNjEsMTExLjI2LDEwNC45OCwxMTMuNjYsNjAuMzgsMi40LDExMS4yNi00NC42LDExMy42Ni0xMDQuOThDMjI5Ljc0LDU2LjU5LDE4Mi43NCw1LjcsMTIyLjM3LDMuMzFabTQ2LjE4LDE2MC4yOGMtMS4zNiwyLjQtNC4wMSwzLjYtNi41OSwzLjI0LS43OS0uMTEtMS41OC0uMzctMi4zMi0uNzktMTQuNDYtOC4yMy0zMC4yMi0xMy41OS00Ni44NC0xNS45My0xNi42Mi0yLjM0LTMzLjI1LTEuNTMtNDkuNDIsMi40LTMuNTEuODUtNy4wNC0xLjMtNy44OS00LjgxLS44NS0zLjUxLDEuMy03LjA0LDQuODEtNy44OSwxNy43OC00LjMyLDM2LjA2LTUuMjEsNTQuMzItMi42NCwxOC4yNiwyLjU3LDM1LjU4LDguNDYsNTEuNDksMTcuNTEsMy4xMywxLjc5LDQuMjMsNS43NywyLjQ1LDguOTFabTE0LjM4LTI4LjcyYy0yLjIzLDQuMTItNy4zOSw1LjY2LTExLjUxLDMuNDMtMTYuOTItOS4xNS0zNS4yNC0xNS4xNi01NC40NS0xNy44Ni0xOS4yMS0yLjctMzguNDctMS45Ny01Ny4yNiwyLjE2LTEuMDIuMjItMi4wMy4yNi0zLjAxLjEyLTMuNDEtLjQ4LTYuMzMtMy4wMi03LjExLTYuNTktMS4wMS00LjU4LDEuODktOS4xMSw2LjQ3LTEwLjEyLDIwLjc3LTQuNTcsNDIuMDYtNS4zOCw2My4yOC0yLjQsMjEuMjEsMi45OCw0MS40Niw5LjYyLDYwLjE2LDE5Ljc0LDQuMTMsMi4yMyw1LjY2LDcuMzgsMy40MywxMS41MVptMTUuOTQtMzIuMzhjLTIuMSw0LjA0LTYuNDcsNi4xMy0xMC43Myw1LjUzLTEuMTUtLjE2LTIuMjgtLjUyLTMuMzctMS4wOC0xOS43LTEwLjI1LTQwLjkyLTE3LjAyLTYzLjA3LTIwLjEzLTIyLjE1LTMuMTEtNDQuNDItMi40NS02Ni4xOCwxLjk3LTUuNjYsMS4xNS0xMS4xNy0yLjUxLTEyLjMyLTguMTYtMS4xNS01LjY2LDIuNTEtMTEuMTcsOC4xNi0xMi4zMiwyNC4xLTQuODksNDguNzQtNS42Miw3My4yNS0yLjE4LDI0LjUxLDMuNDQsNDcuOTksMTAuOTQsNjkuODEsMjIuMjksNS4xMiwyLjY2LDcuMTEsOC45Nyw0LjQ1LDE0LjA5WiIvPjwvc3ZnPg==';
   const games = [
     { id:'wuwa', name:'명조: 위더링 웨이브', letter:'명' },
     { id:'mongil', name:'몬길: STAR DIVE', letter:'몬' },
@@ -108,16 +184,18 @@
     { title:'오래된 숲을 지나 새벽의 바다로 걸어가는 사람들', artist:'고요한 밤의 플레이리스트 · Spotify' },
     { title:'Night Walk', artist:'Soft Piano · Spotify' }
   ];
-  const defaults = { height:'900', scenario:'playing', longTitle:false, auto:true, backgroundMute:true, autoFocus:true, track:0, gallery:'screenshot' };
-  const state = { ...defaults, playing:true, hold:false, available:true, settings:false, running:[], muted:{} };
+  const defaults = { height:'900', scenario:'playing', longTitle:true, artwork:true, volume:65, auto:true, backgroundMute:true, autoFocus:true, track:0, gallery:'screenshot' };
+  const state = { ...defaults, playing:true, hold:false, available:true, settings:false, running:[], muted:{}, spotifyMuted:false, adjusting:false };
+  let volumeRevealTimer;
   function restore(saved) {
-    if (!saved || saved.version !== 1) return;
-    for (const key of ['height','scenario','longTitle','auto','backgroundMute','autoFocus','gallery']) {
+    if (!saved || saved.version !== 2) return;
+    for (const key of ['height','scenario','longTitle','artwork','volume','auto','backgroundMute','autoFocus','gallery']) {
       if (typeof saved[key] === typeof defaults[key]) state[key] = saved[key];
     }
     if (!['760','900','1080'].includes(state.height)) state.height='900';
     if (!['empty','playing','paused','held'].includes(state.scenario)) state.scenario='playing';
     if (!['screenshot','recording'].includes(state.gallery)) state.gallery='screenshot';
+    state.volume=Math.min(100,Math.max(0,Math.round(state.volume/5)*5));
   }
   restore(window.openai?.widgetState?.privateContent);
   const icon = name => '<i class="mc-icon" data-lucide="'+name+'" aria-hidden="true"></i>';
@@ -127,14 +205,44 @@
   function icons() { if (globalThis.lucide) lucide.createIcons({ attrs:{ width:16,height:16 } }); }
   function save() {
     window.openai?.setWidgetState?.({
-      modelContent:{ previewOnly:true, scenario:state.scenario, height:state.height, autoBgm:state.auto, backgroundMute:state.backgroundMute, autoFocus:state.autoFocus },
-      privateContent:{ version:1, height:state.height,scenario:state.scenario,longTitle:state.longTitle,auto:state.auto,backgroundMute:state.backgroundMute,autoFocus:state.autoFocus,gallery:state.gallery }
+      modelContent:{ previewOnly:true, design:'enhanced-compact', scenario:state.scenario, height:state.height, albumArtwork:state.artwork, spotifyVolume:state.volume, autoBgm:state.auto, backgroundMute:state.backgroundMute, autoFocus:state.autoFocus },
+      privateContent:{ version:2, height:state.height,scenario:state.scenario,longTitle:state.longTitle,artwork:state.artwork,volume:state.volume,auto:state.auto,backgroundMute:state.backgroundMute,autoFocus:state.autoFocus,gallery:state.gallery }
     }).catch(()=>{});
   }
   function applyScenario() {
     state.available = state.scenario!=='empty';
     state.playing = state.scenario==='playing';
     state.hold = state.scenario==='held';
+  }
+  function marquee(element,text) {
+    element.replaceChildren();
+    element.dataset.tooltip=text;
+    element.setAttribute('aria-label',text);
+    const track=document.createElement('span');track.className='mc-marquee-track';
+    const primary=document.createElement('span');primary.textContent=text;track.append(primary);element.append(track);
+    const overflow=primary.getBoundingClientRect().width>element.getBoundingClientRect().width;
+    element.dataset.scroll=String(overflow);
+    if(overflow) {
+      const copy=document.createElement('span');copy.className='mc-marquee-copy';copy.textContent=text;copy.setAttribute('aria-hidden','true');track.append(copy);
+      const distance=primary.getBoundingClientRect().width+parseFloat(getComputedStyle(copy).paddingLeft);
+      element.style.setProperty('--mc-scroll-distance',distance+'px');
+      element.style.setProperty('--mc-scroll-seconds',Math.max(12,distance/22)+'s');
+    }
+  }
+  function renderVolume(stage) {
+    const volume=stage.querySelector('[data-action="spotifyVolume"]');
+    const silent=state.spotifyMuted||state.volume===0;
+    volume.dataset.muted=String(silent);volume.dataset.adjusting=String(state.adjusting);
+    volume.style.setProperty('--mc-angle',(state.volume*3.6)+'deg');
+    volume.innerHTML=icon(silent?'volume-x':'volume-2')+'<span class="mc-volume-value" aria-hidden="true">'+state.volume+'%</span>';
+    volume.setAttribute('aria-label','Spotify 음량 '+state.volume+'%, '+(silent?'음소거':'소리 켜짐'));
+    volume.dataset.tooltip='Spotify · '+state.volume+'% · 휠로 5% 조절 · 클릭으로 음소거';
+  }
+  function adjustVolume(steps) {
+    state.volume=Math.min(100,Math.max(0,state.volume+steps*5));state.adjusting=true;
+    clearTimeout(volumeRevealTimer);for(const stage of stages)renderVolume(stage);icons();
+    volumeRevealTimer=setTimeout(()=>{state.adjusting=false;for(const stage of stages)renderVolume(stage);icons();},900);
+    save();
   }
   function renderGallery(stage) {
     const gallery=stage.querySelector('.mc-gallery');
@@ -160,19 +268,21 @@
     for(const stage of stages) {
       const panel=stage.querySelector('.mc-panel');
       stage.style.minHeight=state.height+'px';panel.style.height=state.height+'px';panel.dataset.short=String(state.height==='760');
-      const trackRow=stage.querySelector('.mc-track'),playback=stage.querySelector('.mc-playback');
-      if(stage.dataset.layout==='compact'||state.height==='760') trackRow.append(playback);
-      else trackRow.after(playback);
-      const title=stage.querySelector('.mc-track-title');title.textContent=state.available?track.title:'Spotify 준비';title.dataset.tooltip=state.available?track.title:'Spotify 실행 및 연결 준비';
-      stage.querySelector('.mc-artist').textContent=state.available?track.artist:'아직 재생 중인 곡이 없어요';
+      marquee(stage.querySelector('.mc-track-title'),state.available?track.title:'Spotify 준비');
+      marquee(stage.querySelector('.mc-artist'),state.available?track.artist:'아직 재생 중인 곡이 없어요');
+      const cover=stage.querySelector('.mc-cover');
+      cover.innerHTML=state.available&&state.artwork?'<span class="mc-cover-art" aria-hidden="true">QUIET<br>HOURS</span>':'<span class="mc-cover-fallback" aria-hidden="true"><img alt="" src="'+spotifyLogo+'"></span>';
+      cover.setAttribute('aria-label',state.available&&state.artwork?'앨범 표지 예시':'Spotify 공식 아이콘 표시 영역');
       const play=stage.querySelector('[data-action="play"]');
       play.innerHTML=icon(state.playing?'pause':'play');play.setAttribute('aria-label',state.playing?'BGM 일시정지':state.available?'BGM 재생':'Spotify 열고 재생');play.dataset.tooltip=play.getAttribute('aria-label');
       stage.querySelector('[data-action="previous"]').disabled=!state.available;
       stage.querySelector('[data-action="next"]').disabled=!state.available;
       const auto=stage.querySelector('[data-action="auto"]');auto.setAttribute('aria-pressed',String(state.auto));auto.textContent=state.auto?'BGM 자동 켜짐':'BGM 자동 꺼짐';auto.dataset.tooltip='BGM 자동 재생만 '+(state.auto?'켜짐':'꺼짐')+'. 게임 음소거와 포커스는 별도 옵션이에요.';auto.setAttribute('aria-label','BGM 자동 재생 '+(state.auto?'켜짐':'꺼짐'));
-      const status=stage.querySelector('.mc-status');
-      status.innerHTML=icon(state.hold?'hand':state.playing?'audio-lines':'music-2')+'<span>'+(state.hold?'다른 미디어 우선':state.playing?'재생 중':state.available?'일시정지':'연결 대기')+'</span>';
-      status.dataset.tooltip=state.hold?'다른 미디어가 멈춰도 자동 재개하지 않아요. 재생 버튼으로 다시 시작할 수 있어요.':state.playing?'Spotify BGM 재생 중':state.available?'자동으로 재생 상태를 유지하지 않아요':'Spotify를 열어 재생을 준비할 수 있어요';
+      auto.dataset.tooltip=state.hold?'다른 미디어 우선 · 자동 재개하지 않아요. 재생 버튼으로 다시 시작할 수 있어요.':auto.dataset.tooltip;
+      const progress=stage.querySelector('.mc-progress');progress.hidden=!state.available;
+      progress.querySelector('.mc-progress-fill').style.width='38%';
+      progress.querySelector('.mc-progress-track').setAttribute('aria-valuenow','38');
+      renderVolume(stage);
       const settings=stage.querySelector('.mc-settings');settings.hidden=!state.settings;
       stage.querySelector('[data-action="settings"]').setAttribute('aria-expanded',String(state.settings));
       stage.querySelector('[data-option="backgroundMute"]').checked=state.backgroundMute;
@@ -191,14 +301,13 @@
     icons();
   }
   for(const stage of stages) {
-    stage.innerHTML='<div class="mc-scene" aria-hidden="true"></div><aside class="mc-panel" aria-label="HomeworkHelper 사이드바 목업"><header class="mc-clock"><div class="mc-clock-face"><div class="mc-time"><span>12</span><span class="mc-colon">:</span><span>34</span></div><span class="mc-seconds">56</span></div><div class="mc-date">10월 17일 토요일</div></header><div class="mc-body"><section class="mc-games"><div class="mc-section-title"><span class="mc-label">'+icon('gamepad-2')+'게임</span><span class="mc-audio-heading">'+icon('volume-2')+'<span>음량</span></span></div><div class="mc-game-list"></div></section><div class="mc-spacer"></div><div class="mc-bottom"><section class="mc-player" aria-label="미디어 센터"><div class="mc-player-head"><span class="mc-player-heading mc-label">'+icon('music-2')+'미디어</span><div class="mc-player-tools"><button type="button" class="mc-button mc-auto cursor-interaction" data-action="auto" aria-pressed="true">자동 켜짐</button>'+button('settings-2','미디어 자동 동작 옵션','settings','mc-settings-button')+'</div></div><div class="mc-track"><div class="mc-cover" aria-hidden="true">'+icon('disc-3')+'</div><div class="mc-track-meta"><div class="mc-track-title"></div><div class="mc-artist"></div></div></div><div class="mc-playback">'+button('skip-back','이전 곡','previous')+button('pause','BGM 일시정지','play','mc-play')+button('skip-forward','다음 곡','next')+'</div><div class="mc-status" aria-live="polite"></div><div class="mc-settings" role="group" aria-label="이번 실행의 미디어 옵션" hidden><div class="mc-settings-title"><span>미디어 자동 동작</span>'+button('x','옵션 닫기','settings','mc-settings-button')+'</div><label><span>비포커스 게임 음소거</span><input type="checkbox" data-option="backgroundMute" checked></label><label><span>새 게임 창 자동 포커스</span><input type="checkbox" data-option="autoFocus" checked></label><div class="mc-session-note">이번 호스트 앱 실행 동안 적용</div></div></section><section class="mc-capture" aria-label="촬영과 녹화"><div class="mc-capture-row"><span class="mc-label">'+icon('camera')+'스크린샷</span><button type="button" class="mc-button cursor-interaction">지금 촬영</button></div><div class="mc-capture-row"><span class="mc-label">'+icon('video')+'녹화</span><span class="mc-capture-right"><span class="mc-connected">연결됨</span><button type="button" class="mc-button cursor-interaction">녹화 시작</button></span></div></section><div class="mc-tabs" role="group" aria-label="갤러리 종류"><button type="button" class="mc-button cursor-interaction" data-gallery="screenshot" aria-pressed="true">스크린샷</button><button type="button" class="mc-button cursor-interaction" data-gallery="recording" aria-pressed="false">녹화</button></div><div class="mc-gallery" aria-label="최대 두 행 공용 갤러리"></div></div></div><footer class="mc-footer"><button type="button" class="mc-button cursor-interaction">'+icon('chevron-right')+'닫기</button></footer></aside>';
+    stage.append(document.getElementById('mc-enhanced-sidebar-template').content.cloneNode(true));
     const list=stage.querySelector('.mc-game-list'),rows=new Map();gameRows.set(stage,rows);
     for(const game of games) {
       const row=document.createElement('div');row.className='mc-game-row';row.dataset.game=game.id;
       row.innerHTML='<div class="mc-game-art" aria-label="'+game.name+' 임시 아이콘">'+game.letter+'</div><div class="mc-game-name" data-tooltip="'+game.name+'">'+game.name+'<small></small></div>'+button('focus','게임 창으로 이동','focus','mc-square')+button('play','게임 실행','game','mc-square')+'<button type="button" class="mc-volume cursor-interaction" data-action="volume" aria-label="게임 음소거">'+icon('volume-2')+'</button>';
       list.append(row);rows.set(game.id,row);
     }
-    if(stage.dataset.layout==='compact') stage.querySelector('.mc-track').append(stage.querySelector('.mc-playback'));
     stage.addEventListener('click',event=>{
       const gallery=event.target.closest('[data-gallery]');
       if(gallery) { state.gallery=gallery.dataset.gallery;render();save();return; }
@@ -207,6 +316,7 @@
       if(action==='play') { state.available=true;state.playing=!state.playing;state.hold=false;state.scenario=state.playing?'playing':'paused'; }
       if(action==='previous'||action==='next') { state.track=(state.track+(action==='next'?1:tracks.length-1))%tracks.length;state.longTitle=false; }
       if(action==='auto') { state.auto=!state.auto;if(state.auto) { state.hold=false;state.playing=state.available;state.scenario=state.playing?'playing':'empty'; } }
+      if(action==='spotifyVolume') state.spotifyMuted=!state.spotifyMuted;
       if(action==='settings') state.settings=!state.settings;
       if(action==='game') { const id=target.closest('[data-game]').dataset.game;state.running=state.running.includes(id)?state.running.filter(x=>x!==id):[...state.running,id]; }
       if(action==='volume') { const id=target.closest('[data-game]').dataset.game;state.muted[id]=!state.muted[id]; }
@@ -216,8 +326,16 @@
       const option=event.target.dataset.option;if(!['backgroundMute','autoFocus'].includes(option))return;
       state[option]=event.target.checked;render();save();
     });
+    stage.addEventListener('wheel',event=>{if(!event.target.closest('[data-action="spotifyVolume"]'))return;event.preventDefault();adjustVolume(event.deltaY<0?1:-1);},{passive:false});
+    stage.addEventListener('keydown',event=>{if(!event.target.closest('[data-action="spotifyVolume"]')||!['ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();adjustVolume(event.key==='ArrowUp'?1:-1);});
   }
   applyScenario();render();
+  let lastWidth=root.getBoundingClientRect().width;
+  const resizeObserver=new ResizeObserver(()=>{
+    const width=root.getBoundingClientRect().width;
+    if(width!==lastWidth) { lastWidth=width;render(); }
+  });
+  resizeObserver.observe(root);
   window.addEventListener('openai:set_globals',event=>{
     restore(event.detail?.globals?.widgetState?.privateContent);applyScenario();render();
   });
@@ -226,6 +344,8 @@
     tweak.addSelect(state,'height',{label:'가용 높이',options:[{label:'760 · 갤러리 한 행',value:'760'},{label:'900 · 갤러리 두 행',value:'900'},{label:'1080 · 갤러리 두 행',value:'1080'}]});
     tweak.addSelect(state,'scenario',{label:'미디어 상태',options:[{label:'Spotify 준비 전',value:'empty'},{label:'BGM 재생 중',value:'playing'},{label:'사용자 일시정지',value:'paused'},{label:'다른 미디어 우선',value:'held'}]});
     tweak.addToggle(state,'longTitle',{label:'긴 곡명'});
+    tweak.addToggle(state,'artwork',{label:'앨범 표지'});
+    tweak.addSlider(state,'volume',{label:'Spotify 음량',min:0,max:100,step:5,unit:'%'});
   }
 })();
 </script>

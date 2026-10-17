@@ -2360,7 +2360,8 @@ def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, h
     assert view.width() == 280
     viewport = view._main_scroll.viewport()
     assert view._scroll_content.width() <= viewport.width()
-    rows = view.findChildren(VolumeDial)
+    rows = [view._games_list_layout.itemAt(index).widget().findChild(VolumeDial)
+            for index in range(view._games_list_layout.count())]
     assert len(rows) == 5
     for slider in rows:
         row = slider.parentWidget()

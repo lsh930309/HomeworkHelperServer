@@ -2431,11 +2431,11 @@ class MainWindow(QMainWindow):
             self._volume_retry_tokens[process.id] = self._volume_retry_tokens.get(process.id, 0) + 1
         return True
 
-    def request_media_command(self, action: str, session_id: str | None = None) -> bool:
+    def request_media_command(self, action: str, session_id: str | None = None, *, value=None) -> bool:
         if self._shutting_down or self._beholder_restore_runtime_suspended:
             return False
         runtime = self._media_center
-        return bool(runtime is not None and runtime.request(action, session_id))
+        return bool(runtime is not None and runtime.request(action, session_id, value=value))
 
     def media_center_state(self):
         """사이드바가 읽는 불변 투영. 조회로 시작·재생 명령을 보내지 않는다."""

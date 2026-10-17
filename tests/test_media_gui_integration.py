@@ -39,8 +39,8 @@ class FakeRuntime:
         self.options.append(options)
         return True
 
-    def request(self, action, session_id):
-        self.commands.append((action, session_id))
+    def request(self, action, session_id, *, value=None):
+        self.commands.append((action, session_id) if value is None else (action, session_id, value))
         return True
 
     def stop(self, **kwargs):
@@ -167,6 +167,26 @@ def test_enabled_window_publishes_runtime_identity_without_session_database_ack(
     assert runtime.targets[-1][0].user_volume == 60
     assert view.request_media_command("play", "spotify-exact-session")
     assert runtime.commands == [("play", "spotify-exact-session")]
+
+
+def test_sidebar_spotify_mixer_values_reach_runtime_without_game_or_settings_writes(window, monkeypatch):
+    from src.core.spotify_audio import SpotifyAudioSnapshot
+    from src.gui.sidebar.media_panel import MediaCenterPanel
+    view, _module = window
+    runtime = activate(window, monkeypatch)
+    panel = MediaCenterPanel(280, on_command=view.request_media_command)
+    snapshot = MediaCenterSnapshot(running=True, spotify_audio=SpotifyAudioSnapshot(37, False, True))
+    panel.update_snapshot(snapshot)
+    assert runtime.commands == []
+    panel._volume_dial._adjust(1)
+    panel._volume_dial.click()
+    assert runtime.commands == [("volume", None, 42), ("mute", None, True)]
+    assert panel._snapshot is snapshot
+    view._shutting_down = True
+    assert not view.request_media_command("volume", value=55)
+    assert len(runtime.commands) == 2
+    view._shutting_down = False
+    panel.close()
 
 
 def test_legacy_retry_cannot_unmute_after_media_activation(window, game, monkeypatch):

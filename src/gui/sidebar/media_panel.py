@@ -3,40 +3,113 @@ from __future__ import annotations
 
 from dataclasses import replace
 import logging
+import math
+import time
 
-from PySide6.QtCore import QPoint, QRectF, QSize, Qt
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QTimer, QSignalBlocker
 from PySide6.QtGui import QActionGroup, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from src.core.media_center import MediaCenterSnapshot, MediaOptions
 from src.core.media_sessions import is_spotify_session
+from src.gui.sidebar.controls import VolumeDial
+from src.utils.common import get_bundle_resource_path
 
 logger = logging.getLogger(__name__)
 
 
-class _ElidedLabel(QLabel):
-    """곡명이 길어도 조작부의 폭을 밀어내지 않는다."""
+class _MarqueeLabel(QLabel):
+    """넘치는 원문만 이동하며 같은 관측의 재전송은 진행을 초기화하지 않는다."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._full_text = ""
+        self._offset = 0.0
+        self._direction = 1
+        self._pause_until = 0.0
+        self._last_tick = time.monotonic()
+        self._timer = QTimer(self)
+        self._timer.setInterval(30)
+        self._timer.timeout.connect(self._advance)
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
     def setText(self, text: str) -> None:
+        if text == self._full_text:
+            return
         self._full_text = text
         self.setToolTip(text)
-        self._elide()
+        self.setAccessibleName(text)
+        super().setText(text)
+        self._reset_motion()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._elide()
+        self._reset_motion()
 
-    def _elide(self) -> None:
-        super().setText(self.fontMetrics().elidedText(
-            self._full_text, Qt.TextElideMode.ElideRight, max(0, self.contentsRect().width())))
+    def _reset_motion(self) -> None:
+        self._offset, self._direction = 0.0, 1
+        self._pause_until = time.monotonic() + 1.2
+        self._sync_timer()
+        self.update()
+
+    def _sync_timer(self) -> None:
+        overflow = self.fontMetrics().horizontalAdvance(self._full_text) - self.contentsRect().width()
+        if self.isVisible() and overflow > 0:
+            if not self._timer.isActive():
+                self._last_tick = time.monotonic()
+                self._timer.start()
+        else:
+            self._timer.stop()
+
+    def _advance(self) -> None:
+        now = time.monotonic()
+        elapsed, self._last_tick = min(0.1, max(0, now - self._last_tick)), now
+        maximum = max(0, self.fontMetrics().horizontalAdvance(self._full_text) - self.contentsRect().width())
+        if now >= self._pause_until:
+            self._offset = max(0, min(maximum, self._offset + self._direction * self.fontMetrics().height() * 1.25 * elapsed))
+            if self._offset in (0, maximum):
+                self._direction *= -1
+                self._pause_until = now + 1.2
+        self.update()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._pause_until = time.monotonic() + 1.2
+        self._sync_timer()
+
+    def hideEvent(self, event) -> None:
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setClipRect(self.contentsRect())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.setFont(self.font())
+        baseline = self.contentsRect().y() + (self.contentsRect().height() - self.fontMetrics().height()) / 2 + self.fontMetrics().ascent()
+        painter.drawText(QPointF(self.contentsRect().x() - self._offset, baseline), self._full_text)
+
+
+class _ArtworkLabel(QLabel):
+    """원본 전체 비율을 유지하여 둥근 슬롯 안에 맞춘다."""
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        rect = QRectF(self.contentsRect())
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, rect.width() * .2, rect.height() * .2)
+        painter.setClipPath(clip)
+        painter.fillRect(rect, QColor("#172b2b"))
+        pixmap = self.pixmap()
+        if not pixmap.isNull():
+            size = pixmap.size().scaled(self.contentsRect().size(), Qt.AspectRatioMode.KeepAspectRatio)
+            target = QRectF((self.width()-size.width())/2, (self.height()-size.height())/2, size.width(), size.height())
+            painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
 
 
 class MediaCenterPanel(QWidget):
@@ -50,8 +123,18 @@ class MediaCenterPanel(QWidget):
         self._on_options, self._on_command = on_options, on_command
         self._snapshot: MediaCenterSnapshot | None = None
         self._menu: QMenu | None = None
+        self._artwork_key = None
+        self._default_cover = QPixmap(get_bundle_resource_path("assets/icons/media/spotify.svg"))
+        self._timeline_key = None
+        self._timeline_position = 0.0
+        self._timeline_duration = 0.0
+        self._timeline_rate = 0.0
+        self._timeline_monotonic = time.monotonic()
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(250)
+        self._progress_timer.timeout.connect(self._refresh_progress)
         gap = round(width * 0.018)
-        control_size = round(width * 0.089)
+        control_size = round(width * 0.085)
         self._icon_size = round(width * 0.045)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -82,18 +165,19 @@ class MediaCenterPanel(QWidget):
 
         track = QHBoxLayout()
         track.setSpacing(gap)
-        self._cover = QLabel()
+        self._cover = _ArtworkLabel()
         self._cover.setObjectName("mediaCover")
         # 컴팩트 목업의 비율을 반영하고 게임 아이콘 슬롯과 크기를 맞춘다.
-        cover_size = round(width * 0.107)
+        cover_size = round(width * 0.125)
         self._cover.setFixedSize(cover_size, cover_size)
         self._cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._cover.setPixmap(self._icon("disc").pixmap(round(cover_size * 0.58), round(cover_size * 0.58)))
+        self._cover.setAccessibleName("Spotify")
+        self._cover.setPixmap(self._default_cover)
         track.addWidget(self._cover)
         metadata = QVBoxLayout()
         metadata.setContentsMargins(0, 0, 0, 0)
         metadata.setSpacing(0)
-        self._title_label, self._artist_label = _ElidedLabel(), _ElidedLabel()
+        self._title_label, self._artist_label = _MarqueeLabel(), _MarqueeLabel()
         self._title_label.setObjectName("mediaTrackTitle")
         self._artist_label.setProperty("hhRole", "sidebarSecondary")
         metadata.addWidget(self._title_label)
@@ -108,12 +192,31 @@ class MediaCenterPanel(QWidget):
         self._play_button.clicked.connect(self._play_pause)
         for button in (self._previous_button, self._play_button, self._next_button):
             track.addWidget(button)
+        self._volume_dial = VolumeDial(round(width * .114))
+        self._volume_dial.setObjectName("spotifyVolume")
+        self._volume_dial.setAccessibleName("Spotify 음량")
+        self._volume_dial.setValue(None)
+        self._volume_dial.valueChanged.connect(lambda value: self._audio_command("volume", value))
+        self._volume_dial.toggled.connect(lambda value: self._audio_command("mute", value))
+        track.addWidget(self._volume_dial)
         layout.addLayout(track)
-        self._status_label = QLabel()
-        self._status_label.setObjectName("mediaStatus")
-        self._status_label.setProperty("hhRole", "sidebarSecondary")
-        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._status_label)
+        self._progress_widget = QWidget()
+        progress_layout = QHBoxLayout(self._progress_widget)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(gap)
+        self._elapsed_label, self._duration_label = QLabel(), QLabel()
+        for label in (self._elapsed_label, self._duration_label):
+            label.setProperty("hhRole", "sidebarSecondary")
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setObjectName("mediaPlaybackProgress")
+        self._progress_bar.setAccessibleName("곡 재생 진행률")
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setRange(0, 1000)
+        self._progress_bar.setFixedHeight(max(2, round(width * .012)))
+        progress_layout.addWidget(self._elapsed_label)
+        progress_layout.addWidget(self._progress_bar, 1)
+        progress_layout.addWidget(self._duration_label)
+        layout.addWidget(self._progress_widget)
         # 부모의 일반 텍스트 버튼 패딩·최소 높이를 이 작은 정사각형에 상속하지 않는다.
         self.setStyleSheet(f"""
             QWidget#mediaCenterPanel {{ background: transparent; }}
@@ -125,6 +228,8 @@ class MediaCenterPanel(QWidget):
                 font-size: {round(width * .037)}px; }}
             QPushButton#mediaAutoBgm:checked {{ background: rgba(76,150,108,45); color: #a4dfb9; }}
             QPushButton#mediaPlayPause {{ background: rgba(176,210,237,42); }}
+            QProgressBar#mediaPlaybackProgress {{ background: rgba(255,255,255,23); border: none; border-radius: 1px; }}
+            QProgressBar#mediaPlaybackProgress::chunk {{ background: #b7d8ca; border-radius: 1px; }}
         """)
         self.update_snapshot(None)
 
@@ -169,12 +274,16 @@ class MediaCenterPanel(QWidget):
         self._play_button.setToolTip(play_label)
         control = ready and self._on_command is not None
         known = selected is not None and selected.status in {"opened", "stopped", "paused", "playing"}
-        # 조회 실패·선택 유실·복수 후보일 때 임의 세션 또는 늦은 URI 실행을 하지 않는다.
-        may_prepare = not spotify and snapshot is not None and not snapshot.error
+        # 명시적 Play는 runtime이 최신 상태를 확인하고 준비 대기까지 소유한다.
+        # 선택 유실·복수 후보의 임의 대체만 막고 과거 오류로 재시도를 막지 않는다.
+        may_prepare = not spotify and snapshot is not None and snapshot.bgm_session_id is None
         self._play_button.setEnabled(control and (
-            (known and (selected.can_pause if playing else selected.can_play)) if selected else may_prepare))
+            (known and (selected.can_pause if playing else True)) if selected else may_prepare))
         self._previous_button.setEnabled(control and known and selected.can_previous)
         self._next_button.setEnabled(control and known and selected.can_next)
+        self._update_artwork(selected)
+        self._update_timeline(selected)
+        self._sync_spotify_audio()
         if snapshot is not None and snapshot.error:
             status = "대상 선택" if len(spotify) > 1 and selected is None else "연결 확인"
         elif not ready:
@@ -185,10 +294,105 @@ class MediaCenterPanel(QWidget):
             status = "연결 대기"
         else:
             status = {"playing": "재생 중", "paused": "일시정지", "stopped": "정지", "opened": "준비됨"}.get(selected.status, "상태 확인")
-        self._status_label.setText(status)
-        self._status_label.setToolTip(
-            "다른 미디어가 멈춰도 자동 재개하지 않습니다. 재생 버튼으로 다시 시작하세요."
-            if snapshot is not None and snapshot.media_hold else "")
+        self._options_button.setToolTip(f"미디어 옵션 · {status}")
+        self._options_button.setAccessibleDescription(status)
+        self._auto_button.setToolTip(
+            "다른 미디어 우선 · 멈춰도 자동 재개하지 않습니다. 재생 버튼으로 다시 시작하세요."
+            if snapshot is not None and snapshot.media_hold else
+            "BGM 자동 재생만 전환합니다. 게임 음소거·자동 포커스는 별도 옵션입니다.")
+
+    def _update_artwork(self, selected) -> None:
+        artwork = selected.artwork if selected else b""
+        key = (selected.session_id, selected.title, selected.artist, artwork) if selected else None
+        if key == self._artwork_key:
+            return
+        self._artwork_key = key
+        pixmap = QPixmap()
+        decoded = bool(artwork and pixmap.loadFromData(artwork))
+        if artwork and not decoded:
+            logger.warning("미디어 앨범 표지 디코딩 실패: 대상=%s", selected.session_id)
+        if pixmap.isNull():
+            pixmap = self._default_cover
+        self._cover.setPixmap(pixmap)
+        self._cover.setAccessibleName(f"{selected.title} 앨범 표지" if decoded else "Spotify")
+
+    def _update_timeline(self, selected) -> None:
+        values = (selected.position_seconds, selected.duration_seconds) if selected else ()
+        valid = (len(values) == 2 and all(value is not None and math.isfinite(value) for value in values)
+                 and values[0] >= 0 and values[1] > 0)
+        if not valid:
+            self._timeline_key = None
+            self._progress_widget.hide()
+            self._progress_timer.stop()
+            return
+        rate = selected.playback_rate
+        rate = rate if selected.status == "playing" and rate is not None and math.isfinite(rate) and rate > 0 else 0.0
+        key = (selected.session_id, selected.position_seconds, selected.duration_seconds,
+               selected.timeline_updated_at, rate, selected.status)
+        if key != self._timeline_key:
+            self._timeline_key = key
+            self._timeline_duration = selected.duration_seconds
+            position = min(selected.position_seconds, self._timeline_duration)
+            utc = selected.timeline_updated_at
+            if rate > 0 and utc is not None and math.isfinite(utc):
+                # UTC는 새 표본의 기준점을 연결할 때 한 번만 사용한다. 이후에는 monotonic이다.
+                age = max(0, min(time.time() - utc, (self._timeline_duration - position) / rate))
+                position += age * rate
+            self._timeline_position, self._timeline_rate = position, rate
+            self._timeline_monotonic = time.monotonic()
+        self._progress_widget.show()
+        self._refresh_progress()
+
+    def _position_at(self, monotonic_now: float) -> float:
+        return min(self._timeline_duration, self._timeline_position
+                   + max(0, monotonic_now - self._timeline_monotonic) * self._timeline_rate)
+
+    @staticmethod
+    def _time_text(seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours}:{minutes:02}:{seconds:02}" if hours else f"{minutes}:{seconds:02}"
+
+    def _refresh_progress(self) -> None:
+        if self._timeline_key is None:
+            self._progress_timer.stop()
+            return
+        position = self._position_at(time.monotonic())
+        elapsed, duration = self._time_text(position), self._time_text(self._timeline_duration)
+        self._elapsed_label.setText(elapsed)
+        self._duration_label.setText(duration)
+        self._progress_bar.setValue(round(position / self._timeline_duration * 1000))
+        self._progress_bar.setAccessibleDescription(f"{elapsed} / {duration} · 재생 위치 표시")
+        if self.isVisible() and self._timeline_rate > 0 and position < self._timeline_duration:
+            if not self._progress_timer.isActive():
+                self._progress_timer.start()
+        else:
+            self._progress_timer.stop()
+
+    def _sync_spotify_audio(self) -> None:
+        snapshot = self._snapshot
+        audio = snapshot.spotify_audio if snapshot is not None else None
+        available = bool(snapshot is not None and snapshot.running and audio is not None
+                         and audio.available and audio.volume is not None and audio.muted is not None)
+        with QSignalBlocker(self._volume_dial):
+            self._volume_dial.setValue(audio.volume if available else None)
+            self._volume_dial.setChecked(audio.muted if available else False)
+        self._volume_dial._describe_value()
+        self._volume_dial.setEnabled(available and self._on_command is not None)
+        self._volume_dial.setToolTip("Spotify · 휠로 5% 조절 · 클릭으로 음소거" if available else "Spotify 음량 확인 불가")
+
+    def _audio_command(self, action: str, value: int | bool) -> None:
+        if not self._volume_dial.isEnabled() or not self._command(action, value=value):
+            self._sync_spotify_audio()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._refresh_progress()
+
+    def hideEvent(self, event) -> None:
+        self._progress_timer.stop()
+        super().hideEvent(event)
 
     def _set_option(self, field: str, checked: bool) -> None:
         if self._snapshot is None or self._on_options is None:
@@ -207,16 +411,19 @@ class MediaCenterPanel(QWidget):
             logger.warning("미디어 옵션 변경 요청 거부: %s", field)
             self.update_snapshot(self._snapshot)
 
-    def _command(self, action: str, session_id: str | None = None) -> None:
+    def _command(self, action: str, session_id: str | None = None, *, value=None) -> bool:
         selected = self._selected()
-        target = (None if action == "prepare" else session_id if session_id is not None
+        target = (None if action in {"prepare", "dj", "volume", "mute"} else session_id if session_id is not None
                   else selected.session_id if selected else None)
         if self._on_command is not None:
             try:
-                if not self._on_command(action, target):
+                accepted = self._on_command(action, target, value=value) if value is not None else self._on_command(action, target)
+                if not accepted:
                     logger.warning("미디어 제어 요청 거부: 동작=%s 대상=%s", action, target)
+                return bool(accepted)
             except Exception:
                 logger.exception("미디어 제어 요청 실패: 동작=%s 대상=%s", action, target)
+        return False
 
     def _play_pause(self) -> None:
         selected = self._selected()
@@ -242,6 +449,11 @@ class MediaCenterPanel(QWidget):
         prepare.setObjectName("mediaPrepareSpotify")
         prepare.setEnabled(snapshot is not None and snapshot.running and self._on_command is not None)
         prepare.triggered.connect(lambda _checked=False: self._command("prepare"))
+        dj = menu.addAction("DJ X 열고 재생")
+        dj.setObjectName("mediaPrepareDj")
+        dj.setToolTip("Spotify DJ 진입을 요청합니다. 실제 DJ 재생 여부는 곡 정보로 확인하세요.")
+        dj.setEnabled(snapshot is not None and snapshot.running and self._on_command is not None)
+        dj.triggered.connect(lambda _checked=False: self._command("dj"))
         if spotify:
             menu.addSeparator()
             label = menu.addAction("BGM 대상 · Spotify")
