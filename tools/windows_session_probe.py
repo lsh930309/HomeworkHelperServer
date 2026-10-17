@@ -151,7 +151,8 @@ def close_obs(repo: Path, appdata: Path, pid: int, created: float, sid: str, ses
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("desktop", "close-obs"))
+    p.add_argument("command", choices=("desktop", "close-obs", "media-qa"))
+    p.add_argument("--scenario", choices=("observe", "preview", "audio", "focus", "bgm"), default="observe")
     p.add_argument("--repo", type=Path, required=True)
     p.add_argument("--appdata", type=Path, required=True)
     p.add_argument("--result", type=Path, required=True)
@@ -179,12 +180,24 @@ def main(argv=None) -> int:
                 raise ValueError("Interactive user/session changed")
         finally:
             token.Close()
-        result = desktop(args.repo, args.duration) if args.command == "desktop" else close_obs(
-            args.repo, args.appdata, args.pid, args.created, args.sid, args.session)
+        if args.command == "media-qa":
+            sys.path.insert(0, str(args.repo / "tools"))
+            from windows_media_probe import run
+            result = run(args.repo, args.appdata, args.result.parent, args.scenario)
+        elif args.command == "desktop":
+            result = desktop(args.repo, args.duration)
+        else:
+            result = close_obs(args.repo, args.appdata, args.pid, args.created, args.sid, args.session)
         publish({"ok": True, "result": result})
         return 0
     except Exception as error:
-        publish({"ok": False, "error": str(error) if isinstance(error, ValueError) else type(error).__name__})
+        failure = {"ok": False, "error": str(error) if isinstance(error, ValueError) else type(error).__name__}
+        if args.command == "media-qa":
+            import traceback
+            sys.path.insert(0, str(args.repo))
+            from src.gui.runtime_logging import redact_sensitive_text
+            failure["error"] = redact_sensitive_text(traceback.format_exc())
+        publish(failure)
         return 1
 
 

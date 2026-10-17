@@ -1,10 +1,10 @@
 param(
-    [ValidateSet('inspect','logs','prepare-source','build','install','desktop','verify')][string]$Command,
+    [ValidateSet('inspect','logs','prepare-source','build','install','desktop','verify','media-qa')][string]$Command,
     [string]$Repo, [string]$Owner, [string]$ExpectedComputer,
     [string]$Commit, [string]$Branch, [string]$Bump, [string]$ArchivedRelease,
     [string]$ProbeSource, [string]$SessionSource, [string]$VerifySource,
     [int]$LogLines = 80, [string]$Contains = '',
-    [int]$Duration = 0, [switch]$AllowProtectedTime
+    [int]$Duration = 0, [string]$Scenario = 'observe', [switch]$PrepareRuntime, [switch]$AllowProtectedTime
 )
 $ErrorActionPreference = 'Stop'
 $env:PYTHONUTF8 = '1'
@@ -89,6 +89,7 @@ function Invoke-Session([string]$Kind, $Status, $Obs = $null) {
     [IO.File]::WriteAllText($CodeFile,(Decode-Source $SessionSource),[Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $Root 'windows_host_probe.py'),(Decode-Source $ProbeSource),[Text.UTF8Encoding]::new($false))
     $Arguments = '"'+$CodeFile+'" '+$Kind+' --repo "'+$Repo+'" --appdata "'+$AppData+'" --result "'+$ResultFile+'" --sid '+$Sid+' --session '+$Session+' --duration '+$Duration
+    if ($Kind -eq 'media-qa') { $Arguments += ' --scenario '+$Scenario }
     if ($Obs) { $Arguments += ' --pid '+$Obs.pid+' --created '+([double]$Obs.created).ToString('R',[Globalization.CultureInfo]::InvariantCulture) }
     $Scheduler = New-Object -ComObject 'Schedule.Service'
     $Scheduler.Connect()
@@ -101,7 +102,8 @@ function Invoke-Session([string]$Kind, $Status, $Obs = $null) {
     try {
         $Registered = $Folder.RegisterTaskDefinition($Name,$Task,6,$Sid,$null,3)
         $null = $Registered.Run($null)
-        $Deadline = (Get-Date).AddSeconds([Math]::Max($Duration+15,40))
+        $WaitSeconds = if ($Kind -eq 'media-qa') {120} else {[Math]::Max($Duration+15,40)}
+        $Deadline = (Get-Date).AddSeconds($WaitSeconds)
         while (!(Test-Path $ResultFile) -and (Get-Date) -lt $Deadline) { Start-Sleep -Milliseconds 200 }
         if (!(Test-Path $ResultFile)) { throw ('사용자 세션 작업 결과 없음. 자동 재시도하지 않음: '+$Root) }
         $Result = Get-Content $ResultFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -187,6 +189,14 @@ switch ($Command) {
     'desktop' {
         $Result = Invoke-Session 'desktop' (Service-Status)
         $Result | ConvertTo-Json -Depth 14
+    }
+    'media-qa' {
+        Require-Source
+        if ($PrepareRuntime) {
+            $null = Invoke-Probe 'prepare-runtime'
+        }
+        $Result = Invoke-Session 'media-qa' (Service-Status)
+        $Result | ConvertTo-Json -Depth 20
     }
     'install' {
         if (!$ArchivedRelease) { Require-Source }
