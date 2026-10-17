@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import base64
+from collections import deque
 from dataclasses import asdict, replace
 from importlib import metadata
 import os
@@ -801,22 +802,56 @@ def _firefox(result_dir: Path) -> dict:
     if executable is None:
         result["reason"] = "설치된 Firefox 실행파일 경로를 확인하지 못했습니다."
         return result
-    runtime = MediaCenterRuntime(spotify_launcher=lambda: False)
+    trace_start = time.monotonic()
+    trace = deque(maxlen=400)
+    def on_change(snapshot):
+        trace.append((time.monotonic(), snapshot))
+    runtime = MediaCenterRuntime(on_change=on_change, spotify_launcher=lambda: False)
     native = WindowsGameFocusNative()
     original_foreground = native.foreground()
     original, browser, steps, errors = None, None, [], []
+    seen_ids, replacements = set(), []
     restored, closed, cleanup = False, True, True
     marker = "HH-media-QA-" + uuid.uuid4().hex[:12]
     deadline = time.monotonic() + 70
     def wait(predicate, seconds):
         return _wait(predicate, max(0, min(seconds, deadline - time.monotonic())))
-    def bgm(status):
-        return any(item.session_id == original.session_id and item.status == status for item in runtime.snapshot.sessions)
-    def fixture(status):
-        return any(item.title == marker and item.status == status for item in runtime.snapshot.sessions)
-    def require(name, predicate, seconds):
-        ok = bool(wait(predicate, seconds))
-        steps.append({"name": name, "ok": ok, "snapshot": asdict(runtime.snapshot)})
+    def current_spotify(snapshot):
+        # QA 관측·명시적 복원용 재확인이다. 제품에 stale ID 재매핑 경로를 넣지 않는다.
+        candidates = tuple(item for item in snapshot.sessions if is_spotify_session(item))
+        if len(candidates) != 1:
+            return None
+        candidate = candidates[0]
+        if ((candidate.app_id.casefold(), candidate.title, candidate.artist)
+                != (original.app_id.casefold(), original.title, original.artist)):
+            return None
+        if candidate.session_id not in seen_ids:
+            seen_ids.add(candidate.session_id)
+            replacements.append({"at_ms": round((time.monotonic() - trace_start) * 1000, 2),
+                                 "original_id": original.session_id, "current_id": candidate.session_id,
+                                 "app_id": candidate.app_id, "title": candidate.title, "artist": candidate.artist})
+        return candidate
+    def bgm(status, snapshot=None):
+        selected = current_spotify(runtime.snapshot if snapshot is None else snapshot)
+        return selected is not None and selected.status == status
+    def simultaneous(snapshot, firefox_status):
+        return (any(item.title == marker and item.status == firefox_status for item in snapshot.sessions)
+                and bgm("paused", snapshot))
+    def require(name, predicate, seconds, *, since=None):
+        matched = []
+        def check():
+            samples = [(time.monotonic(), runtime.snapshot)]
+            if since is not None:
+                samples.extend((timestamp, snapshot) for timestamp, snapshot in trace.copy() if timestamp >= since)
+            for timestamp, snapshot in samples:
+                if predicate(snapshot):
+                    matched[:] = [timestamp, snapshot]
+                    return True
+            return False
+        ok = bool(wait(check, seconds))
+        steps.append({"name": name, "ok": ok,
+                      "at_ms": round(((matched[0] if matched else time.monotonic()) - trace_start) * 1000, 2),
+                      "snapshot": asdict(matched[1] if matched else runtime.snapshot)})
         if not ok:
             raise RuntimeError(f"Firefox 실제 미디어 상태를 확인하지 못했습니다: {name}")
     try:
@@ -829,20 +864,23 @@ def _firefox(result_dir: Path) -> dict:
             result["reason"] = "명확한 기존 playing/paused Spotify 세션 하나가 필요합니다."
             return result
         original = spotify[0]
+        seen_ids.add(original.session_id)
         if any(item.status == "playing" and item.session_id != original.session_id for item in runtime.snapshot.sessions):
             result["reason"] = "다른 미디어가 재생 중이므로 검수하지 않았습니다."
             return result
         result["supported"] = True
         runtime.configure(MediaOptions(True, False, False))
-        require("bgm-playing-baseline", lambda: bgm("playing"), 6)
+        require("bgm-playing-baseline", lambda snapshot: bgm("playing", snapshot), 6)
         closed = False  # 준비 identity 미확인도 browser 종료 확인 실패로 보고한다.
+        launched_at = time.monotonic()
         browser = _launch_firefox(executable, result_dir / "media-fixture" / marker, marker)
         result["fixture_pid"] = browser.pid
-        require("firefox-playing-pauses-bgm", lambda: fixture("playing") and bgm("paused"), 12)
-        require("firefox-paused-keeps-bgm-hold", lambda: fixture("paused") and bgm("paused") and runtime.snapshot.media_hold, 12)
+        require("firefox-playing-pauses-bgm", lambda snapshot: simultaneous(snapshot, "playing"), 12, since=launched_at)
+        require("firefox-paused-keeps-bgm-hold", lambda snapshot: simultaneous(snapshot, "paused") and snapshot.media_hold,
+                12, since=trace_start + steps[-1]["at_ms"] / 1000)
         closed = _close_firefox(browser, errors)
-        require("firefox-session-ended-keeps-bgm-hold", lambda: not any(
-            item.title == marker for item in runtime.snapshot.sessions) and bgm("paused") and runtime.snapshot.media_hold, 8)
+        require("firefox-session-ended-keeps-bgm-hold", lambda snapshot: not any(
+            item.title == marker for item in snapshot.sessions) and bgm("paused", snapshot) and snapshot.media_hold, 8)
         stable_until = time.monotonic() + 1
         stable = True
         while time.monotonic() < stable_until:
@@ -853,15 +891,19 @@ def _firefox(result_dir: Path) -> dict:
         errors.append({"type": type(error).__name__, "error": str(error)})
     finally:
         if browser is not None:
-            closed = _close_firefox(browser, errors) and closed
+            closed = _close_firefox(browser, errors)
         runtime.configure(MediaOptions(False, False, False))
         if original is not None and result["supported"]:
-            queued = runtime.request("play" if original.status == "playing" else "pause", original.session_id)
+            selected = current_spotify(runtime.snapshot)
+            queued = selected is not None and runtime.request("play" if original.status == "playing" else "pause", selected.session_id)
             restored = bool(wait(lambda: bgm(original.status), 6)) if queued else False
         cleanup = runtime.stop(timeout_seconds=2)
         result.update(steps=steps, errors=errors, original=asdict(original) if original else None,
                       playback_state_restored=restored, fixture_closed=closed, cleanup_ok=cleanup,
-                      foreground_before=original_foreground, foreground_after=native.foreground())
+                      foreground_before=original_foreground, foreground_after=native.foreground(),
+                      spotify_id_replacements=replacements,
+                      trace=[{"at_ms": round((timestamp - trace_start) * 1000, 2), "snapshot": asdict(snapshot)}
+                             for timestamp, snapshot in trace.copy()])
     result["ok"] = bool(result["supported"] and len(steps) == 5 and all(row["ok"] for row in steps)
                         and not errors and restored and closed and cleanup)
     return result

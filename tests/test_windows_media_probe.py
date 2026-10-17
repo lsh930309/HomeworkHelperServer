@@ -465,41 +465,59 @@ def test_firefox_fixture_is_local_only_and_does_not_configure_operational_profil
         assert stream.getnframes() / stream.getframerate() == 20
 
 
-@pytest.mark.parametrize("other_playing", [False, True])
-def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, monkeypatch, other_playing):
+@pytest.mark.parametrize("other_playing, mode", [(False, "normal"), (True, "normal"),
+    (False, "rotating"), (False, "transient"), (False, "ambiguous"), (False, "changed-title"), (False, "failed-step")])
+def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, monkeypatch, other_playing, mode):
     from src.core import media_center, game_focus
     from src.core.media_sessions import MediaSessionInfo
     initial = MediaSessionInfo("spotify", "Spotify.exe", status="paused", can_play=True)
     other = MediaSessionInfo("other", "other-player.exe", status="playing")
     runtime_holder, launches, closes, commands, cleanup = [], [], [], [], []
     class Runtime:
-        def __init__(self, spotify_launcher):
+        def __init__(self, spotify_launcher, on_change):
             assert spotify_launcher() is False
+            self.on_change = on_change
             self.snapshot = media_center.MediaCenterSnapshot(sessions=(initial, other) if other_playing else (initial,), running=True)
             runtime_holder.append(self)
         def start(self, options):
             assert not any((options.auto_bgm, options.background_mute, options.auto_focus))
+            self.on_change(self.snapshot)
             return True
         def configure(self, options):
             if options.auto_bgm:
                 self.snapshot = probe.replace(self.snapshot, sessions=(probe.replace(initial, status="playing"),))
+                self.on_change(self.snapshot)
             return True
         def request(self, action, session_id):
             commands.append((action, session_id))
-            self.snapshot = probe.replace(self.snapshot, sessions=(probe.replace(initial, status="paused"),))
+            selected = next(item for item in self.snapshot.sessions if item.session_id == session_id)
+            self.snapshot = probe.replace(self.snapshot, sessions=(probe.replace(selected, status="paused"),))
+            self.on_change(self.snapshot)
             return True
         def stop(self, **_kwargs):
             cleanup.append(True)
             return True
     def launch(executable, root, marker):
         launches.append((executable, root, marker))
+        selected = probe.replace(initial, session_id="spotify-new" if mode in {"rotating", "transient", "changed-title"} else initial.session_id,
+                                 title="different-track" if mode == "changed-title" else initial.title)
+        spotify = (selected, probe.replace(selected, session_id="spotify-second")) if mode == "ambiguous" else (selected,)
         runtime_holder[0].snapshot = media_center.MediaCenterSnapshot(
-            sessions=(initial, MediaSessionInfo("firefox-fixture", "firefox.exe", title=marker, status="playing")),
+            sessions=(*spotify, MediaSessionInfo("firefox-fixture", "firefox.exe", title=marker,
+                                               status="unknown" if mode == "failed-step" else "playing")),
             media_hold=True, running=True)
+        runtime_holder[0].on_change(runtime_holder[0].snapshot)
+        if mode == "transient":
+            runtime_holder[0].snapshot = probe.replace(runtime_holder[0].snapshot, sessions=tuple(
+                probe.replace(item, status="paused") if item.app_id == "firefox.exe" else item
+                for item in runtime_holder[0].snapshot.sessions))
+            runtime_holder[0].on_change(runtime_holder[0].snapshot)
         return SimpleNamespace(pid=111)
     def close(browser, _diagnostics):
         closes.append(browser.pid)
-        runtime_holder[0].snapshot = probe.replace(runtime_holder[0].snapshot, sessions=(initial,))
+        runtime_holder[0].snapshot = probe.replace(runtime_holder[0].snapshot, sessions=tuple(
+            item for item in runtime_holder[0].snapshot.sessions if item.app_id == "Spotify.exe"))
+        runtime_holder[0].on_change(runtime_holder[0].snapshot)
         return True
     def wait(predicate, _seconds):
         matched = predicate()
@@ -508,6 +526,7 @@ def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, mo
             runtime.snapshot = probe.replace(runtime.snapshot, sessions=tuple(
                 probe.replace(session, status="paused") if session.app_id == "firefox.exe" else session
                 for session in runtime.snapshot.sessions))
+            runtime.on_change(runtime.snapshot)
         return predicate()
     monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
     monkeypatch.setattr(game_focus.WindowsGameFocusNative, "foreground", lambda _self: (123, 1234))
@@ -517,11 +536,24 @@ def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, mo
     monkeypatch.setattr(probe, "_wait", wait)
     result = probe._firefox(tmp_path)
     assert cleanup == [True]
-    assert result["ok"] is (not other_playing)
+    expected_pass = not other_playing and mode not in {"ambiguous", "changed-title", "failed-step"}
+    assert result["ok"] is expected_pass
     if other_playing:
         assert launches == closes == commands == [] and result["supported"] is False
     else:
-        assert len(launches) == 1 and closes == [111, 111]
-        assert commands == [("pause", "spotify")]
-        assert len(result["steps"]) == 5 and result["playback_state_restored"]
+        assert len(launches) == 1
+        assert closes == ([111, 111] if expected_pass else [111])
+        assert commands == ([] if mode in {"ambiguous", "changed-title"} else [(
+            "pause", "spotify-new" if mode in {"rotating", "transient"} else "spotify")])
+        assert bool(result["playback_state_restored"]) is (mode not in {"ambiguous", "changed-title"})
         assert result["fixture_closed"] and result["foreground_before"] == result["foreground_after"]
+        if expected_pass:
+            assert len(result["steps"]) == 5
+        if mode in {"rotating", "transient"}:
+            assert result["spotify_id_replacements"][0]["current_id"] == "spotify-new"
+            assert result["spotify_id_replacements"][0]["original_id"] == "spotify"
+        if mode == "transient":
+            matched = result["steps"][1]["snapshot"]
+            assert any(item["title"].startswith("HH-media-QA-") and item["status"] == "playing" for item in matched["sessions"])
+            assert any(item["app_id"] == "Spotify.exe" and item["status"] == "paused" for item in matched["sessions"])
+            assert len(result["trace"]) >= 3
