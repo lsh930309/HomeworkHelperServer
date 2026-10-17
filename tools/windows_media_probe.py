@@ -438,16 +438,28 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
     started = runtime.start(MediaOptions(False, False, False))
     trace, cleanup, errors, chrome, request = [], False, [], None, None
     origin = time.monotonic()
+    request_origin = None
+    observation_limit = 10 if opening else None
+    def visible(state):
+        return [window for window in state["windows"] if window.get("visible")
+                and not window.get("iconic") and not window.get("owner") and not window.get("gone")]
+    def stable_visible():
+        recent = [{(window["pid"], window["create_time"], window["hwnd"]) for window in visible(state)}
+                  for state in trace[-3:]]
+        return len(recent) == 3 and bool(set.intersection(*recent))
     try:
         if started:
             _wait(lambda: runtime.snapshot.sessions or runtime.snapshot.error, 4)
-        count = 81 if scenario.endswith("-open") else 8 if scenario.endswith("-observe") else 41
+        count = 481 if opening else 8 if scenario.endswith("-observe") else 41
         for index in range(count):
             state = _spotify_window_state(source_appdata, source_local_appdata)
             trace.append({"at_ms": round((time.monotonic() - origin) * 1000, 2),
                           "utc": time.time(), **state,
                           "media": _media_snapshot_payload(runtime.snapshot)})
             if index == 0 and scenario != "spotify-window-observe":
+                request_origin = time.monotonic()
+                if opening and not state["processes"]:
+                    observation_limit = 60
                 action = scenario.removeprefix("spotify-window-")
                 request = {"action": action, "attempted": False, "accepted": None,
                            "at_ms": round((time.monotonic() - origin) * 1000, 2), "utc": time.time()}
@@ -509,6 +521,13 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
                 except Exception as error:
                     request.update(error_type=type(error).__name__, error=str(error))
                     errors.append({"stage": "request", **request})
+            if opening:
+                elapsed = time.monotonic() - request_origin
+                failed = (errors or forbidden_controls or not runtime.running
+                          or (native_open and not native_open[0]["accepted"]))
+                if elapsed >= 10 and (observation_limit == 10 or stable_visible() or failed
+                                      or elapsed >= observation_limit):
+                    break
             if index < count - 1:
                 time.sleep(.125)
         candidates = [window for window in trace[-1]["windows"]
@@ -524,19 +543,17 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
             panel.close()
             panel.deleteLater()
             app.processEvents()
-    visible = lambda state: [window for window in state["windows"] if window.get("visible")
-                             and not window.get("iconic") and not window.get("owner") and not window.get("gone")]
     window_result = {}
     if opening:
         final_windows = visible(trace[-1]) if trace else []
-        stable = [{(window["pid"], window["create_time"], window["hwnd"]) for window in visible(state)}
-                  for state in trace[-3:]]
         window_result = {"initial_processes": trace[0]["processes"] if trace else [],
                          "final_processes": trace[-1]["processes"] if trace else [],
                          "initial_windows": trace[0]["windows"] if trace else [],
                          "final_windows": final_windows,
                          "visible_seen": any(visible(state) for state in trace[1:]),
-                         "stable_final_visible": len(stable) == 3 and bool(set.intersection(*stable)),
+                         "stable_final_visible": stable_visible(),
+                         "observation_limit_seconds": observation_limit,
+                         "observation_seconds": round((trace[-1]["at_ms"] - request["at_ms"]) / 1000, 3) if trace and request else 0,
                          "initial_kind": "warm" if trace and trace[0]["processes"] else "cold"}
         if request is not None:
             request.update(attempted=bool(native_open),
@@ -555,6 +572,7 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
             "limits": [("ok는 실제 제품 버튼·worker·URI 수락과 최종 복원된 창 표시를 포함합니다. 포커스 획득 보장은 아닙니다."
                         if opening else "ok는 관측 절차 완료이며 창 최소화·트레이·재생 유지의 성공 판정이 아닙니다."),
                        "명시한 창 호출·명령 이외의 재생·음량·재전송·강제 종료·설정 변경은 없습니다.",
+                       "열기 관측은 최소 10초이며, 최초 미실행이면 창 표시까지 최대 60초 관측합니다. URI를 재전송하지 않습니다.",
                        "WM_CLOSE의 트레이 유지 여부는 Spotify 설정과 후속 process·GSMTC 관측으로 구분합니다."]}
 
 

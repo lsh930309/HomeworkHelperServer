@@ -285,7 +285,8 @@ def test_spotify_window_experiments_keep_warm_identity_and_trace_post_request_wi
     json.dumps(result)
 
 
-@pytest.mark.parametrize("condition", ["cold", "queue-rejected", "native-rejected", "native-error",
+@pytest.mark.parametrize("condition", ["cold", "cold-delayed", "cold-timeout", "cold-native-rejected",
+                                        "queue-rejected", "native-rejected", "native-error",
                                         "no-window", "transient-window", "forbidden-control",
                                         "start-failed", "cleanup-failed"])
 def test_product_spotify_open_requires_queue_native_acceptance_and_stable_visible_window(tmp_path, monkeypatch, condition):
@@ -293,6 +294,7 @@ def test_product_spotify_open_requires_queue_native_acceptance_and_stable_visibl
     from src.core import media_center, spotify_app
     clock, calls = [0.0], []
     opened = [False]
+    cold = condition in {"cold", "cold-delayed", "cold-timeout", "cold-native-rejected"}
     snapshot = media_center.MediaCenterSnapshot(running=True, options=media_center.MediaOptions(False, False, False))
     class Runtime:
         running = True
@@ -326,13 +328,15 @@ def test_product_spotify_open_requires_queue_native_acceptance_and_stable_visibl
         if condition == "native-error":
             raise OSError("native open failed")
         opened[0] = True
-        return condition != "native-rejected"
+        return condition not in {"native-rejected", "cold-native-rejected"}
     def processes(source, local):
         assert source == tmp_path / "actual-profile" and local == "actual-local"
         return ()
     def window_state(*_args):
-        present = condition != "cold" or opened[0]
-        visible = opened[0] and condition != "no-window"
+        present = not cold or opened[0]
+        visible = opened[0] and condition not in {"no-window", "cold-timeout"}
+        if condition == "cold-delayed" and clock[0] < 53:
+            visible = False
         if condition == "transient-window" and clock[0] >= 9:
             visible = False
         process = {"pid": 41, "create_time": 123, "path": "C:/Spotify.exe"}
@@ -348,18 +352,24 @@ def test_product_spotify_open_requires_queue_native_acceptance_and_stable_visibl
     monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     result = probe._spotify_window_observe(tmp_path / "actual-profile", "actual-local", "spotify-window-open")
-    assert result["ok"] is (condition == "cold")
+    assert result["ok"] is (condition in {"cold", "cold-delayed"})
     assert calls.count(("native",)) == (0 if condition in ("queue-rejected", "start-failed") else 1)
     assert calls[-1] == ("stop",)
     assert result["cleanup_ok"] is (condition != "cleanup-failed")
-    if condition == "cold":
+    if condition in {"cold", "cold-delayed"}:
         assert result["window_result"]["initial_kind"] == "cold"
         assert result["window_result"]["initial_processes"] == []
         assert result["window_result"]["final_processes"][0]["pid"] == 41
         assert result["window_result"]["stable_final_visible"]
         assert result["request"]["queued"] and result["request"]["accepted"]
-    elif condition == "native-rejected":
+        if condition == "cold-delayed":
+            assert 53.25 <= result["window_result"]["observation_seconds"] < 54
+    elif condition in {"native-rejected", "cold-native-rejected"}:
         assert result["request"]["queued"] and result["request"]["accepted"] is False
+        assert result["window_result"]["observation_seconds"] == 10
+    elif condition == "cold-timeout":
+        assert result["window_result"]["observation_seconds"] == 60
+        assert not result["window_result"]["stable_final_visible"]
     elif condition == "transient-window":
         assert result["window_result"]["visible_seen"]
         assert not result["window_result"]["stable_final_visible"]
