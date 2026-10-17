@@ -109,7 +109,7 @@ def parser() -> argparse.ArgumentParser:
                    metavar="0..120", help="desktop observation duration; 0 takes one snapshot")
     p.add_argument("--log-lines", type=int, choices=range(1, 2001), default=80, metavar="1..2000")
     p.add_argument("--contains", default="", help="Literal substring filter for recent GUI log lines")
-    p.add_argument("--scenario", choices=("observe", "preview", "audio", "focus", "focus-compare", "focus-uia", "focus-lifecycle", "bgm", "prepare-spotify", "triggers", "firefox", "spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-exit"), default="observe",
+    p.add_argument("--scenario", choices=("observe", "preview", "audio", "focus", "focus-compare", "focus-uia", "focus-lifecycle", "bgm", "prepare-spotify", "triggers", "firefox", "spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-startup"), default="observe",
                    help="media-qa only: explicit native verification scenario")
     p.add_argument("--prepare-runtime", action="store_true",
                    help="media-qa only: install declared requirements in the canonical Windows venv")

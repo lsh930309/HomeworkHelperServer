@@ -108,6 +108,19 @@ def test_missing_environment_never_recognizes_relative_spotify_path(native):
     assert not spotify_app._spotify_executable(r"WindowsApps\SpotifyAB.SpotifyMusic_1_x64__zpdnekdrzrea0\Spotify.exe")
 
 
+@pytest.mark.parametrize("folder", ["Roaming", "Local"])
+def test_explicit_profile_inputs_recognize_desktop_without_changing_isolated_environment(native, folder):
+    processes, calls = native
+    processes.append(Process(path=rf"C:\Users\actual\AppData\{folder}\Spotify\Spotify.exe"))
+    spotify_app.os.environ["APPDATA"] = "isolated-roaming"
+    spotify_app.os.environ["LOCALAPPDATA"] = "isolated-local"
+    before = dict(spotify_app.os.environ)
+    assert [process.pid for process in spotify_app.spotify_processes(
+        appdata=r"C:\Users\actual\AppData\Roaming", local_appdata=r"C:\Users\actual\AppData\Local")] == [41]
+    assert spotify_app.os.environ == before
+    assert calls == [("enumerate", ["name"])]
+
+
 def test_other_user_or_session_and_launcher_are_excluded_before_path_read(native):
     processes, _ = native
     wrong_user = Process(42, owner=False)

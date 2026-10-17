@@ -22,11 +22,11 @@ class SpotifyProcess:
     path: str
 
 
-def _spotify_executable(path: str) -> bool:
+def _spotify_executable(path: str, *, appdata: str | None = None, local_appdata: str | None = None) -> bool:
     path = ntpath.normcase(ntpath.normpath(path))
     roots = (
-        (os.environ.get("APPDATA", ""), "Spotify"),
-        (os.environ.get("LOCALAPPDATA", ""), "Spotify"),
+        (os.environ.get("APPDATA", "") if appdata is None else appdata, "Spotify"),
+        (os.environ.get("LOCALAPPDATA", "") if local_appdata is None else local_appdata, "Spotify"),
         (os.environ.get("ProgramFiles", ""), "Spotify"),
         (os.environ.get("ProgramFiles(x86)", ""), "Spotify"),
     )
@@ -45,7 +45,7 @@ def _spotify_executable(path: str) -> bool:
             and relative[0].endswith("__zpdnekdrzrea0"))
 
 
-def spotify_processes() -> tuple[SpotifyProcess, ...]:
+def spotify_processes(*, appdata: str | None = None, local_appdata: str | None = None) -> tuple[SpotifyProcess, ...]:
     """실행 중인 현재 사용자·Windows 세션의 실제 Spotify만 반환한다.
 
     이름이 같은 임의 EXE·다른 사용자·상주 launcher는 실행 완료의 근거가 아니다.
@@ -65,7 +65,7 @@ def spotify_processes() -> tuple[SpotifyProcess, ...]:
                 continue
             created = process.create_time()
             path = process.exe()
-            if _spotify_executable(path) and process.create_time() == created:
+            if _spotify_executable(path, appdata=appdata, local_appdata=local_appdata) and process.create_time() == created:
                 result.append(SpotifyProcess(process.pid, created, path))
         except psutil.NoSuchProcess:
             continue

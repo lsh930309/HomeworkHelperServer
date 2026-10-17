@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import uuid
 
 
-SPOTIFY_WINDOW_SCENARIOS = ("spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-exit")
+SPOTIFY_WINDOW_SCENARIOS = ("spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-startup")
 SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare", "focus-uia", "focus-lifecycle", *SPOTIFY_WINDOW_SCENARIOS)
 GAME_FIELDS = ("name", "monitoring_path", "default_volume", "default_muted")
 DISPLAY_FIELDS = (
@@ -60,23 +60,9 @@ def _media_snapshot_payload(snapshot) -> dict:
 
 
 def _spotify_probe_processes(source_appdata: Path, source_local_appdata: str | None):
-    # 운영 환경값은 이 읽기 함수에만 적용한다. 제품 모듈은 격리 환경에서 먼저 로드한다.
-    import psutil  # noqa: F401
-    import src.core.process_monitor  # noqa: F401
+    # 실제 프로필은 순수 입력이며 프로세스 공용 환경은 계속 격리 상태다.
     from src.core.spotify_app import spotify_processes
-    values = {"APPDATA": str(source_appdata)}
-    if source_local_appdata is not None:
-        values["LOCALAPPDATA"] = source_local_appdata
-    previous = {name: os.environ.get(name) for name in values}
-    try:
-        os.environ.update(values)
-        return spotify_processes()
-    finally:
-        for name, value in previous.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+    return spotify_processes(appdata=str(source_appdata), local_appdata=source_local_appdata or "")
 
 
 def _spotify_window_state(source_appdata: Path, source_local_appdata: str | None) -> dict:
@@ -130,95 +116,8 @@ def _spotify_native_menu(handle: int, *, cancelled, deadline: float) -> dict:
     return result
 
 
-def _spotify_normal_exit(window, buttons, module, *, cancelled, deadline, is_current) -> dict:
-    """사용자가 승인한 메인 메뉴만 한 번 열고 실제 Exit 항목의 ID만 전달한다."""
-    import ctypes
-    from ctypes import wintypes
-    import win32gui
-    import win32process
-    from src.core.spotify_app import SpotifyProcess
-    from src.utils.audio_control import verify_identity
-    target = SpotifyProcess(window["pid"], window["create_time"], window["path"])
-    result = {"menu_open": {"attempted": False}, "exit": {"attempted": False}, "cancelled_menu": False}
-    popup = None
-    def current():
-        return (not cancelled.is_set() and time.monotonic() < deadline and is_current()
-                and verify_identity(target) and win32process.GetWindowThreadProcessId(window["hwnd"])[1] == target.pid)
-    def popups():
-        found = []
-        def collect(hwnd, _context):
-            if (win32gui.GetClassName(hwnd) == "#32768" and win32gui.IsWindowVisible(hwnd)
-                    and win32process.GetWindowThreadProcessId(hwnd)[1] == target.pid):
-                found.append({"hwnd": int(hwnd), "owner": int(win32gui.GetWindow(hwnd, 4) or 0)})
-        win32gui.EnumWindows(collect, None)
-        return found
-    try:
-        result["button_count"] = len(buttons)
-        result["preexisting_popups"] = popups()
-        if len(buttons) != 1 or not current() or result["preexisting_popups"]:
-            raise ValueError("유일한 Spotify 메뉴 버튼 또는 독립된 요청을 확인하지 못했습니다.")
-        button = buttons[0]
-        try:
-            pattern = button.GetCurrentPattern(10005).QueryInterface(module.IUIAutomationExpandCollapsePattern)
-            action, result["menu_open"]["pattern"] = pattern.Expand, "ExpandCollapse"
-        except Exception:
-            pattern = button.GetCurrentPattern(10000).QueryInterface(module.IUIAutomationInvokePattern)
-            action, result["menu_open"]["pattern"] = pattern.Invoke, "Invoke"
-        if not current():
-            raise ValueError("메뉴 요청이 취소되어 실행하지 않았습니다.")
-        result["menu_open"]["attempted"] = True
-        action()
-        result["menu_open"]["accepted"] = True
-        until = min(deadline, time.monotonic() + 1.5)
-        while current() and time.monotonic() < until:
-            found = popups()
-            result["popup_candidates"] = found
-            if len(found) == 1 and found[0]["owner"] == window["hwnd"]:
-                popup = found[0]
-                break
-            time.sleep(.05)
-        if popup is None:
-            raise ValueError("현재 Spotify 창이 소유한 실제 popup 메뉴를 확인하지 못했습니다.")
-        class MenuBarInfo(ctypes.Structure):
-            _fields_ = [("cbSize", wintypes.DWORD), ("rcBar", wintypes.RECT), ("hMenu", wintypes.HMENU),
-                        ("hwndMenu", wintypes.HWND), ("flags", wintypes.DWORD)]
-        get_menu = ctypes.WinDLL("user32", use_last_error=True).GetMenuBarInfo
-        get_menu.argtypes = [wintypes.HWND, wintypes.LONG, wintypes.LONG, ctypes.POINTER(MenuBarInfo)]
-        get_menu.restype = wintypes.BOOL
-        info = MenuBarInfo()
-        info.cbSize = ctypes.sizeof(info)
-        if not current() or not get_menu(popup["hwnd"], -4, 0, ctypes.byref(info)) or not info.hMenu:
-            raise ValueError("실제 popup의 표준 메뉴 handle을 조회하지 못했습니다.")
-        result["menu"] = _spotify_native_menu(int(info.hMenu), cancelled=cancelled, deadline=deadline)
-        exits = []
-        for item in result["menu"]["items"]:
-            name = item["path"][-1].split("\t", 1)[0].replace("&", "").strip().casefold()
-            if len(name) >= 3 and name[-3] == "(" and name[-1] == ")":
-                name = name[:-3].strip()
-            if name in ("exit", "quit", "종료", "끝내기") and not item["submenu"] and not item["state"] & 3 and 0 < item["id"] <= 0xffff:
-                exits.append(item)
-        if len(exits) != 1 or not current() or popups() != [popup]:
-            raise ValueError("유일한 실제 Exit 메뉴 또는 현재 요청을 확인하지 못해 종료하지 않았습니다.")
-        result["exit"].update(attempted=True, item=exits[0])
-        win32gui.PostMessage(window["hwnd"], 0x0111, exits[0]["id"], 0)  # 실제 WM_COMMAND ID 1회.
-        result["exit"]["accepted"] = True
-    except Exception as error:
-        result.update(error_type=type(error).__name__, error=str(error))
-    finally:
-        if result["menu_open"]["attempted"] and not result["exit"].get("accepted"):
-            if (popup and verify_identity(target)
-                    and win32process.GetWindowThreadProcessId(window["hwnd"])[1] == target.pid
-                    and popup in popups()):
-                try:
-                    win32gui.PostMessage(window["hwnd"], 0x001f, 0, 0)  # 시간 초과 후에도 자기 메뉴만 취소한다.
-                    result["cancelled_menu"] = True
-                except Exception as error:
-                    result["cancel_error"] = str(error)
-    return result
-
-
-def _spotify_chrome_controls(window: dict, *, exit_requested=False, is_current=lambda: True) -> dict:
-    """기본은 명칭 조회만 하며 고정 exit 시나리오에서만 실제 메뉴 종료를 요청한다."""
+def _spotify_chrome_controls(window: dict) -> dict:
+    """Spotify 창의 메뉴 명칭·DPI를 읽는다. 창·메뉴·재생 조작은 없다."""
     import comtypes
     from src.core.spotify_app import SpotifyProcess
     from src.utils.audio_control import verify_identity
@@ -232,7 +131,7 @@ def _spotify_chrome_controls(window: dict, *, exit_requested=False, is_current=l
     def worker():
         initialized = False
         automation = element = walker = None
-        buttons = []
+        button_count = 0
         try:
             comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
             initialized = True
@@ -283,7 +182,7 @@ def _spotify_chrome_controls(window: dict, *, exit_requested=False, is_current=l
                               and left <= bounds.left < left + (right - left) * .6)
                     if control_type == 50000 and not offscreen:
                         if left <= bounds.left < bounds.right <= left + menu_extent and top <= bounds.top < bounds.bottom <= top + menu_extent:
-                            buttons.append(node)
+                            button_count += 1
                     if known or chrome:
                         result["controls"].append({"name": redact_sensitive_text(name)[:128],
                                                    "control_type": control_type, "depth": depth, "offscreen": offscreen,
@@ -295,15 +194,11 @@ def _spotify_chrome_controls(window: dict, *, exit_requested=False, is_current=l
                     queue.append((child, depth + 1))
                     child = walker.GetNextSiblingElement(child)
             result["visited"] = visited
-            result["menu_button_count"] = len(buttons)
-            if exit_requested:
-                result["normal_exit"] = _spotify_normal_exit(window, buttons, module, cancelled=cancelled,
-                                                             deadline=deadline, is_current=is_current)
+            result["menu_button_count"] = button_count
         except Exception as error:
             result.update(error_type=type(error).__name__, error=redact_sensitive_text(error))
         finally:
             queue = None
-            buttons = None
             node = child = walker = element = automation = None
             if initialized:
                 comtypes.CoUninitialize()
@@ -352,6 +247,123 @@ def _spotify_window_action(window: dict, action: str, *, is_current) -> dict:
     return {"attempted": True, "accepted": True}
 
 
+def _spotify_window_startup(source_appdata: Path, source_local_appdata: str | None) -> dict:
+    """제품의 cold Play를 한 번 실행하고 최초/5초 최소화·10초 닫기를 비교한다."""
+    from src.core.media_center import MediaCenterRuntime, MediaOptions
+    from src.core.media_sessions import WindowsMediaSessions, is_spotify_session
+    from src.core.spotify_app import launch_spotify
+    ready = threading.Event()
+    observed, launches, events, trace, errors, first = [], [], [], [], [], {}
+    origin = time.monotonic()
+    deadline = origin + 45
+    def event(kind, **values):
+        row = {"kind": kind, "at_ms": round((time.monotonic() - origin) * 1000, 2), "utc": time.time(), **values}
+        events.append(row)
+        return row
+    class ObservedSessions(WindowsMediaSessions):
+        async def snapshot(self):
+            rows = await super().snapshot()
+            observed[:] = [tuple(rows)]
+            ready.set()
+            return rows
+        async def control(self, session_id, action):
+            row = event("media_control", session_id=session_id, action=action)
+            try:
+                row["accepted"] = bool(await super().control(session_id, action))
+                return row["accepted"]
+            except Exception as error:
+                row.update(error_type=type(error).__name__, error=str(error))
+                raise
+    def launch(dj=False):
+        row = event("uri", dj=dj, attempted=True)
+        launches.append(row)
+        try:
+            row["accepted"] = bool(launch_spotify(dj=dj))
+            return row["accepted"]
+        except Exception as error:
+            row.update(accepted=False, error_type=type(error).__name__, error=str(error))
+            raise
+    def initial_minimize(started_after, *, is_current):
+        if first or not is_current() or time.monotonic() >= deadline:
+            return bool(first)
+        state = _spotify_window_state(source_appdata, source_local_appdata)
+        candidates = [window for window in state["windows"] if window.get("visible") and not window.get("owner")
+                      and not window.get("gone") and window["create_time"] >= started_after]
+        if not candidates:
+            return False
+        target = candidates[0]
+        row = event("initial_minimize", target=target, started_after=started_after)
+        try:
+            row.update(_spotify_window_action(target, "minimize", is_current=lambda: is_current() and time.monotonic() < deadline))
+        except Exception as error:
+            row.update(attempted=False, error_type=type(error).__name__, error=str(error))
+        first.update(at=time.monotonic(), target=target)
+        return True  # 네이티브 실패도 같은 최초 요청을 다시 보내지 않는다.
+    runtime = MediaCenterRuntime(backend_factory=ObservedSessions,
+        spotify_launcher=lambda: launch(False), dj_launcher=lambda: launch(True),
+        spotify_process_reader=lambda: _spotify_probe_processes(source_appdata, source_local_appdata),
+        spotify_window_minimizer=initial_minimize)
+    result = {"ok": False, "supported": True, "scenario": "spotify-window-startup", "request_queued": False,
+              "launches": launches, "events": events, "trace": trace, "errors": errors, "writes": []}
+    started, cleanup, late_done, close_done = False, False, False, False
+    try:
+        started = runtime.start(MediaOptions(False, False, False))
+        _wait(lambda: ready.is_set() or runtime.snapshot.error, 4)
+        baseline = _spotify_window_state(source_appdata, source_local_appdata)
+        result["baseline"] = {**baseline, "sessions": [_media_session_payload(item) for item in observed[-1]] if observed else []}
+        if (not started or not ready.is_set() or runtime.snapshot.error or baseline["processes"]
+                or any(is_spotify_session(item) or item.status == "playing" for item in observed[-1])):
+            result["reason"] = "Spotify가 실행 중이거나 외부 미디어 재생·관측 오류가 있어 cold 실험을 수행하지 않았습니다."
+            return result
+        result["request_queued"] = bool(runtime.request("play"))
+        if not result["request_queued"]:
+            result["reason"] = "제품 Play 요청을 접수하지 못했습니다."
+            return result
+        while time.monotonic() < deadline and runtime.running:
+            state = _spotify_window_state(source_appdata, source_local_appdata)
+            trace.append({"at_ms": round((time.monotonic() - origin) * 1000, 2), "utc": time.time(),
+                          **state, "media": _media_snapshot_payload(runtime.snapshot)})
+            if first:
+                elapsed = time.monotonic() - first["at"]
+                target = first["target"]
+                candidates = [window for window in state["windows"] if window.get("visible") and not window.get("owner")
+                              and not window.get("gone") and all(window[key] == target[key] for key in ("pid", "create_time", "path"))]
+                action = "minimize" if elapsed >= 5 and not late_done else "close" if elapsed >= 10 and not close_done else None
+                if action:
+                    if action == "minimize":
+                        late_done = True
+                    else:
+                        close_done = True
+                    row = event("late_minimize" if action == "minimize" else "close", attempted=False, accepted=None)
+                    if len(candidates) == 1:
+                        row["target"] = candidates[0]
+                        try:
+                            row.update(_spotify_window_action(candidates[0], action,
+                                is_current=lambda: runtime.running and time.monotonic() < deadline))
+                        except Exception as error:
+                            row.update(error_type=type(error).__name__, error=str(error))
+                    else:
+                        row["reason"] = "같은 cold 프로세스의 유일한 표시 창이 없어 요청하지 않았습니다."
+                if elapsed >= 15:
+                    break
+            time.sleep(.125)
+        result["final_media"] = _media_snapshot_payload(runtime.snapshot)
+        if not first:
+            errors.append({"stage": "initial_minimize", "error": "45초 안에 최초 cold Spotify 창을 확인하지 못했습니다."})
+        result["ok"] = bool(trace and first and late_done and close_done and not errors)
+    except Exception as error:
+        errors.append({"error_type": type(error).__name__, "error": str(error)})
+    finally:
+        cleanup = runtime.stop(timeout_seconds=2)
+        result["cleanup_ok"] = cleanup
+        result["ok"] = result["ok"] and cleanup
+        result["limits"] = ["cold 제품 Play 1회이며 DJ URI와 실제 GSMTC Play 응답을 기록합니다.",
+                            "최초 최소화·5초 후 최소화·10초 후 WM_CLOSE를 각각 최대 1회 요청하며 15초까지 관측합니다.",
+                            "창·재생 상태는 원상 복구하지 않습니다. 최종 trace와 final_media가 실제 종료 상태입니다.",
+                            "ok는 비교 절차 완료이며 숨김·최소화 유지나 재생 성공을 뜻하지 않습니다."]
+    return result
+
+
 def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | None,
                             scenario: str = "spotify-window-observe") -> dict:
     if scenario not in SPOTIFY_WINDOW_SCENARIOS:
@@ -389,14 +401,7 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
                         if len(candidates) != 1:
                             raise ValueError("유일한 Spotify 메인 창을 확인하지 못해 명령을 보내지 않았습니다.")
                         request["target"] = candidates[0]
-                        if action == "exit":
-                            chrome = _spotify_chrome_controls(candidates[0], exit_requested=True, is_current=lambda: runtime.running)
-                            normal_exit = chrome.get("normal_exit", {})
-                            request.update(normal_exit.get("exit", {}))
-                            if not request.get("accepted"):
-                                raise ValueError(normal_exit.get("error") or chrome.get("error") or "정상 Exit 경로를 실행하지 못했습니다.")
-                        else:
-                            request.update(_spotify_window_action(candidates[0], action, is_current=lambda: runtime.running))
+                        request.update(_spotify_window_action(candidates[0], action, is_current=lambda: runtime.running))
                         if request.get("error_type"):
                             errors.append({"stage": "request", **request})
                 except Exception as error:
@@ -1870,6 +1875,8 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
     sys.path.insert(0, str(repo))
     if scenario == "observe":
         return _observe()
+    if scenario == "spotify-window-startup":
+        return _spotify_window_startup(source_appdata, original_environment["LOCALAPPDATA"])
     if scenario in SPOTIFY_WINDOW_SCENARIOS:
         if scenario != "spotify-window-observe":
             return _spotify_window_observe(source_appdata, original_environment["LOCALAPPDATA"], scenario)
