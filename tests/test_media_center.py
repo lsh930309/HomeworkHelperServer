@@ -197,6 +197,33 @@ def test_focused_game_audible_edges_pause_and_resume_but_unknown_does_not_resume
         assert not target.user_muted
 
 
+def test_background_mute_failure_cannot_be_treated_as_quiet_for_automatic_play():
+    target = GameAudioTarget("game", 42, 1, "/game.exe", False, 55)
+    with running(options=MediaOptions(False), targets=(target,)) as (runtime, backend, audio, native, *_):
+        # 브라우저가 전경인 상태에서 게임의 실제 음소거 적용/조회가 실패했다.
+        audio.reconcile = lambda *_args, **_kwargs: (
+            GameAudioObservation(target, False, None, None, True, None),)
+        wait_for(lambda: runtime.snapshot.game_audio and not runtime.snapshot.game_audio[0].available)
+        runtime.configure(MediaOptions())
+        reads = backend.reads
+        wait_for(lambda: backend.reads > reads + 5)
+        assert backend.commands == [], "음소거 확인 실패를 무음으로 간주해 BGM을 자동 재생했다"
+        # 실제 무음이 확인된 뒤에만 처음 유효한 자동 재생을 허용한다.
+        audio.reconcile = lambda *_args, **_kwargs: (
+            GameAudioObservation(target, True, .55, True, True, False),)
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+
+
+def test_disabled_background_policy_does_not_gate_bgm_on_an_unfocused_game():
+    target = GameAudioTarget("game", 42, 1, "/game.exe", False, 55)
+    with running(options=MediaOptions(False, False, False), targets=(target,)) as (runtime, backend, audio, *_):
+        audio.reconcile = lambda *_args, **_kwargs: (
+            GameAudioObservation(target, False, None, None, False, None),)
+        wait_for(lambda: runtime.snapshot.game_audio and not runtime.snapshot.game_audio[0].available)
+        runtime.configure(MediaOptions(True, False, False))
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+
+
 def test_other_media_pause_close_and_game_exit_do_not_bypass_hold():
     target = GameAudioTarget("game", 42, 1, "/game.exe", False, 50)
     with running(targets=(target,)) as (runtime, backend, audio, native, *_):

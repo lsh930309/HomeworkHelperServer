@@ -309,6 +309,11 @@ class MediaCenterRuntime:
                 current = next((item for item in self._observations
                                 if item.target.pid == foreground_pid), None)
                 audible = (current.audible if current.available else None) if current else False
+                # 비활성 게임의 자동 음소거도 확인돼야 전체가 조용하다고 판단할 수 있다.
+                if audible is False and options.background_mute and any(
+                    not item.available or item.audible is None for item in self._observations
+                ):
+                    audible = None
                 self._game_audible = audible if known and effective else None
                 if options.auto_focus and not autofocus:
                     self._focus = self._focus_factory(started_at_wall=time.time(), native=self._native)
