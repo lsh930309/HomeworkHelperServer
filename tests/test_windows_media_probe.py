@@ -372,3 +372,79 @@ def test_invalid_ready_pid_cleans_actual_owned_child_before_raising(tmp_path, re
         probe._spawn_fixture(tmp_path, "audio")
     assert (roots[0] / "stop").exists()
     assert records == [("actual", 222), ("launcher", 111)]
+
+
+def test_focus_diagnostics_capture_exact_boundary_and_redact_secret_text():
+    import logging
+    logger = logging.getLogger("src.utils.windows")
+    old_level, old_handlers = logger.level, list(logger.handlers)
+    with probe._focus_diagnostics() as rows:
+        logger.warning("Windows가 게임 창 전환을 허용하지 않음: pid=42 token=sensitive-value")
+        logging.getLogger("unrelated.logger").warning("이 행은 focus 결과에 포함하지 않는다")
+    assert len(rows) == 1 and rows[0]["logger"] == "src.utils.windows"
+    assert "sensitive-value" not in rows[0]["message"] and "REDACTED" in rows[0]["message"]
+    assert logger.level == old_level and logger.handlers == old_handlers
+
+
+@pytest.mark.parametrize("other_playing, initial_status", [(False, "paused"), (False, "playing"), (True, "paused")])
+def test_triggers_integrate_state_edges_and_restore_without_operational_data(tmp_path, monkeypatch, owned_fixture, other_playing, initial_status):
+    from src.core import media_center
+    from src.core.game_audio import GameAudioObservation
+    from src.core.media_sessions import MediaSessionInfo
+    from src.utils import audio_control
+    commands, cleaned, active = [], [], []
+    initial = MediaSessionInfo("spotify", "Spotify.exe", status=initial_status,
+                               can_play=initial_status == "paused", can_pause=initial_status == "playing")
+    other = MediaSessionInfo("firefox", "firefox.exe", status="playing")
+    class Session:
+        pid = 111
+        key = ("endpoint", "session")
+        volume = .72
+        muted = False
+        def get_volume(self): return self.volume
+        def get_mute(self): return self.muted
+        def set_volume(self, value): self.volume = value
+        def set_mute(self, value): self.muted = value
+    session = Session()
+    class Runtime:
+        def __init__(self, native_factory, spotify_launcher):
+            self.native = native_factory()
+            assert self.native.foreground()[0] != os.getpid() and spotify_launcher() is False
+            self.snapshot = media_center.MediaCenterSnapshot(sessions=(initial, other) if other_playing else (initial,), running=True)
+        def start(self, options):
+            assert not any((options.auto_bgm, options.background_mute, options.auto_focus))
+            active.append(True)
+            return True
+        def configure(self, options):
+            if options.auto_bgm:
+                self.snapshot = probe.replace(self.snapshot, sessions=(probe.replace(initial, status="playing"),))
+            return True
+        def update_targets(self, targets):
+            target = targets[0]
+            session.volume, session.muted = .55, target.user_muted
+            observation = GameAudioObservation(target, True, .55, target.user_muted, False, not target.user_muted)
+            self.snapshot = probe.replace(self.snapshot,
+                sessions=(probe.replace(initial, status="playing" if target.user_muted else "paused"),),
+                game_audio=(observation,))
+        def request(self, action, session_id):
+            commands.append((action, session_id))
+            self.snapshot = probe.replace(self.snapshot, sessions=(probe.replace(initial, status="playing" if action == "play" else "paused"),))
+            return True
+        def stop(self, **_kwargs):
+            cleaned.append(True)
+            return True
+    monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
+    monkeypatch.setattr(audio_control, "enumerate_sessions", lambda: (session,))
+    monkeypatch.setattr(audio_control, "verify_identity", lambda target: target.pid == 111)
+    monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
+    result = probe._triggers(tmp_path)
+    assert result["foreground_input"] == "synthetic" and cleaned == active == [True]
+    if other_playing:
+        assert result["ok"] is False and result["supported"] is False
+        assert commands == [] and owned_fixture[1] == []
+    else:
+        assert result["ok"] and len(result["steps"]) == 5
+        expected = (["pause"] if initial_status == "playing" else []) + ["pause", "play" if initial_status == "playing" else "pause"]
+        assert commands == [(action, "spotify") for action in expected]
+        assert result["playback_state_restored"] and result["audio_restored"] and result["fixture_exited"]
+        assert (session.volume, session.muted) == (.72, False)

@@ -10,7 +10,9 @@ from dataclasses import asdict, replace
 from importlib import metadata
 import os
 import json
+import logging
 import ntpath
+from contextlib import contextmanager
 from pathlib import Path
 import platform
 import sqlite3
@@ -22,7 +24,7 @@ from types import SimpleNamespace
 import uuid
 
 
-SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify")
+SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers")
 GAME_FIELDS = ("name", "monitoring_path", "default_volume", "default_muted")
 DISPLAY_FIELDS = (
     "sidebar_clock_enabled", "sidebar_clock_format", "sidebar_playtime_enabled",
@@ -411,6 +413,31 @@ def _restore_foreground(hwnd: int) -> bool:
     return bool(_wait(lambda: win32gui.GetForegroundWindow() == hwnd, 1))
 
 
+@contextmanager
+def _focus_diagnostics():
+    from src.gui.runtime_logging import RedactingFormatter
+    records = []
+    class MemoryHandler(logging.Handler):
+        def emit(self, record):
+            if len(records) < 100:
+                records.append({"logger": record.name, "level": record.levelname,
+                                "message": self.format(record)})
+    handler = MemoryHandler()
+    handler.setFormatter(RedactingFormatter("%(message)s"))
+    loggers = [logging.getLogger(name) for name in ("src.utils.windows", "src.core.game_focus")]
+    levels = [logger.level for logger in loggers]
+    for logger in loggers:
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+    try:
+        yield records
+    finally:
+        for logger, level in zip(loggers, levels):
+            logger.removeHandler(handler)
+            logger.setLevel(level)
+        handler.close()
+
+
 def _focus(result_dir: Path) -> dict:
     import psutil
     from src.core.game_audio import GameAudioTarget
@@ -436,10 +463,11 @@ def _focus(result_dir: Path) -> dict:
         target = GameAudioTarget("media-probe-focus", child.pid, process.create_time(), process.exe(), False, None)
         has_window = native.has_window(target)
         foreground = native.foreground()
-        tracker.tick((target,), *foreground, time.monotonic(), os.getpid())
-        observed = _wait(lambda: native.foreground()[0] == child.pid, 1) is True
-        for _ in range(3):
-            tracker.tick((target,), *native.foreground(), time.monotonic(), os.getpid())
+        with _focus_diagnostics() as diagnostics:
+            tracker.tick((target,), *foreground, time.monotonic(), os.getpid())
+            observed = _wait(lambda: native.foreground()[0] == child.pid, 1) is True
+            for _ in range(3):
+                tracker.tick((target,), *native.foreground(), time.monotonic(), os.getpid())
         actual = native.foreground()
     finally:
         tracker.cancel()
@@ -451,6 +479,7 @@ def _focus(result_dir: Path) -> dict:
             "requests": requests, "foreground_observed": observed, "foreground_after": actual,
             "original_foreground": [original_pid, original_hwnd], "foreground_restored": restored,
             "fixture_exited": exited,
+            "diagnostics": diagnostics,
             "limits": ["Windows 전경 전환 거절은 요청 수락과 실제 전환 결과로 구분합니다."]}
 
 
@@ -550,6 +579,113 @@ def _prepare_spotify() -> dict:
     return result
 
 
+def _triggers(result_dir: Path) -> dict:
+    """실제 Spotify·WASAPI 통합. foreground 입력만 명시적으로 합성한다."""
+    import psutil
+    from src.core.game_audio import GameAudioTarget
+    from src.core.media_center import MediaCenterRuntime, MediaOptions
+    from src.core.media_sessions import is_spotify_session
+    from src.utils import audio_control
+
+    deadline = time.monotonic() + 60  # fixture 준비·정상 정리 여유를 포함해 80초 안에 종료한다.
+    foreground = [os.getpid() + 100000, 1]
+    runtime = MediaCenterRuntime(native_factory=lambda: SimpleNamespace(
+        foreground=lambda: tuple(foreground)), spotify_launcher=lambda: False)
+    result = {"ok": False, "supported": False, "scenario": "triggers", "foreground_input": "synthetic",
+              "limits": ["foreground만 합성 입력이며 Spotify/GSMTC/WASAPI는 실제 Windows 경로입니다.",
+                         "실제 Firefox 재생·종료 감지는 이 시나리오에서 검수하지 않습니다."]}
+    steps, errors, original, child, root, target, initial = [], [], None, None, None, None, {}
+    audio_restored, playback_restored, cleanup, exited = True, False, True, True
+    def wait(predicate, seconds=6):
+        return _wait(predicate, max(0, min(seconds, deadline - time.monotonic())))
+    def status_matches(status):
+        return any(item.session_id == original.session_id and item.status == status
+                   for item in runtime.snapshot.sessions)
+    def record(name, predicate):
+        matched = bool(wait(predicate))
+        steps.append({"name": name, "ok": matched, "snapshot": asdict(runtime.snapshot)})
+        if not matched:
+            raise RuntimeError(f"자동 미디어 통합 검수 결과를 확인하지 못했습니다: {name}")
+    try:
+        if not runtime.start(MediaOptions(False, False, False)):
+            result["reason"] = runtime.snapshot.error or "미디어 worker 준비 실패"
+            return result
+        wait(lambda: runtime.snapshot.sessions or runtime.snapshot.error, 5)
+        spotify = tuple(item for item in runtime.snapshot.sessions if is_spotify_session(item))
+        if len(spotify) != 1 or spotify[0].status not in {"playing", "paused"}:
+            result["reason"] = "playing/paused 상태의 명확한 기존 Spotify 세션 하나가 필요합니다."
+            return result
+        original = spotify[0]
+        if any(item.status == "playing" and item.session_id != original.session_id
+               for item in runtime.snapshot.sessions):
+            result["reason"] = "다른 미디어가 재생 중이어서 자동 재생 검수를 수행하지 않았습니다."
+            return result
+        result["supported"] = True
+        if original.status == "playing":
+            queued = runtime.request("pause", original.session_id)
+            if not queued or not wait(lambda: status_matches("paused")):
+                raise RuntimeError("자동 Play 검수 전 명시적 일시정지 baseline을 만들지 못했습니다.")
+        result["baseline_status"] = "paused"
+        runtime.configure(MediaOptions(True, False, False))
+        record("quiet-auto-play", lambda: status_matches("playing"))
+        child, root, _ready = _spawn_fixture(result_dir, "audio")
+        process = psutil.Process(child.pid)
+        target = GameAudioTarget("media-trigger-fixture", child.pid, process.create_time(), process.exe(), False, 55)
+        sessions = wait(lambda: tuple(item for item in audio_control.enumerate_sessions() if item.pid == child.pid), 5)
+        if not sessions:
+            raise RuntimeError("트리거 검수용 오디오 세션이 없습니다.")
+        initial = {session.key: (session.get_volume(), session.get_mute()) for session in sessions}
+        del sessions
+        foreground[:] = [child.pid, 1]
+        runtime.update_targets((target,))
+        record("audible-game-pauses-bgm", lambda: status_matches("paused") and any(
+            row.target.pid == child.pid and row.audible is True for row in runtime.snapshot.game_audio))
+        runtime.update_targets((replace(target, user_muted=True),))
+        record("user-mute-resumes-bgm", lambda: status_matches("playing") and any(
+            row.target.pid == child.pid and row.available and row.muted is True
+            for row in runtime.snapshot.game_audio))
+        if not runtime.request("pause", original.session_id):
+            raise RuntimeError("명시적 일시정지 요청이 접수되지 않았습니다.")
+        record("manual-pause", lambda: status_matches("paused"))
+        hold_until, stable = min(time.monotonic() + 1, deadline), True
+        while time.monotonic() < hold_until:
+            stable = stable and status_matches("paused")
+            time.sleep(.05)
+        steps.append({"name": "unchanged-context-does-not-replay", "ok": stable})
+    except Exception as error:
+        errors.append({"type": type(error).__name__, "error": str(error)})
+    finally:
+        runtime.configure(MediaOptions(False, False, False))
+        if original is not None and result["supported"]:
+            action = "play" if original.status == "playing" else "pause"
+            queued = runtime.request(action, original.session_id)
+            playback_restored = bool(wait(lambda: status_matches(original.status), 6)) if queued else False
+        cleanup = runtime.stop(timeout_seconds=2)
+        if target is not None and initial:
+            audio_restored = False
+            try:
+                if audio_control.verify_identity(target):
+                    sessions = tuple(item for item in audio_control.enumerate_sessions()
+                                     if item.pid == target.pid and item.key in initial)
+                    audio_restored = len(sessions) == len(initial)
+                    for session in sessions:
+                        volume, muted = initial[session.key]
+                        session.set_volume(volume)
+                        session.set_mute(muted)
+                        audio_restored = audio_restored and abs(session.get_volume() - volume) < .001 and session.get_mute() == muted
+                    del sessions
+            except Exception as error:
+                errors.append({"stage": "audio-restore", "type": type(error).__name__, "error": str(error)})
+        if child is not None:
+            exited = _stop_fixture(child, root)
+        result.update(steps=steps, errors=errors, original=asdict(original) if original else None,
+                      playback_state_restored=playback_restored, audio_restored=audio_restored,
+                      cleanup_ok=cleanup, fixture_exited=exited)
+    result["ok"] = bool(result["supported"] and len(steps) == 5 and all(row["ok"] for row in steps)
+                        and not errors and playback_restored and audio_restored and cleanup and exited)
+    return result
+
+
 def _fixture_main(kind: str, root: Path) -> int:
     """최대 90초의 소유 fixture. 프로덕션 모듈·DB·설정을 읽지 않는다."""
     def ready(**values):
@@ -608,6 +744,8 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
         return _focus(result_dir)
     if scenario == "prepare-spotify":
         return _prepare_spotify()
+    if scenario == "triggers":
+        return _triggers(result_dir)
     return _bgm()
 
 
