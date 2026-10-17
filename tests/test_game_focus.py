@@ -18,6 +18,7 @@ class Native:
     def __init__(self):
         self.windows = {}
         self.related = set()
+        self.hidden = set()
         self.calls = []
         self.queries = []
         self.accept = True
@@ -32,6 +33,9 @@ class Native:
 
     def is_related_foreground(self, target, pid):
         return pid in self.related
+
+    def is_window_hidden(self, hwnd):
+        return hwnd in self.hidden
 
     def focus(self, target, hwnd=None):
         self.calls.append((target, hwnd))
@@ -129,6 +133,47 @@ def test_initial_own_foreground_does_not_swallow_first_foreign_choice():
     tick(value, [game()], pid=20, hwnd=200, now=2)
     native.windows[42] = 420
     tick(value, [game()], pid=20, hwnd=200, now=3)
+    assert native.calls == []
+
+
+def test_initial_app_auto_hide_reveals_external_context_then_tracks_replacement_game_window():
+    native = Native()
+    value = tracker(native)
+    target = game()
+    tick(value, [target], pid=99, hwnd=900)
+    native.hidden.add(900)
+    tick(value, [target], pid=10, hwnd=100, now=2)
+    native.windows[42] = 420
+    tick(value, [target], pid=42, hwnd=420, now=3)
+    native.windows.clear()
+    native.related.add(43)
+    tick(value, [target], pid=43, hwnd=430, now=4)
+    native.windows[42] = 421
+    tick(value, [target], pid=43, hwnd=430, now=5)
+    assert native.calls == [(target, 421)]
+
+
+def test_visible_initial_app_does_not_rebase_user_external_choice():
+    native = Native()
+    value = tracker(native)
+    target = game()
+    tick(value, [target], pid=99, hwnd=900)
+    tick(value, [target], pid=10, hwnd=100, now=2)
+    native.windows[42] = 421
+    tick(value, [target], pid=10, hwnd=100, now=3)
+    assert native.calls == []
+
+
+def test_auto_hide_rebase_is_once_and_later_external_selection_cancels():
+    native = Native()
+    value = tracker(native)
+    target = game()
+    tick(value, [target], pid=99, hwnd=900)
+    native.hidden.add(900)
+    tick(value, [target], pid=10, hwnd=100, now=2)
+    tick(value, [target], pid=20, hwnd=200, now=3)
+    native.windows[42] = 421
+    tick(value, [target], pid=10, hwnd=100, now=4)
     assert native.calls == []
 
 

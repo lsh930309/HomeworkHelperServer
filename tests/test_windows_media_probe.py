@@ -190,6 +190,7 @@ def test_focus_distinguishes_request_from_native_result_and_restores_foreground(
     class Native:
         def foreground(self): return tuple(foreground)
         def window(self, target): return 1111 if target.pid == 111 else None
+        def is_window_hidden(self, hwnd): return False
         def is_related_foreground(self, target, pid): return False
         def focus(self, target, hwnd=None):
             if accept:
@@ -632,6 +633,7 @@ def test_focus_compare_waits_for_new_game_and_does_not_refocus_existing_game(tmp
     class Native:
         def foreground(self): return tuple(foreground)
         def window(self, selected): return 1111 if selected is target else None
+        def is_window_hidden(self, hwnd): return False
         def is_related_foreground(self, target, pid): return False
         def focus(self, selected, hwnd=None):
             calls.append(selected.pid)
@@ -769,11 +771,13 @@ def test_focus_lifecycle_keeps_observing_window_replacement_to_deadline(tmp_path
     import json
     from src.core import game_focus
     from src.core.game_audio import GameAudioTarget
-    clock, polls, ticks, calls = [0.0], [], [], []
+    clock, polls, ticks, calls, owners = [0.0], [], [], [], []
     target = GameAudioTarget("game", 111, 100, "game.exe", False, None)
     monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     monkeypatch.setattr(probe, "_focus_compare_registered", lambda source: [("game", "검수 게임", "game.exe")])
+    ownership = {"qa_pid": 77, "ui_owner_pid": 888, "reason": "verified-installed-initial-gui"}
+    monkeypatch.setattr(probe, "_focus_lifecycle_owner", lambda original: ownership)
     def selected(*_args, **_kwargs):
         polls.append(clock[0])
         return (target, "검수 게임") if game_appears and clock[0] >= .5 else None
@@ -781,6 +785,7 @@ def test_focus_lifecycle_keeps_observing_window_replacement_to_deadline(tmp_path
     class Native:
         def foreground(self): return (333, 3333) if 2 <= clock[0] < 4 else (999, 9999)
         def window(self, selected): return 1111 if clock[0] < 5 else 2222
+        def is_window_hidden(self, hwnd): return False
         def is_related_foreground(self, selected, pid): return pid == 333
         def focus(self, selected, hwnd=None):
             calls.append((selected.pid, hwnd))
@@ -789,6 +794,7 @@ def test_focus_lifecycle_keeps_observing_window_replacement_to_deadline(tmp_path
         def __init__(self, *, started_at_wall, native): self.native, self.requested = native, False
         def tick(self, targets, *_args):
             ticks.append(clock[0])
+            owners.append(_args[-1])
             if targets and not self.requested:
                 self.requested = True
                 self.native.focus(targets[0], self.native.window(targets[0]))
@@ -805,6 +811,7 @@ def test_focus_lifecycle_keeps_observing_window_replacement_to_deadline(tmp_path
     monkeypatch.setattr(probe, "_focus_compare_context", context)
     result = probe._focus_lifecycle(tmp_path, tmp_path)
     assert result["ok"] is game_appears and not result["errors"]
+    assert owners and set(owners) == {888} and result["ownership"] == ownership
     assert calls == ([(111, 1111)] if game_appears else [])
     deadline = next(row for row in result["events"] if row["kind"] == "deadline-observation")
     if game_appears:
@@ -817,3 +824,31 @@ def test_focus_lifecycle_keeps_observing_window_replacement_to_deadline(tmp_path
         assert clock[0] == 20 and deadline["seconds_after_identity"] is None
     assert len(polls) == len(set(polls))
     assert json.loads((tmp_path / "focus-lifecycle-progress.json").read_text())["finished"]
+
+
+@pytest.mark.parametrize("mode", ["matching", "other-path", "other-session", "other-sid", "unreadable", "no-foreground"])
+def test_focus_lifecycle_ui_owner_requires_exact_initial_install_and_same_user_session(monkeypatch, mode):
+    reads = []
+    expected = r"C:\Program Files\HomeworkHelper\homework_helper.exe"
+    monkeypatch.setenv("ProgramFiles", r"C:\Program Files")
+    monkeypatch.setattr(probe.os, "getpid", lambda: 77)
+    def process(pid):
+        reads.append(pid)
+        if mode == "unreadable":
+            raise PermissionError("not available")
+        return SimpleNamespace(exe=lambda: r"D:\clone\HomeworkHelper\homework_helper.exe" if mode == "other-path" else expected,
+                               create_time=lambda: 123.4)
+    def context(pid):
+        if pid == 888 and mode == "other-session":
+            return "S-1-test", 2
+        if pid == 888 and mode == "other-sid":
+            return "S-2-other", 1
+        return "S-1-test", 1
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(Process=process))
+    monkeypatch.setattr(probe, "_process_context", context)
+    result = probe._focus_lifecycle_owner({"foreground": [0 if mode == "no-foreground" else 888, 9999]})
+    assert result["qa_pid"] == 77
+    assert result["ui_owner_pid"] == (888 if mode == "matching" else 77)
+    assert reads == ([] if mode == "no-foreground" else [888])
+    if mode == "matching":
+        assert result["path"] == expected and result["sid"] == "S-1-test" and result["session_id"] == 1

@@ -450,6 +450,7 @@ def _focus(result_dir: Path) -> dict:
     class RecordingNative:
         foreground = native.foreground
         window = native.window
+        is_window_hidden = native.is_window_hidden
         is_related_foreground = native.is_related_foreground
         def focus(self, target, hwnd=None):
             accepted = native.focus(target, hwnd)
@@ -1074,6 +1075,7 @@ def _focus_compare_startup(source_appdata: Path, result_dir: Path):
     class TracedNative:
         foreground = native.foreground
         window = native.window
+        is_window_hidden = native.is_window_hidden
         is_related_foreground = native.is_related_foreground
         def focus(self, selected, hwnd=None):
             before = _focus_compare_context(selected)
@@ -1242,6 +1244,34 @@ def _focus_compare(source_appdata: Path, result_dir: Path) -> dict:
             "progress_file": str(progress_path), "limits": ["이 비교는 현재 한 게임의 포커스 요청 근거이며 개별 수락을 성공으로 확대하지 않습니다."]}
 
 
+def _focus_lifecycle_owner(original: dict) -> dict:
+    """시작 전경이 검증된 설치 GUI인 경우에만 그 UI 수명주기를 재현한다."""
+    import psutil
+    from src.gui.runtime_logging import redact_sensitive_text
+    own = os.getpid()
+    result = {"qa_pid": own, "ui_owner_pid": own, "reason": "qa-default"}
+    candidate = original["foreground"][0]
+    if not candidate:
+        return result
+    expected = ntpath.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+                           "HomeworkHelper", "homework_helper.exe")
+    try:
+        process = psutil.Process(candidate)
+        executable = process.exe()
+        if _path_key(executable) != _path_key(expected):
+            result["reason"] = "initial-foreground-not-installed-gui"
+            return result
+        context = _process_context(candidate)
+        if context != _process_context(own):
+            result["reason"] = "initial-foreground-other-user-session"
+            return result
+        result.update(ui_owner_pid=candidate, reason="verified-installed-initial-gui",
+                      path=executable, created=process.create_time(), sid=context[0], session_id=context[1])
+    except Exception as error:
+        result.update(reason="initial-gui-unverified", error_type=type(error).__name__, error=redact_sensitive_text(error))
+    return result
+
+
 def _focus_lifecycle(source_appdata: Path, result_dir: Path) -> dict:
     """최초 identity 이후 125초 동안 실제 tracker와 창 교체를 계속 관찰한다."""
     import psutil
@@ -1249,19 +1279,22 @@ def _focus_lifecycle(source_appdata: Path, result_dir: Path) -> dict:
     from src.gui.runtime_logging import redact_sensitive_text
     native, registered = WindowsGameFocusNative(), _focus_compare_registered(source_appdata)
     started, original = time.monotonic(), _focus_compare_context(None)
+    ownership = _focus_lifecycle_owner(original)
+    ui_owner_pid = ownership["ui_owner_pid"]
     target, name, first_seen, prior, foreground_info = None, None, None, None, None
     events, requests, errors = [], [], []
     path = result_dir / "focus-lifecycle-progress.json"
     def publish(kind, **values):
         events.append({"at_ms": round((time.monotonic() - started) * 1000, 2), "kind": kind, **values})
         value = {"scenario": "focus-lifecycle", "target": asdict(target) if target else None,
-                 "name": name, "events": events, "finished": kind == "finished"}
+                 "name": name, "events": events, "ownership": ownership, "finished": kind == "finished"}
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
         temporary.replace(path)
     class TracedNative:
         foreground = native.foreground
         window = native.window
+        is_window_hidden = native.is_window_hidden
         is_related_foreground = native.is_related_foreground
         def focus(self, selected, hwnd=None):
             before = _focus_compare_context(selected)
@@ -1273,7 +1306,7 @@ def _focus_lifecycle(source_appdata: Path, result_dir: Path) -> dict:
             publish("focus-request", **row)
             return accepted
     tracker = AutoFocusTracker(started_at_wall=time.time(), native=TracedNative())
-    tracker.tick((), *native.foreground(), started, os.getpid())
+    tracker.tick((), *native.foreground(), started, ui_owner_pid)
     publish("waiting-for-registered-game", maximum_seconds=20, observe_after_identity_seconds=125)
     with _focus_diagnostics() as diagnostics:
         try:
@@ -1300,10 +1333,10 @@ def _focus_lifecycle(source_appdata: Path, result_dir: Path) -> dict:
                 if fingerprint != prior:
                     publish("state", **state)
                     prior = fingerprint
-                tracker.tick((target,) if target else (), *foreground, time.monotonic(), os.getpid())
+                tracker.tick((target,) if target else (), *foreground, time.monotonic(), ui_owner_pid)
                 time.sleep(.25)
             # 대기 마지막 sleep 사이에 경계를 넘긴 경우도 실제 제품에 한 번 전달한다.
-            tracker.tick((target,) if target else (), *native.foreground(), time.monotonic(), os.getpid())
+            tracker.tick((target,) if target else (), *native.foreground(), time.monotonic(), ui_owner_pid)
             publish("deadline-observation", context=_focus_compare_context(target),
                     seconds_after_identity=time.monotonic() - first_seen if first_seen is not None else None)
         except Exception as error:
@@ -1312,7 +1345,7 @@ def _focus_lifecycle(source_appdata: Path, result_dir: Path) -> dict:
             tracker.cancel()
     publish("finished", diagnostics=diagnostics, errors=errors)
     return {"ok": first_seen is not None and not errors, "supported": True, "scenario": "focus-lifecycle",
-            "events": events, "requests": requests, "errors": errors, "original": original,
+            "events": events, "requests": requests, "errors": errors, "original": original, "ownership": ownership,
             "progress_file": str(path), "limits": ["입력 tick 변화는 OS 세션 입력 관측이며 사용자 의도·물리 입력을 증명하지 않습니다.",
             "진단 완료와 자동 포커스 성공은 구분하며 게임 실행·종료·키 입력·창 생성은 하지 않습니다."]}
 

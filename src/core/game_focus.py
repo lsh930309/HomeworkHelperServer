@@ -31,6 +31,14 @@ class WindowsGameFocusNative:
 
         return managed_process_window(target.pid, target.create_time, target.path)
 
+    def is_window_hidden(self, hwnd: int) -> bool:
+        if os.name != "nt":
+            return False
+        import win32gui
+
+        return (not win32gui.IsWindow(hwnd) or win32gui.IsIconic(hwnd)
+                or not win32gui.IsWindowVisible(hwnd))
+
     def is_related_foreground(self, target: GameAudioTarget, pid: int) -> bool:
         """현재 같은 사용자 세션의 실제 자식 계보만 준비 흐름으로 인정한다."""
         if os.name != "nt" or pid <= 0:
@@ -134,6 +142,11 @@ class AutoFocusTracker:
             return
         foreground = (foreground_pid, foreground_hwnd)
         try:
+            if (foreground_pid not in (0, owned_pid) and foreground_hwnd
+                    and pending.initial_foreground[0] == owned_pid
+                    and self._native.is_window_hidden(pending.initial_foreground[1])):
+                # 게임 감지로 자기 메인 창을 숨겼을 때 드러난 외부 창은 사용자 선택이 아니다.
+                pending.initial_foreground = foreground
             if (foreground_pid not in (0, owned_pid) and foreground_hwnd
                     and foreground != pending.initial_foreground
                     and not self._native.is_related_foreground(target, foreground_pid)):
