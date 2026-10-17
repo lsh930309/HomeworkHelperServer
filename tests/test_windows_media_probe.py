@@ -32,6 +32,91 @@ def test_media_json_projection_keeps_timing_and_image_size_without_image_bytes()
     assert session.artwork == b"private image contents"
 
 
+def test_spotify_window_observe_dispatch_preserves_real_profile_only_as_reader_input(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", "actual-roaming")
+    monkeypatch.setenv("LOCALAPPDATA", "actual-local")
+    def observe(source, local):
+        assert source == tmp_path / "actual-roaming" and local == "actual-local"
+        assert os.environ["APPDATA"] != "actual-roaming"
+        assert os.environ["LOCALAPPDATA"] != "actual-local"
+        return {"ok": True, "writes": []}
+    monkeypatch.setattr(probe, "_spotify_window_observe", observe)
+    assert probe.run(tmp_path, tmp_path / "actual-roaming", tmp_path / "result", "spotify-window-observe")["ok"]
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_spotify_identity_reader_restores_isolated_environment_even_on_failure(tmp_path, monkeypatch, failure):
+    from src.core import spotify_app
+    monkeypatch.setenv("APPDATA", "isolated-roaming")
+    monkeypatch.setenv("LOCALAPPDATA", "isolated-local")
+    monkeypatch.setitem(sys.modules, "src.core.process_monitor", SimpleNamespace())
+    def read():
+        assert os.environ["APPDATA"] == str(tmp_path) and os.environ["LOCALAPPDATA"] == "actual-local"
+        if failure:
+            raise OSError("native identity failed")
+        return ()
+    monkeypatch.setattr(spotify_app, "spotify_processes", read)
+    if failure:
+        with pytest.raises(OSError, match="identity failed"):
+            probe._spotify_probe_processes(tmp_path, "actual-local")
+    else:
+        assert probe._spotify_probe_processes(tmp_path, "actual-local") == ()
+    assert os.environ["APPDATA"] == "isolated-roaming" and os.environ["LOCALAPPDATA"] == "isolated-local"
+
+
+def test_spotify_window_inventory_only_contains_verified_process_windows(tmp_path, monkeypatch):
+    from src.core.spotify_app import SpotifyProcess
+    process = SpotifyProcess(41, 123, "C:/Spotify.exe")
+    monkeypatch.setattr(probe, "_spotify_probe_processes", lambda *_args: (process,))
+    def enumerate_windows(callback, context):
+        for hwnd in (10, 11):
+            callback(hwnd, context)
+    monkeypatch.setitem(sys.modules, "win32gui", SimpleNamespace(
+        EnumWindows=enumerate_windows, IsWindowVisible=lambda hwnd: True,
+        IsIconic=lambda hwnd: False, GetWindowRect=lambda hwnd: (1, 2, 301, 402),
+        GetClassName=lambda hwnd: "Chrome_WidgetWin_0", GetWindow=lambda *args: 0,
+        GetForegroundWindow=lambda: 11))
+    monkeypatch.setitem(sys.modules, "win32process", SimpleNamespace(
+        GetWindowThreadProcessId=lambda hwnd: (1, 41 if hwnd == 11 else 99)))
+    result = probe._spotify_window_state(tmp_path, None)
+    assert result["processes"] == [{"pid": 41, "create_time": 123, "path": "C:/Spotify.exe"}]
+    assert result["windows"] == [{"hwnd": 11, "pid": 41, "create_time": 123, "path": "C:/Spotify.exe",
+        "visible": True, "iconic": False, "rect": [1, 2, 301, 402], "class": "Chrome_WidgetWin_0", "owner": 0}]
+
+
+def test_spotify_window_observe_records_native_changes_without_window_or_playback_actions(tmp_path, monkeypatch):
+    from src.core import media_center
+    from src.core.media_sessions import MediaSessionInfo
+    clock, cleaned, menus = [0.0], [], []
+    window = {"hwnd": 11, "pid": 41, "create_time": 123, "path": "C:/Spotify.exe", "visible": True, "owner": 0}
+    snapshot = media_center.MediaCenterSnapshot(
+        sessions=(MediaSessionInfo("spotify", "Spotify.exe", artwork=b"image", status="playing"),), running=True)
+    class Runtime:
+        def __init__(self, spotify_launcher):
+            assert spotify_launcher() is False
+            self.snapshot = snapshot
+        def start(self, options):
+            assert not any((options.auto_bgm, options.background_mute, options.auto_focus))
+            return True
+        def stop(self, **kwargs):
+            cleaned.append(True)
+            return True
+    monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
+    monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
+    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(probe, "_spotify_window_state", lambda *args: {
+        "processes": [], "windows": [{**window, "iconic": clock[0] < .5}], "foreground_hwnd": 11})
+    monkeypatch.setattr(probe, "_spotify_chrome_controls", lambda row: menus.append(row) or {
+        "controls": [{"name": "File"}], "worker_stopped": True})
+    result = probe._spotify_window_observe(tmp_path, None)
+    assert result["ok"] and result["writes"] == [] and cleaned == [True]
+    assert len(result["trace"]) == 8 and menus[0]["hwnd"] == 11
+    assert [row["at_ms"] for row in result["trace"]] == [index * 125 for index in range(8)]
+    assert result["trace"][0]["windows"][0]["iconic"] and not result["trace"][-1]["windows"][0]["iconic"]
+    json.dumps(result)
+
+
 def source_database(tmp_path):
     roaming = tmp_path / "production-roaming"
     dbpath = roaming / "HomeworkHelper/homework_helper_data/app_data.db"

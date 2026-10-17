@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import uuid
 
 
-SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare", "focus-uia", "focus-lifecycle")
+SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare", "focus-uia", "focus-lifecycle", "spotify-window-observe")
 GAME_FIELDS = ("name", "monitoring_path", "default_volume", "default_muted")
 DISPLAY_FIELDS = (
     "sidebar_clock_enabled", "sidebar_clock_format", "sidebar_playtime_enabled",
@@ -56,6 +56,143 @@ def _media_snapshot_payload(snapshot) -> dict:
         else:
             result[field.name] = value
     return result
+
+
+def _spotify_probe_processes(source_appdata: Path, source_local_appdata: str | None):
+    # 운영 환경값은 이 읽기 함수에만 적용한다. 제품 모듈은 격리 환경에서 먼저 로드한다.
+    import psutil  # noqa: F401
+    import src.core.process_monitor  # noqa: F401
+    from src.core.spotify_app import spotify_processes
+    values = {"APPDATA": str(source_appdata)}
+    if source_local_appdata is not None:
+        values["LOCALAPPDATA"] = source_local_appdata
+    previous = {name: os.environ.get(name) for name in values}
+    try:
+        os.environ.update(values)
+        return spotify_processes()
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _spotify_window_state(source_appdata: Path, source_local_appdata: str | None) -> dict:
+    import win32gui
+    import win32process
+    processes = _spotify_probe_processes(source_appdata, source_local_appdata)
+    by_pid = {process.pid: process for process in processes}
+    windows = []
+    def collect(hwnd, _unused):
+        matched = None
+        try:
+            pid = win32process.GetWindowThreadProcessId(hwnd)[1]
+            matched = by_pid.get(pid)
+            if matched is None:
+                return
+            windows.append({"hwnd": int(hwnd), "pid": pid, "create_time": matched.create_time,
+                            "path": matched.path, "visible": bool(win32gui.IsWindowVisible(hwnd)),
+                            "iconic": bool(win32gui.IsIconic(hwnd)),
+                            "rect": list(win32gui.GetWindowRect(hwnd)),
+                            "class": win32gui.GetClassName(hwnd),
+                            "owner": int(win32gui.GetWindow(hwnd, 4) or 0)})
+        except Exception as error:
+            if matched is not None:
+                windows.append({"hwnd": int(hwnd), "pid": matched.pid, "gone": True,
+                                "error_type": type(error).__name__})
+    win32gui.EnumWindows(collect, None)
+    return {"processes": [asdict(process) for process in processes], "windows": windows,
+            "foreground_hwnd": int(win32gui.GetForegroundWindow() or 0)}
+
+
+def _spotify_chrome_controls(window: dict) -> dict:
+    """최상위 Spotify 창의 고정 메뉴 명칭만 읽는다. 클릭·포커스·본문 수집은 없다."""
+    import comtypes
+    from src.core.spotify_app import SpotifyProcess
+    from src.utils.audio_control import verify_identity
+    from src.gui.runtime_logging import redact_sensitive_text
+    result = {"controls": [], "timeouts_ms": {"connection": 500, "transaction": 1500}}
+    cancelled = threading.Event()
+    target = SpotifyProcess(window["pid"], window["create_time"], window["path"])
+    names = {"file", "파일", "exit", "종료", "quit", "close", "닫기", "minimize", "최소화",
+             "spotify", "main menu", "메인 메뉴", "open menu", "메뉴 열기", "menu", "메뉴"}
+    def worker():
+        initialized = False
+        automation = element = walker = None
+        try:
+            comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
+            initialized = True
+            from comtypes import client
+            import win32process
+            if (cancelled.is_set() or not verify_identity(target)
+                    or win32process.GetWindowThreadProcessId(window["hwnd"])[1] != target.pid):
+                raise ValueError("Spotify 창 identity가 변경되어 UIA 조회를 중단했습니다.")
+            module = client.GetModule("UIAutomationCore.dll")
+            automation = client.CreateObject("{E22AD333-B25F-460C-83D0-0581107395C9}", interface=module.IUIAutomation2)
+            automation.ConnectionTimeout, automation.TransactionTimeout = 500, 1500
+            element = automation.ElementFromHandle(window["hwnd"])
+            walker = automation.ControlViewWalker
+            queue = deque([(element, 0)])
+            visited, deadline = 0, time.monotonic() + 4
+            while queue and visited < 40 and not cancelled.is_set() and time.monotonic() < deadline:
+                node, depth = queue.popleft()
+                visited += 1
+                control_type = int(node.CurrentControlType)
+                if control_type in (50000, 50009, 50010, 50011):
+                    name = str(node.CurrentName or "")
+                    if name.casefold().strip("& .…") in names:
+                        result["controls"].append({"name": name, "control_type": control_type, "depth": depth})
+                if depth >= 3:
+                    continue
+                child = walker.GetFirstChildElement(node)
+                while child and len(queue) + visited < 40 and not cancelled.is_set() and time.monotonic() < deadline:
+                    queue.append((child, depth + 1))
+                    child = walker.GetNextSiblingElement(child)
+            result["visited"] = visited
+        except Exception as error:
+            result.update(error_type=type(error).__name__, error=redact_sensitive_text(error))
+        finally:
+            queue = None
+            node = child = walker = element = automation = None
+            if initialized:
+                comtypes.CoUninitialize()
+    thread = threading.Thread(target=worker, name="SpotifyChromeUia", daemon=True)
+    thread.start()
+    thread.join(timeout=5)
+    cancelled.set()
+    return {**result, "controls": list(result["controls"]), "worker_stopped": not thread.is_alive()}
+
+
+def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | None) -> dict:
+    from src.core.media_center import MediaCenterRuntime, MediaOptions
+    runtime = MediaCenterRuntime(spotify_launcher=lambda: False)
+    started = runtime.start(MediaOptions(False, False, False))
+    trace, cleanup, errors, chrome = [], False, [], None
+    origin = time.monotonic()
+    try:
+        if started:
+            _wait(lambda: runtime.snapshot.sessions or runtime.snapshot.error, 4)
+        for index in range(8):
+            state = _spotify_window_state(source_appdata, source_local_appdata)
+            trace.append({"at_ms": round((time.monotonic() - origin) * 1000, 2),
+                          "utc": time.time(), **state,
+                          "media": _media_snapshot_payload(runtime.snapshot)})
+            if index < 7:
+                time.sleep(.125)
+        candidates = [window for window in trace[-1]["windows"]
+                      if window.get("visible") and not window.get("owner") and not window.get("gone")]
+        if len(candidates) == 1:
+            chrome = _spotify_chrome_controls(candidates[0])
+    except Exception as error:
+        errors.append({"error_type": type(error).__name__, "error": str(error)})
+    finally:
+        cleanup = runtime.stop(timeout_seconds=2)
+    return {"ok": bool(started and trace and cleanup and not errors), "supported": True,
+            "scenario": "spotify-window-observe", "trace": trace, "chrome": chrome,
+            "errors": errors, "cleanup_ok": cleanup, "writes": [],
+            "limits": ["ok는 읽기 진단 완료이며 최소화·트레이·재생 유지의 성공 판정이 아닙니다.",
+                       "Spotify 실행·창 조작·메뉴 클릭·재생 명령·설정 변경을 수행하지 않습니다."]}
 
 
 def _isolated_environment(result_dir: Path) -> dict[str, str | None]:
@@ -1504,10 +1641,12 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
     if scenario not in SCENARIOS:
         raise ValueError("지원하지 않는 미디어 검수 시나리오입니다.")
     result_dir.mkdir(parents=True, exist_ok=True)
-    _isolated_environment(result_dir)
+    original_environment = _isolated_environment(result_dir)
     sys.path.insert(0, str(repo))
     if scenario == "observe":
         return _observe()
+    if scenario == "spotify-window-observe":
+        return _spotify_window_observe(source_appdata, original_environment["LOCALAPPDATA"])
     if scenario == "preview":
         return _preview(source_appdata, result_dir)
     if scenario == "audio":
