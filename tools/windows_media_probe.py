@@ -733,6 +733,45 @@ audio.play().then(() => { setTimeout(() => audio.pause(), 8000); setTimeout(() =
     return profile, html
 
 
+def _visible_firefox_windows(pids: set[int]) -> list[dict]:
+    import win32gui
+    import win32process
+    windows = []
+    def collect(hwnd, _unused):
+        pid = win32process.GetWindowThreadProcessId(hwnd)[1]
+        if (pid in pids and win32gui.IsWindowVisible(hwnd)
+                and win32gui.GetClassName(hwnd) == "MozillaWindowClass"):
+            rect = win32gui.GetWindowRect(hwnd)
+            if rect[2] > rect[0] and rect[3] > rect[1]:
+                windows.append({"hwnd": int(hwnd), "pid": pid, "rect": list(rect),
+                                "title": win32gui.GetWindowText(hwnd)})
+    win32gui.EnumWindows(collect, None)
+    return windows
+
+
+def _firefox_window_owner(profile_owner, executable: Path, started: float):
+    """고유 profile을 소유한 OS lineage 안에서 실제 보이는 Firefox 창의 owner를 고른다."""
+    expected_context = _process_context(os.getpid())
+    processes, details = {}, []
+    for process in [profile_owner, *profile_owner.children(recursive=True)]:
+        if (_path_key(process.exe()) != _path_key(executable) or process.create_time() < started - .1
+                or _process_context(process.pid) != expected_context):
+            continue
+        if (process.pid != profile_owner.pid and process.ppid() != profile_owner.pid
+                and not any(parent.pid == profile_owner.pid for parent in process.parents())):
+            continue
+        processes[process.pid] = process
+        details.append({"pid": process.pid, "parent_pid": process.ppid(),
+                        "created": process.create_time(), "path": process.exe()})
+    windows = _visible_firefox_windows(set(processes))
+    if not windows:
+        return None
+    selected = max(windows, key=lambda row: (row["rect"][2] - row["rect"][0]) * (row["rect"][3] - row["rect"][1]))
+    return processes[selected["pid"]], {"profile_owner_pid": profile_owner.pid,
+                                         "window_pid": selected["pid"], "hwnd": selected["hwnd"],
+                                         "windows": windows, "lineage": details}
+
+
 def _launch_firefox(executable: Path, root: Path, marker: str):
     import psutil
     profile, html = _firefox_fixture_files(root, marker)
@@ -756,7 +795,13 @@ def _launch_firefox(executable: Path, root: Path, marker: str):
                     continue
                 if _process_context(candidate.pid) != _process_context(os.getpid()):
                     continue
-                return _FixtureProcess(launcher, candidate)
+                selected = _firefox_window_owner(candidate, executable, started)
+                if selected is None:
+                    continue
+                actual, diagnostics = selected
+                browser = _FixtureProcess(launcher, actual)
+                browser.diagnostics = {"launcher_pid": launcher.pid, **diagnostics}
+                return browser
             except (psutil.Error, ValueError):
                 continue
         return None
@@ -815,7 +860,10 @@ def _firefox(result_dir: Path) -> dict:
     marker = "HH-media-QA-" + uuid.uuid4().hex[:12]
     deadline = time.monotonic() + 70
     def wait(predicate, seconds):
-        return _wait(predicate, max(0, min(seconds, deadline - time.monotonic())))
+        # 이 함수의 모든 predicate는 immutable runtime snapshot/trace만 읽는다.
+        # 마지막 sleep 동안 도착한 결과를 deadline 검사 때문에 버리지 않는다.
+        value = _wait(predicate, max(0, min(seconds, deadline - time.monotonic())))
+        return value or predicate()
     def current_spotify(snapshot):
         # QA 관측·명시적 복원용 재확인이다. 제품에 stale ID 재매핑 경로를 넣지 않는다.
         candidates = tuple(item for item in snapshot.sessions if is_spotify_session(item))
@@ -875,6 +923,7 @@ def _firefox(result_dir: Path) -> dict:
         launched_at = time.monotonic()
         browser = _launch_firefox(executable, result_dir / "media-fixture" / marker, marker)
         result["fixture_pid"] = browser.pid
+        result["fixture_identity"] = getattr(browser, "diagnostics", {})
         require("firefox-playing-pauses-bgm", lambda snapshot: simultaneous(snapshot, "playing"), 12, since=launched_at)
         require("firefox-paused-keeps-bgm-hold", lambda snapshot: simultaneous(snapshot, "paused") and snapshot.media_hold,
                 12, since=trace_start + steps[-1]["at_ms"] / 1000)

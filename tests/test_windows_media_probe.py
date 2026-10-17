@@ -466,13 +466,15 @@ def test_firefox_fixture_is_local_only_and_does_not_configure_operational_profil
 
 
 @pytest.mark.parametrize("other_playing, mode", [(False, "normal"), (True, "normal"),
-    (False, "rotating"), (False, "transient"), (False, "ambiguous"), (False, "changed-title"), (False, "failed-step")])
+    (False, "rotating"), (False, "transient"), (False, "ambiguous"), (False, "changed-title"),
+    (False, "failed-step"), (False, "deadline-close")])
 def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, monkeypatch, other_playing, mode):
     from src.core import media_center, game_focus
     from src.core.media_sessions import MediaSessionInfo
     initial = MediaSessionInfo("spotify", "Spotify.exe", status="paused", can_play=True)
     other = MediaSessionInfo("other", "other-player.exe", status="playing")
     runtime_holder, launches, closes, commands, cleanup = [], [], [], [], []
+    close_pending = []
     class Runtime:
         def __init__(self, spotify_launcher, on_change):
             assert spotify_launcher() is False
@@ -515,12 +517,20 @@ def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, mo
         return SimpleNamespace(pid=111)
     def close(browser, _diagnostics):
         closes.append(browser.pid)
+        if mode == "deadline-close" and len(closes) == 1:
+            close_pending.append(True)
+            return True
         runtime_holder[0].snapshot = probe.replace(runtime_holder[0].snapshot, sessions=tuple(
             item for item in runtime_holder[0].snapshot.sessions if item.app_id == "Spotify.exe"))
         runtime_holder[0].on_change(runtime_holder[0].snapshot)
         return True
     def wait(predicate, _seconds):
         matched = predicate()
+        if not matched and close_pending:
+            close_pending.clear()
+            runtime_holder[0].snapshot = probe.replace(runtime_holder[0].snapshot, sessions=(initial,))
+            runtime_holder[0].on_change(runtime_holder[0].snapshot)
+            return None  # 마지막 sleep 동안 도착했지만 loop의 deadline이 먼저 만료된 경우.
         if not matched:
             runtime = runtime_holder[0]
             runtime.snapshot = probe.replace(runtime.snapshot, sessions=tuple(
@@ -557,3 +567,33 @@ def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, mo
             assert any(item["title"].startswith("HH-media-QA-") and item["status"] == "playing" for item in matched["sessions"])
             assert any(item["app_id"] == "Spotify.exe" and item["status"] == "paused" for item in matched["sessions"])
             assert len(result["trace"]) >= 3
+
+
+@pytest.mark.parametrize("window_visible, same_session", [(False, True), (True, True), (True, False)])
+def test_firefox_selects_verified_visible_window_owner_not_early_launcher(tmp_path, monkeypatch, window_visible, same_session):
+    executable = tmp_path / "firefox.exe"
+    class Process:
+        def __init__(self, pid, parent): self.pid, self.parent = pid, parent
+        def exe(self): return str(executable)
+        def create_time(self): return 100
+        def ppid(self): return self.parent
+        def parents(self): return []
+        def children(self, recursive): return [child]
+    owner, child = Process(111, 42), Process(222, 111)
+    monkeypatch.setattr(probe, "_process_context", lambda pid: (
+        ("owner", 2) if pid == 222 and not same_session else ("owner", 1)))
+    seen = []
+    def windows(pids):
+        seen.append(pids)
+        return ([{"hwnd": 2222, "pid": 222, "rect": [0, 0, 800, 600], "title": "Firefox QA"}]
+                if window_visible and 222 in pids else [])
+    monkeypatch.setattr(probe, "_visible_firefox_windows", windows)
+    result = probe._firefox_window_owner(owner, executable, 100)
+    if window_visible and same_session:
+        actual, diagnostics = result
+        assert actual is child
+        assert diagnostics["profile_owner_pid"] == 111 and diagnostics["window_pid"] == 222
+        assert diagnostics["hwnd"] == 2222 and len(diagnostics["lineage"]) == 2
+    else:
+        assert result is None
+    assert 111 in seen[0] and (222 in seen[0]) is same_session
