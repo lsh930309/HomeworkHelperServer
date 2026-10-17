@@ -178,6 +178,13 @@ GUI/worker 호출을 비교한다. API 반환값과 250ms 뒤 실제 foreground�
 진행 근거이며 최종 결과는 공통 보고서에 남긴다. 전체 90초 안에 창을 닫고 원래 foreground
 복원을 한 번 시도한다. 게임·설치본은 종료하지 않으며 가짜 입력이나 OS 정책 변경을 사용하지 않는다.
 
+`focus-uia`는 같은 실제 게임과 자기 소유 일반 권한 Qt 창에 Windows UI Automation의
+`SetFocus`를 각각 한 번 요청한다. 별도 MTA 스레드에서 연결 500ms·작업 1500ms 제한을
+설정하고, 오류/HRESULT·정상 반환·250ms와 1초 뒤 실제 foreground를 구분한다. 게임 대상은
+위와 같은 읽기 전용 등록·실행 identity 검증을 거치며 보이는 창이 하나인 경우에만 요청한다.
+정리 완료를 뜻하는 `ok`를 전환 성공으로 해석하지 않는다. 가짜 입력·UIAccess·권한·Windows
+설정 변경이나 제품 대체 경로를 추가하지 않으며, 시험 창 종료 후 원래 foreground 복원을 시도한다.
+
 `prepare-spotify`는 실제 제품의 명시적 준비 요청을 한 번 실행하고 세션 출현을 관측한다.
 재생은 요청하지 않는다. `bgm`은 이미 있는 명확한 단일 playing/paused Spotify 세션에서
 Play/Pause 전환을 관측한 뒤 원래 재생 상태로 복원한다. 세션 없음·복수·unknown·stopped처럼

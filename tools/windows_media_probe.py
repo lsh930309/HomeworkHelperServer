@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import uuid
 
 
-SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare")
+SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare", "focus-uia")
 GAME_FIELDS = ("name", "monitoring_path", "default_volume", "default_muted")
 DISPLAY_FIELDS = (
     "sidebar_clock_enabled", "sidebar_clock_format", "sidebar_playtime_enabled",
@@ -1223,6 +1223,81 @@ def _focus_compare(source_appdata: Path, result_dir: Path) -> dict:
             "progress_file": str(progress_path), "limits": ["이 비교는 현재 한 게임의 포커스 요청 근거이며 개별 수락을 성공으로 확대하지 않습니다."]}
 
 
+def _uia_focus_attempt(target) -> dict:
+    import comtypes  # main thread import precedes explicit worker MTA initialization.
+    from src.utils.audio_control import verify_identity
+    from src.gui.runtime_logging import redact_sensitive_text
+    row, cancelled = {"target": asdict(target), "accepted": False}, threading.Event()
+    def worker():
+        initialized = False
+        try:
+            comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
+            initialized = True
+            from comtypes import client
+            row["before"] = _focus_compare_context(target)
+            if not verify_identity(target):
+                raise ValueError("게임 실행 identity가 변경되어 UIA 요청을 거부했습니다.")
+            windows = [window for window in row["before"]["target_windows"] if window["visible"]
+                       and window["rect"][2] > window["rect"][0] and window["rect"][3] > window["rect"][1]]
+            if len(windows) != 1:
+                raise ValueError(f"UIA 대상의 보이는 최상위 창이 정확히 하나여야 합니다: {len(windows)}")
+            row["hwnd"] = windows[0]["hwnd"]
+            module = client.GetModule("UIAutomationCore.dll")
+            automation = client.CreateObject("{E22AD333-B25F-460C-83D0-0581107395C9}", interface=module.IUIAutomation2)
+            automation.ConnectionTimeout, automation.TransactionTimeout = 500, 1500
+            row["timeouts_ms"] = {"connection": automation.ConnectionTimeout, "transaction": automation.TransactionTimeout}
+            element = automation.ElementFromHandle(row["hwnd"])
+            if cancelled.is_set() or not verify_identity(target):
+                raise ValueError("UIA 요청이 취소됐거나 실행 identity가 변경됐습니다.")
+            element.SetFocus()  # 정상 반환과 실제 전경 전환은 별도 관측한다.
+            row["accepted"] = True
+        except Exception as error:
+            row.update(error_type=type(error).__name__, error=redact_sensitive_text(error))
+            if hasattr(error, "hresult"):
+                row["hresult"] = f"0x{error.hresult & 0xffffffff:08x}"
+        finally:
+            if initialized:
+                for delay, field in ((.25, "after_250ms"), (.75, "after_1s")):
+                    time.sleep(delay)
+                    try:
+                        row[field] = _focus_compare_context(target)
+                        row[field]["foreground_observed"] = row[field]["foreground"][0] == target.pid
+                    except Exception as error:
+                        row[field] = {"error_type": type(error).__name__, "error": redact_sensitive_text(error)}
+                element = automation = None  # release COM interfaces before uninitialization.
+                comtypes.CoUninitialize()
+    thread = threading.Thread(target=worker, name="FocusUiaMta", daemon=True)
+    thread.start()
+    thread.join(timeout=8)
+    cancelled.set()
+    row["worker_stopped"] = not thread.is_alive()
+    return row
+
+
+def _focus_uia(source_appdata: Path, result_dir: Path) -> dict:
+    import psutil
+    from src.core.game_audio import GameAudioTarget
+    target, name = _focus_compare_target(source_appdata)
+    original = _focus_compare_context(target)
+    attempts, child, root, exited, restored = [], None, None, True, False
+    try:
+        attempts.append({"kind": "registered-game", **_uia_focus_attempt(target)})
+        if attempts[-1]["worker_stopped"]:
+            child, root, _ready = _spawn_fixture(result_dir, "focus")
+            process = psutil.Process(child.pid)
+            fixture = GameAudioTarget("media-uia-fixture", child.pid, process.create_time(), process.exe(), False, None)
+            attempts.append({"kind": "owned-normal-fixture", **_uia_focus_attempt(fixture)})
+    finally:
+        if child is not None:
+            exited = _stop_fixture(child, root)
+        stopped = all(row["worker_stopped"] for row in attempts)
+        restored = _restore_foreground(original["foreground"][1]) if stopped else False
+    return {"ok": len(attempts) == 2 and stopped and exited, "supported": True, "scenario": "focus-uia",
+            "name": name, "original": original, "attempts": attempts, "fixture_exited": exited,
+            "foreground_restored": restored, "limits": ["ok는 진단 완료이며 UIA 수락·실제 전경 전환은 각 관측으로 판단합니다.",
+            "게임 실행·종료, 가짜 입력, UIAccess·권한·Windows 설정 변경과 제품 fallback은 없습니다."]}
+
+
 def _fixture_main(kind: str, root: Path) -> int:
     """최대 90초의 소유 fixture. 프로덕션 모듈·DB·설정을 읽지 않는다."""
     def ready(**values):
@@ -1280,6 +1355,8 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
         return _firefox(result_dir)
     if scenario == "focus-compare":
         return _focus_compare(source_appdata, result_dir)
+    if scenario == "focus-uia":
+        return _focus_uia(source_appdata, result_dir)
     return _bgm()
 
 

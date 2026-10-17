@@ -705,3 +705,58 @@ def test_focus_compare_panel_records_gui_worker_and_native_style_key_events(tmp_
     assert any(row["kind"] == "button_input_event" and row["event"] == "KeyPress" for row in result["events"])
     assert result["worker_stopped"] and result["foreground_restored"] and restored == [100]
     assert json.loads((tmp_path / "focus-progress.json").read_text())["finished"] is True
+
+
+@pytest.mark.parametrize("mode", ["success", "ambiguous", "stale", "provider-error"])
+def test_uia_focus_is_single_mta_request_with_identity_and_window_boundaries(monkeypatch, mode):
+    import threading
+    from src.core.game_audio import GameAudioTarget
+    from src.utils import audio_control
+    calls = []
+    target = GameAudioTarget("game", 111, 100, "game.exe", False, None)
+    window = {"hwnd": 1234, "visible": True, "rect": [0, 0, 100, 100]}
+    context = {"foreground": [111, 1234], "target_windows": [window] * (2 if mode == "ambiguous" else 1)}
+    monkeypatch.setattr(probe, "_focus_compare_context", lambda selected: dict(context))
+    monkeypatch.setattr(audio_control, "verify_identity", lambda selected: mode != "stale")
+    monkeypatch.setattr(probe.time, "sleep", lambda seconds: None)
+    class ProviderError(Exception):
+        hresult = -2147024891
+    def focus():
+        calls.append(("focus", threading.get_native_id()))
+        if mode == "provider-error":
+            raise ProviderError("token=SHOULD_REDACT")
+    automation = SimpleNamespace(ElementFromHandle=lambda hwnd: calls.append(("element", hwnd)) or SimpleNamespace(SetFocus=focus))
+    def create(clsid, interface):
+        calls.append(("create", clsid, interface))
+        return automation
+    fake = SimpleNamespace(COINIT_MULTITHREADED=0,
+        CoInitializeEx=lambda kind: calls.append(("init", kind, threading.get_native_id())),
+        CoUninitialize=lambda: calls.append(("uninit",)),
+        client=SimpleNamespace(GetModule=lambda dll: SimpleNamespace(IUIAutomation2="IUIAutomation2"), CreateObject=create))
+    monkeypatch.setitem(sys.modules, "comtypes", fake)
+    row = probe._uia_focus_attempt(target)
+    assert calls[0][0:2] == ("init", 0) and calls[0][2] != threading.get_native_id()
+    assert calls[-1] == ("uninit",) and row["worker_stopped"]
+    assert len([call for call in calls if call[0] == "focus"]) == (mode in {"success", "provider-error"})
+    assert row["accepted"] == (mode == "success")
+    if mode in {"success", "provider-error"}:
+        assert row["timeouts_ms"] == {"connection": 500, "transaction": 1500}
+        assert row["after_250ms"]["foreground_observed"] and row["after_1s"]["foreground_observed"]
+    if mode == "provider-error":
+        assert row["hresult"] == "0x80070005" and "SHOULD_REDACT" not in row["error"]
+
+
+def test_uia_orchestration_compares_only_owned_fixture_and_restores_original(tmp_path, monkeypatch):
+    from src.core.game_audio import GameAudioTarget
+    target = GameAudioTarget("game", 111, 100, "game.exe", False, None)
+    calls = []
+    monkeypatch.setattr(probe, "_focus_compare_target", lambda source: (target, "검수 게임"))
+    monkeypatch.setattr(probe, "_focus_compare_context", lambda selected: {"foreground": [77, 777]})
+    monkeypatch.setattr(probe, "_uia_focus_attempt", lambda selected: calls.append(("attempt", selected.pid)) or {"worker_stopped": True, "accepted": False})
+    monkeypatch.setattr(probe, "_spawn_fixture", lambda root, kind: (SimpleNamespace(pid=222), tmp_path, {}))
+    monkeypatch.setattr(probe, "_stop_fixture", lambda child, root: calls.append(("stop-fixture", child.pid)) or True)
+    monkeypatch.setattr(probe, "_restore_foreground", lambda hwnd: calls.append(("restore", hwnd)) or True)
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(Process=lambda pid: SimpleNamespace(create_time=lambda: 200, exe=lambda: "pythonw.exe")))
+    result = probe._focus_uia(tmp_path, tmp_path)
+    assert result["ok"] and result["foreground_restored"]
+    assert calls == [("attempt", 111), ("attempt", 222), ("stop-fixture", 222), ("restore", 777)]
