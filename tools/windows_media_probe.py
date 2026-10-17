@@ -465,9 +465,11 @@ def _focus(result_dir: Path) -> dict:
         process = psutil.Process(child.pid)
         target = GameAudioTarget("media-probe-focus", child.pid, process.create_time(), process.exe(), False, None)
         has_window = native.window(target) is not None
-        foreground = native.foreground()
         with _focus_diagnostics() as diagnostics:
-            tracker.tick((target,), *foreground, time.monotonic(), os.getpid())
+            deadline = time.monotonic() + tracker.WINDOW_STABLE_SECONDS + 1
+            while not requests and time.monotonic() < deadline:
+                tracker.tick((target,), *native.foreground(), time.monotonic(), os.getpid())
+                time.sleep(.05)
             observed = _wait(lambda: native.foreground()[0] == child.pid, 1) is True
             for _ in range(3):
                 tracker.tick((target,), *native.foreground(), time.monotonic(), os.getpid())

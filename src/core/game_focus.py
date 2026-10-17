@@ -77,6 +77,8 @@ class _PendingFocus:
     initial_foreground: tuple[int, int]
     deadline: float
     last_game_foreground_hwnd: int | None = None
+    candidate_hwnd: int | None = None
+    candidate_since: float = 0.0
 
 
 class AutoFocusTracker:
@@ -85,6 +87,8 @@ class AutoFocusTracker:
     창 부재·임시 전경 창·자식 창 전환을 같은 120초 대기에서 관찰한다. 포커스 요청을
     Windows가 거절해도 재시도하지 않는다. baseline은 기존 게임을 활성화하지 않는다.
     """
+
+    WINDOW_STABLE_SECONDS = 1.0
 
     def __init__(self, started_at_wall: float, timeout_seconds: float = 120, native=None):
         self._started_at_wall = started_at_wall
@@ -135,13 +139,17 @@ class AutoFocusTracker:
             logger.info("게임 자동 전환 대기 만료: 등록=%s PID=%s", target.process_id, target.pid)
             self.cancel()
             return
-        if foreground_pid == target.pid:
-            if pending.last_game_foreground_hwnd != foreground_hwnd:
-                logger.info("게임 시작 전경 창 관찰: 등록=%s PID=%s hwnd=%s", target.process_id, target.pid, foreground_hwnd)
-            pending.last_game_foreground_hwnd = foreground_hwnd or None
-            return
         foreground = (foreground_pid, foreground_hwnd)
         try:
+            hwnd = self._native.window(target)
+            if hwnd != pending.candidate_hwnd:
+                pending.candidate_hwnd = hwnd
+                pending.candidate_since = now_monotonic
+            if foreground_pid == target.pid:
+                if pending.last_game_foreground_hwnd != foreground_hwnd:
+                    logger.info("게임 시작 전경 창 관찰: 등록=%s PID=%s hwnd=%s", target.process_id, target.pid, foreground_hwnd)
+                pending.last_game_foreground_hwnd = foreground_hwnd or None
+                return
             if (foreground_pid not in (0, owned_pid) and foreground_hwnd
                     and pending.initial_foreground[0] == owned_pid
                     and self._native.is_window_hidden(pending.initial_foreground[1])):
@@ -154,9 +162,9 @@ class AutoFocusTracker:
                             target.process_id, target.pid)
                 self.cancel()
                 return
-            hwnd = self._native.window(target)
-            if hwnd is None or hwnd == pending.last_game_foreground_hwnd:
-                return  # 이미 앞에 나타났던 시작 창을 다시 끌어오지 않고 교체를 관찰한다.
+            if (hwnd is None or hwnd == pending.last_game_foreground_hwnd
+                    or now_monotonic - pending.candidate_since < self.WINDOW_STABLE_SECONDS):
+                return  # 짧은 시작 창과 이미 전경이었던 창 대신 안정된 새 창을 기다린다.
             # Consume before the single native request, including failure and exceptions.
             self.cancel()
             accepted = self._native.focus(target, hwnd)

@@ -103,6 +103,67 @@ def test_waiting_expires_at_deadline_without_focus():
     assert native.calls == []
 
 
+def test_visible_window_requires_one_second_of_continuous_observation():
+    native = Native()
+    native.windows[42] = 420
+    value = tracker(native)
+    target = game()
+    tick(value, [target], now=1)
+    tick(value, [target], now=1.999)
+    assert native.calls == []
+    tick(value, [target], now=2)
+    tick(value, [target], now=3)
+    assert native.calls == [(target, 420)]
+
+
+def test_short_background_splash_missed_in_foreground_does_not_consume_request():
+    native = Native()
+    native.related.add(43)
+    native.windows[42] = 420
+    value = tracker(native)
+    target = game()
+    # A appears only in background samples while its SDK owns foreground.
+    tick(value, [target], pid=43, hwnd=430, now=1)
+    tick(value, [target], pid=43, hwnd=430, now=1.25)
+    native.windows.clear()
+    tick(value, [target], pid=43, hwnd=430, now=1.5)
+    native.windows[42] = 421
+    tick(value, [target], pid=43, hwnd=430, now=2)
+    tick(value, [target], pid=43, hwnd=430, now=2.75)
+    assert native.calls == []
+    tick(value, [target], pid=43, hwnd=430, now=3)
+    assert native.calls == [(target, 421)]
+
+
+def test_window_absence_resets_continuous_readiness_even_when_same_hwnd_returns():
+    native = Native()
+    native.windows[42] = 420
+    value = tracker(native)
+    target = game()
+    tick(value, [target], now=1)
+    tick(value, [target], now=1.5)
+    native.windows.clear()
+    tick(value, [target], now=1.75)
+    native.windows[42] = 420
+    tick(value, [target], now=2)
+    tick(value, [target], now=2.75)
+    assert native.calls == []
+    tick(value, [target], now=3)
+    assert native.calls == [(target, 420)]
+
+
+def test_late_candidate_cannot_extend_deadline_to_finish_readiness():
+    native = Native()
+    value = tracker(native)
+    target = game()
+    tick(value, [target], now=0)
+    native.windows[42] = 420
+    tick(value, [target], now=119.5)
+    tick(value, [target], now=120)
+    tick(value, [target], now=120.5)
+    assert native.calls == []
+
+
 @pytest.mark.parametrize("pid,hwnd", [(20, 200), (10, 101)])
 def test_foreign_pid_or_window_change_cancels_waiting(pid, hwnd):
     native = Native()
@@ -123,6 +184,7 @@ def test_own_app_and_transient_zero_focus_do_not_cancel():
     tick(value, [target], pid=0, hwnd=0, now=3)
     native.windows[42] = 420
     tick(value, [target], now=4)
+    tick(value, [target], now=5)
     assert native.calls == [(target, 420)]
 
 
@@ -150,6 +212,7 @@ def test_initial_app_auto_hide_reveals_external_context_then_tracks_replacement_
     tick(value, [target], pid=43, hwnd=430, now=4)
     native.windows[42] = 421
     tick(value, [target], pid=43, hwnd=430, now=5)
+    tick(value, [target], pid=43, hwnd=430, now=6)
     assert native.calls == [(target, 421)]
 
 
@@ -202,7 +265,7 @@ def test_transient_game_window_then_sdk_then_main_window_gets_first_request():
     assert native.calls == []
     native.windows[42] = 421
     tick(value, [target], pid=43, hwnd=430, now=60)
-    tick(value, [target], now=61)
+    tick(value, [target], pid=43, hwnd=430, now=61)
     assert native.calls == [(target, 421)]
 
 
@@ -219,6 +282,7 @@ def test_same_transient_hwnd_is_not_requested_after_sdk_takes_foreground():
     assert native.calls == []
     native.windows[42] = 421
     tick(value, [target], now=5)
+    tick(value, [target], now=6)
     assert native.calls == [(target, 421)]
 
 
@@ -269,10 +333,12 @@ def test_background_transient_request_is_not_repeated_for_replacement_hwnd(accep
     value = tracker(native)
     target = game()
     tick(value, [target])
-    native.windows.clear()
     tick(value, [target], now=2)
-    native.windows[42] = 421
+    native.windows.clear()
     tick(value, [target], now=3)
+    native.windows[42] = 421
+    tick(value, [target], now=4)
+    tick(value, [target], now=5)
     assert native.calls == [(target, 420)]
 
 
@@ -287,6 +353,7 @@ def test_removed_target_and_pid_replacement_do_not_inherit_wait():
     assert native.calls == []
     replacement = replace(original, create_time=102.0)
     tick(value, [replacement], now=4)
+    tick(value, [replacement], now=5)
     assert native.calls == [(replacement, 420)]
 
 
@@ -308,6 +375,7 @@ def test_newer_launch_replaces_pending_older_launch():
     tick(value, [older, newer], now=2)
     native.windows = {42: 420, 43: 430}
     tick(value, [older, newer], now=3)
+    tick(value, [older, newer], now=4)
     assert native.calls == [(newer, 430)]
 
 

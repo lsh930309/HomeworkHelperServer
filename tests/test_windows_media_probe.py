@@ -187,6 +187,9 @@ def test_audio_cleanup_exception_still_restores_and_stops_owned_fixture(tmp_path
 def test_focus_distinguishes_request_from_native_result_and_restores_foreground(tmp_path, monkeypatch, owned_fixture, accept):
     from src.core import game_focus
     foreground = [123, 1234]
+    clock = [0.0]
+    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     class Native:
         def foreground(self): return tuple(foreground)
         def window(self, target): return 1111 if target.pid == 111 else None
