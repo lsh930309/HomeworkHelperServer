@@ -153,7 +153,9 @@ def _spotify_normal_exit(window, buttons, module, *, cancelled, deadline, is_cur
         win32gui.EnumWindows(collect, None)
         return found
     try:
-        if len(buttons) != 1 or not current() or popups():
+        result["button_count"] = len(buttons)
+        result["preexisting_popups"] = popups()
+        if len(buttons) != 1 or not current() or result["preexisting_popups"]:
             raise ValueError("유일한 Spotify 메뉴 버튼 또는 독립된 요청을 확인하지 못했습니다.")
         button = buttons[0]
         try:
@@ -251,6 +253,16 @@ def _spotify_chrome_controls(window: dict, *, exit_requested=False, is_current=l
             automation = client.CreateObject("{E22AD333-B25F-460C-83D0-0581107395C9}", interface=module.IUIAutomation2)
             automation.ConnectionTimeout, automation.TransactionTimeout = 500, 1500
             element = automation.ElementFromHandle(window["hwnd"])
+            import ctypes
+            from ctypes import wintypes
+            get_dpi = ctypes.WinDLL("user32", use_last_error=True).GetDpiForWindow
+            get_dpi.argtypes, get_dpi.restype = [wintypes.HWND], wintypes.UINT
+            result["window_dpi"] = int(get_dpi(window["hwnd"]))
+            if result["window_dpi"] <= 0:
+                raise OSError("Spotify 창 DPI를 확인하지 못했습니다.")
+            root_bounds = element.CurrentBoundingRectangle
+            result["window_uia_bounds"] = [root_bounds.left, root_bounds.top, root_bounds.right, root_bounds.bottom]
+            menu_extent = 60 * result["window_dpi"] / 96
             walker = automation.ControlViewWalker
             queue = deque([(element, 0)])
             visited = 0
@@ -264,16 +276,18 @@ def _spotify_chrome_controls(window: dict, *, exit_requested=False, is_current=l
                     name = str(node.CurrentName or "")
                     known = name.casefold().strip("& .…") in names
                     bounds = node.CurrentBoundingRectangle
-                    left, top, right, bottom = window["rect"]
+                    offscreen = bool(node.CurrentIsOffscreen)
+                    left, top, right, bottom = result["window_uia_bounds"]
                     # 상단 왼쪽 chrome만 명칭을 확장한다. 오른쪽 계정·본문 미디어는 제외한다.
                     chrome = (top <= bounds.top < bounds.bottom <= top + min(96, (bottom - top) * .12)
                               and left <= bounds.left < left + (right - left) * .6)
-                    if exit_requested and control_type == 50000 and not node.CurrentIsOffscreen:
-                        if left <= bounds.left < bounds.right <= left + 60 and top <= bounds.top < bounds.bottom <= top + 60:
+                    if control_type == 50000 and not offscreen:
+                        if left <= bounds.left < bounds.right <= left + menu_extent and top <= bounds.top < bounds.bottom <= top + menu_extent:
                             buttons.append(node)
                     if known or chrome:
                         result["controls"].append({"name": redact_sensitive_text(name)[:128],
-                                                   "control_type": control_type, "depth": depth})
+                                                   "control_type": control_type, "depth": depth, "offscreen": offscreen,
+                                                   "bounds": [bounds.left, bounds.top, bounds.right, bounds.bottom]})
                 if depth >= 6:
                     continue
                 child = walker.GetFirstChildElement(node)
@@ -281,6 +295,7 @@ def _spotify_chrome_controls(window: dict, *, exit_requested=False, is_current=l
                     queue.append((child, depth + 1))
                     child = walker.GetNextSiblingElement(child)
             result["visited"] = visited
+            result["menu_button_count"] = len(buttons)
             if exit_requested:
                 result["normal_exit"] = _spotify_normal_exit(window, buttons, module, cancelled=cancelled,
                                                              deadline=deadline, is_current=is_current)

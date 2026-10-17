@@ -118,18 +118,22 @@ def test_spotify_window_observe_records_native_changes_without_window_or_playbac
 
 
 @pytest.mark.parametrize("has_native_menu", [False, True])
-def test_spotify_menu_diagnostic_reads_native_ids_and_deep_chrome_without_account_or_media_names(monkeypatch, has_native_menu):
+@pytest.mark.parametrize("dpi", [96, 144])
+def test_spotify_menu_diagnostic_reads_native_ids_and_deep_chrome_without_account_or_media_names(monkeypatch, has_native_menu, dpi):
+    import ctypes
     from src.utils import audio_control
     cleaned, reads = [], []
     def node(kind, name="", *, x=10, y=10, children=()):
-        return SimpleNamespace(CurrentControlType=kind, CurrentName=name, children=children,
+        return SimpleNamespace(CurrentControlType=kind, CurrentName=name, children=children, CurrentIsOffscreen=False,
                                CurrentBoundingRectangle=SimpleNamespace(left=x, top=y, right=x + 30, bottom=y + 20))
     options = node(50000, "Options")
+    options.CurrentBoundingRectangle.right = 80  # 96 DPI 후보 제외, 144 DPI에서는 실제 60 DIP 안이다.
     body, account = node(50000, "PRIVATE TRACK TITLE", y=300), node(50000, "PRIVATE ACCOUNT", x=900)
     branch = node(50033, children=(options, body, account))
     for _ in range(4):
         branch = node(50033, children=(branch,))
     root = node(50032, children=(branch,))
+    root.CurrentBoundingRectangle = SimpleNamespace(left=0, top=0, right=1000, bottom=1000)
     def next_sibling(value):
         return {id(options): body, id(body): account}.get(id(value))
     automation = SimpleNamespace(ElementFromHandle=lambda hwnd: root, ControlViewWalker=SimpleNamespace(
@@ -151,10 +155,18 @@ def test_spotify_menu_diagnostic_reads_native_ids_and_deep_chrome_without_accoun
     monkeypatch.setitem(sys.modules, "win32gui_struct", SimpleNamespace(
         EmptyMENUITEMINFO=lambda **kwargs: ({}, []), UnpackMENUITEMINFO=lambda value: SimpleNamespace(**value)))
     monkeypatch.setattr(audio_control, "verify_identity", lambda process: True)
+    class GetDpi:
+        def __call__(self, hwnd):
+            assert hwnd == 11
+            return dpi
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: SimpleNamespace(GetDpiForWindow=GetDpi()), raising=False)
     result = probe._spotify_chrome_controls({"hwnd": 11, "pid": 41, "create_time": 123,
                                             "path": "C:/Spotify.exe", "rect": [0, 0, 1000, 1000]})
     assert result["worker_stopped"] and cleaned == [True]
-    assert result["controls"] == [{"name": "Options", "control_type": 50000, "depth": 6}]
+    assert result["controls"] == [{"name": "Options", "control_type": 50000, "depth": 6,
+                                   "offscreen": False, "bounds": [10, 10, 80, 30]}]
+    assert result["window_dpi"] == dpi and result["window_uia_bounds"] == [0, 0, 1000, 1000]
+    assert result["menu_button_count"] == (1 if dpi == 144 else 0)
     assert result["depth_type_counts"]["6:50000"] == 3
     assert automation.ConnectionTimeout == 500 and automation.TransactionTimeout == 1500
     assert "PRIVATE" not in json.dumps(result)
@@ -263,6 +275,8 @@ def test_spotify_normal_exit_only_uses_actual_semantic_id_and_cancels_own_menu(m
         [button, button] if condition == "multiple_buttons" else [button], module,
         cancelled=cancelled, deadline=4, is_current=lambda: True)
     success = condition in ("exit", "korean_accelerator", "invoke_only")
+    assert result["button_count"] == (2 if condition == "multiple_buttons" else 1)
+    assert result["preexisting_popups"] == []
     assert bool(result["exit"].get("accepted")) == success
     if success:
         assert opened == [True] and calls == [(11, 0x0111, 42)]
