@@ -117,6 +117,55 @@ def test_spotify_window_observe_records_native_changes_without_window_or_playbac
     json.dumps(result)
 
 
+@pytest.mark.parametrize("has_native_menu", [False, True])
+def test_spotify_menu_diagnostic_reads_native_ids_and_deep_chrome_without_account_or_media_names(monkeypatch, has_native_menu):
+    from src.utils import audio_control
+    cleaned, reads = [], []
+    def node(kind, name="", *, x=10, y=10, children=()):
+        return SimpleNamespace(CurrentControlType=kind, CurrentName=name, children=children,
+                               CurrentBoundingRectangle=SimpleNamespace(left=x, top=y, right=x + 30, bottom=y + 20))
+    options = node(50000, "Options")
+    body, account = node(50000, "PRIVATE TRACK TITLE", y=300), node(50000, "PRIVATE ACCOUNT", x=900)
+    branch = node(50033, children=(options, body, account))
+    for _ in range(4):
+        branch = node(50033, children=(branch,))
+    root = node(50032, children=(branch,))
+    def next_sibling(value):
+        return {id(options): body, id(body): account}.get(id(value))
+    automation = SimpleNamespace(ElementFromHandle=lambda hwnd: root, ControlViewWalker=SimpleNamespace(
+        GetFirstChildElement=lambda value: value.children[0] if value.children else None,
+        GetNextSiblingElement=next_sibling))
+    client = SimpleNamespace(GetModule=lambda name: SimpleNamespace(IUIAutomation2=object),
+                             CreateObject=lambda *args, **kwargs: automation)
+    monkeypatch.setitem(sys.modules, "comtypes", SimpleNamespace(
+        client=client, COINIT_MULTITHREADED=0, CoInitializeEx=lambda value: None,
+        CoUninitialize=lambda: cleaned.append(True)))
+    monkeypatch.setitem(sys.modules, "win32process", SimpleNamespace(GetWindowThreadProcessId=lambda hwnd: (1, 41)))
+    def menu_info(menu, index, by_position, buffer):
+        reads.append((menu, index, by_position))
+        buffer.update(text="File" if menu == 100 else "Exit", wID=7 if menu == 100 else 42,
+                      hSubMenu=200 if menu == 100 else 0, fState=0)
+    monkeypatch.setitem(sys.modules, "win32gui", SimpleNamespace(
+        GetMenu=lambda hwnd: 100 if has_native_menu else 0,
+        GetMenuItemCount=lambda menu: 1, GetMenuItemInfo=menu_info))
+    monkeypatch.setitem(sys.modules, "win32gui_struct", SimpleNamespace(
+        EmptyMENUITEMINFO=lambda **kwargs: ({}, []), UnpackMENUITEMINFO=lambda value: SimpleNamespace(**value)))
+    monkeypatch.setattr(audio_control, "verify_identity", lambda process: True)
+    result = probe._spotify_chrome_controls({"hwnd": 11, "pid": 41, "create_time": 123,
+                                            "path": "C:/Spotify.exe", "rect": [0, 0, 1000, 1000]})
+    assert result["worker_stopped"] and cleaned == [True]
+    assert result["controls"] == [{"name": "Options", "control_type": 50000, "depth": 6}]
+    assert result["depth_type_counts"]["6:50000"] == 3
+    assert automation.ConnectionTimeout == 500 and automation.TransactionTimeout == 1500
+    assert "PRIVATE" not in json.dumps(result)
+    assert result["native_menu"]["handle"] == (100 if has_native_menu else 0)
+    if has_native_menu:
+        assert reads == [(100, 0, True), (200, 0, True)]
+        assert result["native_menu"]["items"][-1] == {"path": ["File", "Exit"], "id": 42, "submenu": 0, "state": 0}
+    else:
+        assert reads == [] and result["native_menu"]["items"] == []
+
+
 @pytest.mark.parametrize("action", ["close", "minimize"])
 @pytest.mark.parametrize("condition", ["valid", "cancelled", "pid_reused", "window_changed", "hidden", "owned", "already_iconic", "native_error"])
 def test_spotify_window_action_verifies_identity_and_sends_at_most_one_request(monkeypatch, action, condition):

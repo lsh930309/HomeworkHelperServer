@@ -113,7 +113,8 @@ def _spotify_chrome_controls(window: dict) -> dict:
     from src.core.spotify_app import SpotifyProcess
     from src.utils.audio_control import verify_identity
     from src.gui.runtime_logging import redact_sensitive_text
-    result = {"controls": [], "timeouts_ms": {"connection": 500, "transaction": 1500}}
+    result = {"controls": [], "depth_type_counts": {},
+              "timeouts_ms": {"connection": 500, "transaction": 1500}}
     cancelled = threading.Event()
     target = SpotifyProcess(window["pid"], window["create_time"], window["path"])
     names = {"file", "파일", "exit", "종료", "quit", "close", "닫기", "minimize", "최소화",
@@ -129,25 +130,59 @@ def _spotify_chrome_controls(window: dict) -> dict:
             if (cancelled.is_set() or not verify_identity(target)
                     or win32process.GetWindowThreadProcessId(window["hwnd"])[1] != target.pid):
                 raise ValueError("Spotify 창 identity가 변경되어 UIA 조회를 중단했습니다.")
+            deadline = time.monotonic() + 4
+            # 표준 Win32 메뉴만 읽는다. custom 메뉴의 GetMenu(NULL)는 메뉴 부재 증명이 아니다.
+            native_menu = {"handle": 0, "items": []}
+            result["native_menu"] = native_menu
+            try:
+                import win32gui
+                import win32gui_struct
+                native_menu["handle"] = int(win32gui.GetMenu(window["hwnd"]) or 0)
+                menus = deque([(native_menu["handle"], [])]) if native_menu["handle"] else deque()
+                while menus and len(native_menu["items"]) < 40 and not cancelled.is_set() and time.monotonic() < deadline:
+                    menu, parents = menus.popleft()
+                    for index in range(min(win32gui.GetMenuItemCount(menu), 40 - len(native_menu["items"]))):
+                        if cancelled.is_set() or time.monotonic() >= deadline:
+                            break
+                        info, extra = win32gui_struct.EmptyMENUITEMINFO(mask=0x47, text_buf_size=256)
+                        win32gui.GetMenuItemInfo(menu, index, True, info)
+                        item = win32gui_struct.UnpackMENUITEMINFO(info)
+                        name = redact_sensitive_text(item.text or "")[:128]
+                        path = [*parents, name]
+                        native_menu["items"].append({"path": path, "id": int(item.wID),
+                                                     "submenu": int(item.hSubMenu or 0), "state": int(item.fState)})
+                        if item.hSubMenu and len(path) < 3:
+                            menus.append((int(item.hSubMenu), path))
+            except Exception as error:
+                native_menu.update(error_type=type(error).__name__, error=redact_sensitive_text(error))
             module = client.GetModule("UIAutomationCore.dll")
             automation = client.CreateObject("{E22AD333-B25F-460C-83D0-0581107395C9}", interface=module.IUIAutomation2)
             automation.ConnectionTimeout, automation.TransactionTimeout = 500, 1500
             element = automation.ElementFromHandle(window["hwnd"])
             walker = automation.ControlViewWalker
             queue = deque([(element, 0)])
-            visited, deadline = 0, time.monotonic() + 4
-            while queue and visited < 40 and not cancelled.is_set() and time.monotonic() < deadline:
+            visited = 0
+            while queue and visited < 80 and not cancelled.is_set() and time.monotonic() < deadline:
                 node, depth = queue.popleft()
                 visited += 1
                 control_type = int(node.CurrentControlType)
+                key = f"{depth}:{control_type}"
+                result["depth_type_counts"][key] = result["depth_type_counts"].get(key, 0) + 1
                 if control_type in (50000, 50009, 50010, 50011):
                     name = str(node.CurrentName or "")
-                    if name.casefold().strip("& .…") in names:
-                        result["controls"].append({"name": name, "control_type": control_type, "depth": depth})
-                if depth >= 3:
+                    known = name.casefold().strip("& .…") in names
+                    bounds = node.CurrentBoundingRectangle
+                    left, top, right, bottom = window["rect"]
+                    # 상단 왼쪽 chrome만 명칭을 확장한다. 오른쪽 계정·본문 미디어는 제외한다.
+                    chrome = (top <= bounds.top < bounds.bottom <= top + min(96, (bottom - top) * .12)
+                              and left <= bounds.left < left + (right - left) * .6)
+                    if known or chrome:
+                        result["controls"].append({"name": redact_sensitive_text(name)[:128],
+                                                   "control_type": control_type, "depth": depth})
+                if depth >= 6:
                     continue
                 child = walker.GetFirstChildElement(node)
-                while child and len(queue) + visited < 40 and not cancelled.is_set() and time.monotonic() < deadline:
+                while child and len(queue) + visited < 80 and not cancelled.is_set() and time.monotonic() < deadline:
                     queue.append((child, depth + 1))
                     child = walker.GetNextSiblingElement(child)
             result["visited"] = visited
@@ -162,7 +197,11 @@ def _spotify_chrome_controls(window: dict) -> dict:
     thread.start()
     thread.join(timeout=5)
     cancelled.set()
-    return {**result, "controls": list(result["controls"]), "worker_stopped": not thread.is_alive()}
+    native_menu = result.get("native_menu")
+    return {**result, "controls": list(result["controls"]),
+            "depth_type_counts": dict(result["depth_type_counts"]),
+            "native_menu": {**native_menu, "items": list(native_menu["items"])} if native_menu else None,
+            "worker_stopped": not thread.is_alive()}
 
 
 def _spotify_window_action(window: dict, action: str, *, is_current) -> dict:
