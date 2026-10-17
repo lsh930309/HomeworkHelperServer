@@ -102,7 +102,7 @@ function Invoke-Session([string]$Kind, $Status, $Obs = $null) {
     try {
         $Registered = $Folder.RegisterTaskDefinition($Name,$Task,6,$Sid,$null,3)
         $null = $Registered.Run($null)
-        $WaitSeconds = if ($Kind -eq 'media-qa') {120} else {[Math]::Max($Duration+15,40)}
+        $WaitSeconds = if ($Kind -eq 'media-qa' -and $Scenario -eq 'focus-lifecycle') {170} elseif ($Kind -eq 'media-qa') {120} else {[Math]::Max($Duration+15,40)}
         $Deadline = (Get-Date).AddSeconds($WaitSeconds)
         while (!(Test-Path $ResultFile) -and (Get-Date) -lt $Deadline) { Start-Sleep -Milliseconds 200 }
         if (!(Test-Path $ResultFile)) { throw ('사용자 세션 작업 결과 없음. 자동 재시도하지 않음: '+$Root) }

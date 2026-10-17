@@ -189,8 +189,9 @@ def test_focus_distinguishes_request_from_native_result_and_restores_foreground(
     foreground = [123, 1234]
     class Native:
         def foreground(self): return tuple(foreground)
-        def has_window(self, target): return target.pid == 111
-        def focus(self, target):
+        def window(self, target): return 1111 if target.pid == 111 else None
+        def is_related_foreground(self, target, pid): return False
+        def focus(self, target, hwnd=None):
             if accept:
                 foreground[:] = [target.pid, 1111]
             return accept
@@ -630,8 +631,9 @@ def test_focus_compare_waits_for_new_game_and_does_not_refocus_existing_game(tmp
     target = GameAudioTarget("game", 111, time.time() - 10 if already_running else time.time() + 1, "game.exe", False, None)
     class Native:
         def foreground(self): return tuple(foreground)
-        def has_window(self, selected): return selected is target
-        def focus(self, selected):
+        def window(self, selected): return 1111 if selected is target else None
+        def is_related_foreground(self, target, pid): return False
+        def focus(self, selected, hwnd=None):
             calls.append(selected.pid)
             foreground[:] = [111, 1111]
             return True
@@ -760,3 +762,58 @@ def test_uia_orchestration_compares_only_owned_fixture_and_restores_original(tmp
     result = probe._focus_uia(tmp_path, tmp_path)
     assert result["ok"] and result["foreground_restored"]
     assert calls == [("attempt", 111), ("attempt", 222), ("stop-fixture", 222), ("restore", 777)]
+
+
+@pytest.mark.parametrize("game_appears", [True, False])
+def test_focus_lifecycle_keeps_observing_window_replacement_to_deadline(tmp_path, monkeypatch, game_appears):
+    import json
+    from src.core import game_focus
+    from src.core.game_audio import GameAudioTarget
+    clock, polls, ticks, calls = [0.0], [], [], []
+    target = GameAudioTarget("game", 111, 100, "game.exe", False, None)
+    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(probe, "_focus_compare_registered", lambda source: [("game", "검수 게임", "game.exe")])
+    def selected(*_args, **_kwargs):
+        polls.append(clock[0])
+        return (target, "검수 게임") if game_appears and clock[0] >= .5 else None
+    monkeypatch.setattr(probe, "_focus_compare_target", selected)
+    class Native:
+        def foreground(self): return (333, 3333) if 2 <= clock[0] < 4 else (999, 9999)
+        def window(self, selected): return 1111 if clock[0] < 5 else 2222
+        def is_related_foreground(self, selected, pid): return pid == 333
+        def focus(self, selected, hwnd=None):
+            calls.append((selected.pid, hwnd))
+            return False
+    class Tracker:
+        def __init__(self, *, started_at_wall, native): self.native, self.requested = native, False
+        def tick(self, targets, *_args):
+            ticks.append(clock[0])
+            if targets and not self.requested:
+                self.requested = True
+                self.native.focus(targets[0], self.native.window(targets[0]))
+        def cancel(self): pass
+    monkeypatch.setattr(game_focus, "WindowsGameFocusNative", Native)
+    monkeypatch.setattr(game_focus, "AutoFocusTracker", Tracker)
+    monkeypatch.setattr(probe, "_process_context", lambda pid: ("S-1-test", 1))
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(Process=lambda pid:
+        SimpleNamespace(exe=lambda: "related.exe", create_time=lambda: 1)))
+    def context(selected):
+        return {"foreground": list(Native().foreground()), "last_input_tick": 10 if clock[0] < 7 else 11,
+                "target_windows": [{"hwnd": Native().window(selected), "phase": "initial" if clock[0] < 5 else "replacement"}]
+                if selected else []}
+    monkeypatch.setattr(probe, "_focus_compare_context", context)
+    result = probe._focus_lifecycle(tmp_path, tmp_path)
+    assert result["ok"] is game_appears and not result["errors"]
+    assert calls == ([(111, 1111)] if game_appears else [])
+    deadline = next(row for row in result["events"] if row["kind"] == "deadline-observation")
+    if game_appears:
+        assert deadline["seconds_after_identity"] >= 125 and ticks[-1] >= 125.5
+        states = [row for row in result["events"] if row["kind"] == "state"]
+        assert any(row["related_foreground"] for row in states)
+        assert any(row["context"]["target_windows"] and row["context"]["target_windows"][0]["phase"] == "replacement" for row in states)
+        assert any(row["context"]["last_input_tick"] == 11 for row in states)
+    else:
+        assert clock[0] == 20 and deadline["seconds_after_identity"] is None
+    assert len(polls) == len(set(polls))
+    assert json.loads((tmp_path / "focus-lifecycle-progress.json").read_text())["finished"]

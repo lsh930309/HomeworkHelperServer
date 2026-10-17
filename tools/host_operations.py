@@ -109,7 +109,7 @@ def parser() -> argparse.ArgumentParser:
                    metavar="0..120", help="desktop observation duration; 0 takes one snapshot")
     p.add_argument("--log-lines", type=int, choices=range(1, 2001), default=80, metavar="1..2000")
     p.add_argument("--contains", default="", help="Literal substring filter for recent GUI log lines")
-    p.add_argument("--scenario", choices=("observe", "preview", "audio", "focus", "focus-compare", "focus-uia", "bgm", "prepare-spotify", "triggers", "firefox"), default="observe",
+    p.add_argument("--scenario", choices=("observe", "preview", "audio", "focus", "focus-compare", "focus-uia", "focus-lifecycle", "bgm", "prepare-spotify", "triggers", "firefox"), default="observe",
                    help="media-qa only: explicit native verification scenario")
     p.add_argument("--prepare-runtime", action="store_true",
                    help="media-qa only: install declared requirements in the canonical Windows venv")
@@ -133,7 +133,8 @@ def main(argv=None) -> int:
                           {"prepare-source", "build", "install", "media-qa"} and not args.archived_release else ("", ""))
         script = remote_script(args, commit, branch)
         timeout = {"build": 1800, "install": 360, "prepare-source": 120, "verify": 180,
-                   "desktop": args.duration + 90, "media-qa": 360 if args.prepare_runtime else 180,
+                   "desktop": args.duration + 90,
+                   "media-qa": 360 if args.prepare_runtime else (190 if args.scenario == "focus-lifecycle" else 180),
                    "inspect": 45, "logs": 20}[args.command]
         result = run_remote_powershell(SSHConfig(args.host, args.user, args.ssh_port, args.identity),
                                        script, timeout=timeout)

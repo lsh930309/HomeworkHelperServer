@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import uuid
 
 
-SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare", "focus-uia")
+SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare", "focus-uia", "focus-lifecycle")
 GAME_FIELDS = ("name", "monitoring_path", "default_volume", "default_muted")
 DISPLAY_FIELDS = (
     "sidebar_clock_enabled", "sidebar_clock_format", "sidebar_playtime_enabled",
@@ -448,10 +448,11 @@ def _focus(result_dir: Path) -> dict:
     original_pid, original_hwnd = native.foreground()
     requests = []
     class RecordingNative:
-        def has_window(self, target):
-            return native.has_window(target)
-        def focus(self, target):
-            accepted = native.focus(target)
+        foreground = native.foreground
+        window = native.window
+        is_related_foreground = native.is_related_foreground
+        def focus(self, target, hwnd=None):
+            accepted = native.focus(target, hwnd)
             requests.append({"pid": target.pid, "accepted": accepted})
             return accepted
     start = time.time()
@@ -462,7 +463,7 @@ def _focus(result_dir: Path) -> dict:
     try:
         process = psutil.Process(child.pid)
         target = GameAudioTarget("media-probe-focus", child.pid, process.create_time(), process.exe(), False, None)
-        has_window = native.has_window(target)
+        has_window = native.window(target) is not None
         foreground = native.foreground()
         with _focus_diagnostics() as diagnostics:
             tracker.tick((target,), *foreground, time.monotonic(), os.getpid())
@@ -1019,6 +1020,9 @@ def _focus_compare_context(target) -> dict:
     user32.GetLastInputInfo.restype = wt.BOOL
     user32.GetGUIThreadInfo.argtypes = [wt.DWORD, ctypes.POINTER(GuiInfo)]
     user32.GetGUIThreadInfo.restype = wt.BOOL
+    dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+    dwmapi.DwmGetWindowAttribute.argtypes = [wt.HWND, wt.DWORD, ctypes.c_void_p, wt.DWORD]
+    dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
     info = LastInput(ctypes.sizeof(LastInput), 0)
     input_ok = bool(user32.GetLastInputInfo(ctypes.byref(info)))
     foreground = WindowsGameFocusNative().foreground()
@@ -1028,12 +1032,25 @@ def _focus_compare_context(target) -> dict:
     gui_ok = bool(user32.GetGUIThreadInfo(foreground_thread, ctypes.byref(gui)))
     windows = []
     def collect(hwnd, _unused):
-        thread, pid = win32process.GetWindowThreadProcessId(hwnd)
-        if target is not None and pid == target.pid:
-            windows.append({"hwnd": int(hwnd), "thread_id": thread, "visible": bool(win32gui.IsWindowVisible(hwnd)),
-                            "minimized": bool(win32gui.IsIconic(hwnd)), "rect": list(win32gui.GetWindowRect(hwnd)),
-                            "class": win32gui.GetClassName(hwnd),
-                            "title": redact_sensitive_text(win32gui.GetWindowText(hwnd))})
+        matched = False
+        try:
+            thread, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if target is not None and pid == target.pid:
+                matched = True
+                cloaked = wt.DWORD()
+                cloak_result = dwmapi.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+                windows.append({"hwnd": int(hwnd), "thread_id": thread, "visible": bool(win32gui.IsWindowVisible(hwnd)),
+                                "minimized": bool(win32gui.IsIconic(hwnd)), "rect": list(win32gui.GetWindowRect(hwnd)),
+                                "owner": int(win32gui.GetWindow(hwnd, 4) or 0),
+                                "style": win32gui.GetWindowLong(hwnd, -16), "ex_style": win32gui.GetWindowLong(hwnd, -20),
+                                "cloaked": int(cloaked.value) if cloak_result == 0 else None,
+                                "cloaked_hresult": f"0x{cloak_result & 0xffffffff:08x}",
+                                "class": win32gui.GetClassName(hwnd),
+                                "title": redact_sensitive_text(win32gui.GetWindowText(hwnd))})
+        except Exception as error:
+            # 창 교체 중의 HWND 소멸을 전체 125초 관찰 실패로 확대하지 않는다.
+            if matched:
+                windows.append({"hwnd": int(hwnd), "gone": True, "error_type": type(error).__name__})
     win32gui.EnumWindows(collect, None)
     return {"pid": os.getpid(), "native_thread_id": threading.get_native_id(), "foreground": list(foreground),
             "caller_token": token_context(os.getpid()), "target_token": token_context(target.pid) if target else None,
@@ -1055,10 +1072,12 @@ def _focus_compare_startup(source_appdata: Path, result_dir: Path):
             "target": asdict(target) if target else None, "name": name, "events": events}, ensure_ascii=False), encoding="utf-8")
         temporary.replace(path)
     class TracedNative:
-        has_window = native.has_window
-        def focus(self, selected):
+        foreground = native.foreground
+        window = native.window
+        is_related_foreground = native.is_related_foreground
+        def focus(self, selected, hwnd=None):
             before = _focus_compare_context(selected)
-            accepted = native.focus(selected)
+            accepted = native.focus(selected, hwnd)
             time.sleep(.25)
             progress("startup-focus-request", accepted=accepted, before=before, after_250ms=_focus_compare_context(selected))
             return accepted
@@ -1071,7 +1090,7 @@ def _focus_compare_startup(source_appdata: Path, result_dir: Path):
             if matched:
                 target, name = matched
             foreground = native.foreground()
-            ready = target is not None and native.has_window(target)
+            ready = target is not None and native.window(target) is not None
             if prior != (foreground, target.pid if target else None, ready):
                 progress("startup-state", foreground=list(foreground), window_ready=ready, context=_focus_compare_context(target))
                 prior = (foreground, target.pid if target else None, ready)
@@ -1223,6 +1242,81 @@ def _focus_compare(source_appdata: Path, result_dir: Path) -> dict:
             "progress_file": str(progress_path), "limits": ["이 비교는 현재 한 게임의 포커스 요청 근거이며 개별 수락을 성공으로 확대하지 않습니다."]}
 
 
+def _focus_lifecycle(source_appdata: Path, result_dir: Path) -> dict:
+    """최초 identity 이후 125초 동안 실제 tracker와 창 교체를 계속 관찰한다."""
+    import psutil
+    from src.core.game_focus import AutoFocusTracker, WindowsGameFocusNative
+    from src.gui.runtime_logging import redact_sensitive_text
+    native, registered = WindowsGameFocusNative(), _focus_compare_registered(source_appdata)
+    started, original = time.monotonic(), _focus_compare_context(None)
+    target, name, first_seen, prior, foreground_info = None, None, None, None, None
+    events, requests, errors = [], [], []
+    path = result_dir / "focus-lifecycle-progress.json"
+    def publish(kind, **values):
+        events.append({"at_ms": round((time.monotonic() - started) * 1000, 2), "kind": kind, **values})
+        value = {"scenario": "focus-lifecycle", "target": asdict(target) if target else None,
+                 "name": name, "events": events, "finished": kind == "finished"}
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(path)
+    class TracedNative:
+        foreground = native.foreground
+        window = native.window
+        is_related_foreground = native.is_related_foreground
+        def focus(self, selected, hwnd=None):
+            before = _focus_compare_context(selected)
+            accepted = native.focus(selected, hwnd)
+            time.sleep(.25)
+            row = {"target": asdict(selected), "hwnd": hwnd, "accepted": accepted,
+                   "before": before, "after_250ms": _focus_compare_context(selected)}
+            requests.append(row)
+            publish("focus-request", **row)
+            return accepted
+    tracker = AutoFocusTracker(started_at_wall=time.time(), native=TracedNative())
+    tracker.tick((), *native.foreground(), started, os.getpid())
+    publish("waiting-for-registered-game", maximum_seconds=20, observe_after_identity_seconds=125)
+    with _focus_diagnostics() as diagnostics:
+        try:
+            while time.monotonic() < (started + 20 if first_seen is None else first_seen + 125):
+                matched = _focus_compare_target(source_appdata, registered, allow_empty=True)
+                target, name = matched if matched else (None, None)
+                if target is not None and first_seen is None:
+                    first_seen = time.monotonic()
+                context = _focus_compare_context(target)
+                foreground = context["foreground"]
+                related = native.is_related_foreground(target, foreground[0]) if target is not None else False
+                if foreground_info is None or foreground_info.get("pid") != foreground[0]:
+                    foreground_info = {"pid": foreground[0]}
+                    if foreground[0]:
+                        try:
+                            process = psutil.Process(foreground[0])
+                            sid, session = _process_context(foreground[0])
+                            foreground_info.update(path=process.exe(), created=process.create_time(), sid=sid, session_id=session)
+                        except Exception as error:
+                            foreground_info.update(error_type=type(error).__name__, error=redact_sensitive_text(error))
+                state = {"target": asdict(target) if target else None, "context": context,
+                         "related_foreground": related, "foreground_process": foreground_info}
+                fingerprint = json.dumps(state, sort_keys=True)
+                if fingerprint != prior:
+                    publish("state", **state)
+                    prior = fingerprint
+                tracker.tick((target,) if target else (), *foreground, time.monotonic(), os.getpid())
+                time.sleep(.25)
+            # 대기 마지막 sleep 사이에 경계를 넘긴 경우도 실제 제품에 한 번 전달한다.
+            tracker.tick((target,) if target else (), *native.foreground(), time.monotonic(), os.getpid())
+            publish("deadline-observation", context=_focus_compare_context(target),
+                    seconds_after_identity=time.monotonic() - first_seen if first_seen is not None else None)
+        except Exception as error:
+            errors.append({"error_type": type(error).__name__, "error": redact_sensitive_text(error)})
+        finally:
+            tracker.cancel()
+    publish("finished", diagnostics=diagnostics, errors=errors)
+    return {"ok": first_seen is not None and not errors, "supported": True, "scenario": "focus-lifecycle",
+            "events": events, "requests": requests, "errors": errors, "original": original,
+            "progress_file": str(path), "limits": ["입력 tick 변화는 OS 세션 입력 관측이며 사용자 의도·물리 입력을 증명하지 않습니다.",
+            "진단 완료와 자동 포커스 성공은 구분하며 게임 실행·종료·키 입력·창 생성은 하지 않습니다."]}
+
+
 def _uia_focus_attempt(target) -> dict:
     import comtypes  # main thread import precedes explicit worker MTA initialization.
     from src.utils.audio_control import verify_identity
@@ -1237,7 +1331,7 @@ def _uia_focus_attempt(target) -> dict:
             row["before"] = _focus_compare_context(target)
             if not verify_identity(target):
                 raise ValueError("게임 실행 identity가 변경되어 UIA 요청을 거부했습니다.")
-            windows = [window for window in row["before"]["target_windows"] if window["visible"]
+            windows = [window for window in row["before"]["target_windows"] if window.get("visible")
                        and window["rect"][2] > window["rect"][0] and window["rect"][3] > window["rect"][1]]
             if len(windows) != 1:
                 raise ValueError(f"UIA 대상의 보이는 최상위 창이 정확히 하나여야 합니다: {len(windows)}")
@@ -1357,6 +1451,8 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
         return _focus_compare(source_appdata, result_dir)
     if scenario == "focus-uia":
         return _focus_uia(source_appdata, result_dir)
+    if scenario == "focus-lifecycle":
+        return _focus_lifecycle(source_appdata, result_dir)
     return _bgm()
 
 

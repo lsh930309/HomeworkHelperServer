@@ -26,49 +26,55 @@ class WindowsGameFocusNative:
         hwnd = win32gui.GetForegroundWindow()
         return (int(win32process.GetWindowThreadProcessId(hwnd)[1]), int(hwnd)) if hwnd else (0, 0)
 
-    def has_window(self, target: GameAudioTarget) -> bool:
-        """보이는 면적 있는 PID 창의 존재만 확인한다. splash 구분은 하지 않는다."""
-        if os.name != "nt":
+    def window(self, target: GameAudioTarget) -> int | None:
+        from src.utils.windows import managed_process_window
+
+        return managed_process_window(target.pid, target.create_time, target.path)
+
+    def is_related_foreground(self, target: GameAudioTarget, pid: int) -> bool:
+        """현재 같은 사용자 세션의 실제 자식 계보만 준비 흐름으로 인정한다."""
+        if os.name != "nt" or pid <= 0:
             return False
-        import win32gui
-        import win32process
+        import psutil
+        from src.utils.audio_control import verify_identity
+        from src.core.process_monitor import _belongs_to_current_user_session
 
-        found = False
+        try:
+            if not verify_identity(target):
+                return False
+            current = psutil.Process(pid)
+            if not _belongs_to_current_user_session(current):
+                return False
+            child_created = current.create_time()
+            for parent in current.parents():
+                created = parent.create_time()
+                if created > child_created:
+                    return False  # 부모 PID가 자식 생성 뒤 재사용된 경우를 제외한다.
+                if parent.pid == target.pid:
+                    return abs(created - target.create_time) <= .001
+                child_created = created
+        except (psutil.Error, OSError):
+            logger.debug("게임 시작 자식 관계 확인 실패: PID=%s", pid, exc_info=True)
+        return False
 
-        def collect(hwnd, _extra):
-            nonlocal found
-            try:
-                if not win32gui.IsWindowVisible(hwnd):
-                    return
-                if win32process.GetWindowThreadProcessId(hwnd)[1] != target.pid:
-                    return
-                rect = (win32gui.GetWindowPlacement(hwnd)[4] if win32gui.IsIconic(hwnd)
-                        else win32gui.GetWindowRect(hwnd))
-                if rect[2] > rect[0] and rect[3] > rect[1]:
-                    found = True
-            except Exception:
-                logger.debug("준비 확인 중 사라진 게임 창 제외: hwnd=%s", hwnd, exc_info=True)
-
-        win32gui.EnumWindows(collect, None)
-        return found
-
-    def focus(self, target: GameAudioTarget) -> bool:
+    def focus(self, target: GameAudioTarget, hwnd: int | None = None) -> bool:
         from src.utils.windows import focus_managed_process_window
 
-        return focus_managed_process_window(target.pid, target.create_time, target.path)
+        return focus_managed_process_window(target.pid, target.create_time, target.path, hwnd=hwnd)
 
 
-@dataclass(frozen=True)
+@dataclass
 class _PendingFocus:
     target: GameAudioTarget
     initial_foreground: tuple[int, int]
     deadline: float
+    last_game_foreground_hwnd: int | None = None
 
 
 class AutoFocusTracker:
     """worker가 순차 tick한다. 처음 본 실행 identity당 전환 요청은 최대 한 번이다.
 
-    창이 없을 때만 제한 시간 안에서 계속 관찰한다. 준비된 창의 포커스 요청을
+    창 부재·임시 전경 창·자식 창 전환을 같은 120초 대기에서 관찰한다. 포커스 요청을
     Windows가 거절해도 재시도하지 않는다. baseline은 기존 게임을 활성화하지 않는다.
     """
 
@@ -122,21 +128,29 @@ class AutoFocusTracker:
             self.cancel()
             return
         if foreground_pid == target.pid:
-            self.cancel()
+            if pending.last_game_foreground_hwnd != foreground_hwnd:
+                logger.info("게임 시작 전경 창 관찰: 등록=%s PID=%s hwnd=%s", target.process_id, target.pid, foreground_hwnd)
+            pending.last_game_foreground_hwnd = foreground_hwnd or None
             return
         foreground = (foreground_pid, foreground_hwnd)
-        if (foreground_pid not in (0, owned_pid) and foreground_hwnd
-                and foreground != pending.initial_foreground):
-            logger.info("사용자 창 선택으로 게임 자동 전환 취소: 등록=%s PID=%s",
-                        target.process_id, target.pid)
-            self.cancel()
-            return
         try:
-            if not self._native.has_window(target):
+            if (foreground_pid not in (0, owned_pid) and foreground_hwnd
+                    and foreground != pending.initial_foreground
+                    and not self._native.is_related_foreground(target, foreground_pid)):
+                logger.info("외부 창 전환으로 게임 자동 전환 취소: 등록=%s PID=%s",
+                            target.process_id, target.pid)
+                self.cancel()
                 return
-            # Consume before the native request, including failure and exceptions.
+            hwnd = self._native.window(target)
+            if hwnd is None or hwnd == pending.last_game_foreground_hwnd:
+                return  # 이미 앞에 나타났던 시작 창을 다시 끌어오지 않고 교체를 관찰한다.
+            # Consume before the single native request, including failure and exceptions.
             self.cancel()
-            if not self._native.focus(target):
+            accepted = self._native.focus(target, hwnd)
+            actual = self._native.foreground()
+            logger.info("게임 자동 전환 결과: 등록=%s PID=%s hwnd=%s 수락=%s 실제전경=%s",
+                        target.process_id, target.pid, hwnd, accepted, actual == (target.pid, hwnd))
+            if not accepted:
                 logger.warning("게임 자동 전환 요청이 허용되지 않음: 등록=%s PID=%s",
                                target.process_id, target.pid)
         except Exception:

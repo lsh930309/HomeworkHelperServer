@@ -98,6 +98,28 @@ def test_focus_missing_game_window_and_windows_denial_do_not_force_or_retry(desk
     assert calls == [("foreground", 20)]
 
 
+@pytest.mark.parametrize("replacement", ["removed", "foreign-owner", "hidden"])
+def test_automatic_focus_never_reselects_a_replaced_candidate(desktop, replacement):
+    _state, entries, _gui, calls = desktop
+    selected = windows.managed_process_window(42, 123.0, "/game.exe")
+    assert selected == 20 and not calls
+    if replacement == "removed":
+        del entries[selected]
+    elif replacement == "foreign-owner":
+        entries[selected]["pid"] = 99
+    else:
+        entries[selected]["visible"] = False
+    # A different valid game window still exists, but the expired selection must fail.
+    assert not windows.focus_managed_process_window(42, 123.0, "/game.exe", hwnd=selected)
+    assert calls == []
+
+
+def test_automatic_focus_uses_the_exact_observed_window_even_when_smaller(desktop):
+    _state, _entries, _gui, calls = desktop
+    assert windows.focus_managed_process_window(42, 123.0, "/game.exe", hwnd=10)
+    assert calls == [("foreground", 10)]
+
+
 @pytest.mark.parametrize("build", [17763, 22000, 22621, 26200])
 def test_nonactivating_sidebar_uses_one_accent_path_on_supported_windows(monkeypatch, build):
     calls = []
