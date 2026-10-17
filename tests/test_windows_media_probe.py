@@ -597,3 +597,111 @@ def test_firefox_selects_verified_visible_window_owner_not_early_launcher(tmp_pa
     else:
         assert result is None
     assert 111 in seen[0] and (222 in seen[0]) is same_session
+
+
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_focus_compare_selects_exactly_one_registered_same_session_identity(tmp_path, monkeypatch, count):
+    import psutil
+    from src.utils import audio_control
+    path = tmp_path / "HomeworkHelper/homework_helper_data/app_data.db"
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE managed_processes(id TEXT,name TEXT,monitoring_path TEXT,secret TEXT)")
+        db.execute("INSERT INTO managed_processes VALUES ('game','검수 게임','C:/game.exe','do-not-read')")
+    before = path.read_bytes()
+    processes = [SimpleNamespace(pid=100 + index, info={"exe": "C:/game.exe", "create_time": 1000}) for index in range(count)]
+    monkeypatch.setattr(psutil, "process_iter", lambda _attrs: processes)
+    monkeypatch.setattr(audio_control, "verify_identity", lambda target: target.pid >= 100)
+    if count == 1:
+        target, name = probe._focus_compare_target(tmp_path)
+        assert target.pid == 100 and target.process_id == "game" and name == "검수 게임"
+    else:
+        with pytest.raises(ValueError):
+            probe._focus_compare_target(tmp_path)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("already_running", [False, True])
+def test_focus_compare_waits_for_new_game_and_does_not_refocus_existing_game(tmp_path, monkeypatch, already_running):
+    from src.core import game_focus
+    from src.core.game_audio import GameAudioTarget
+    import json
+    foreground, calls, queries = [10, 100], [], []
+    target = GameAudioTarget("game", 111, time.time() - 10 if already_running else time.time() + 1, "game.exe", False, None)
+    class Native:
+        def foreground(self): return tuple(foreground)
+        def has_window(self, selected): return selected is target
+        def focus(self, selected):
+            calls.append(selected.pid)
+            foreground[:] = [111, 1111]
+            return True
+    def select(_source, _registered, allow_empty):
+        queries.append(True)
+        return (target, "검수 게임") if already_running or len(queries) > 1 else None
+    monkeypatch.setattr(probe, "_focus_compare_registered", lambda _source: [("game", "검수 게임", "game.exe")])
+    monkeypatch.setattr(probe, "_focus_compare_target", select)
+    monkeypatch.setattr(probe, "_focus_compare_context", lambda selected: {"foreground": list(foreground), "last_input_tick": 1})
+    monkeypatch.setattr(game_focus, "WindowsGameFocusNative", Native)
+    monkeypatch.setattr(probe.time, "sleep", lambda _seconds: None)
+    selected, name, _started, original, events = probe._focus_compare_startup(tmp_path, tmp_path)
+    assert selected is target and name == "검수 게임" and original["foreground"] == [10, 100]
+    assert calls == ([] if already_running else [111])
+    assert events[0]["kind"] == "waiting-for-registered-game"
+    assert json.loads((tmp_path / "focus-progress.json").read_text())["events"] == events
+
+
+def test_focus_compare_panel_records_gui_worker_and_native_style_key_events(tmp_path, monkeypatch):
+    import json
+    import threading
+    from PySide6.QtCore import QTimer, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QPushButton
+    from src.core.game_audio import GameAudioTarget
+    from src.utils import audio_control, windows
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    target = GameAudioTarget("game", 111, 100, "game.exe", False, None)
+    foreground, restored, calls = [10, 100], [], []
+    context = lambda _target: {"foreground": list(foreground), "last_input_tick": 1,
+                                "native_thread_id": threading.get_native_id()}
+    monkeypatch.setattr(probe, "_focus_compare_startup", lambda *_args: (target, "검수 게임", time.monotonic(), context(None), []))
+    monkeypatch.setattr(probe, "_focus_compare_context", context)
+    monkeypatch.setattr(audio_control, "verify_identity", lambda selected: selected is target)
+    def focus(*_args):
+        calls.append(threading.get_native_id())
+        accepted = threading.current_thread() is threading.main_thread()
+        if accepted:
+            foreground[:] = [111, 1111]
+        return accepted
+    monkeypatch.setattr(windows, "focus_managed_process_window", focus)
+    monkeypatch.setattr(probe, "_restore_foreground", lambda hwnd: restored.append(hwnd) or True)
+    original_timer = QTimer.singleShot
+    def timer(milliseconds, callback):
+        milliseconds = 5 if milliseconds == 250 else 10 if milliseconds == 2000 else 2000 if milliseconds > 5000 else milliseconds
+        return original_timer(milliseconds, callback)
+    monkeypatch.setattr(QTimer, "singleShot", staticmethod(timer))
+    pending = [("manual-gui", False), ("manual-worker", True), ("manual-delayed-worker", True)]
+    pressed = []
+    def press_when_ready():
+        panel = next(view for view in app.topLevelWidgets() if view.windowTitle() == "HomeworkHelper · 게임 포커스 비교")
+        if not pending:
+            return
+        name, keyboard = pending[0]
+        button = panel.findChild(QPushButton, name)
+        if button.isEnabled() and len(calls) >= 2 + len(pressed):
+            pending.pop(0)
+            pressed.append(name)
+            if keyboard:
+                button.setFocus()
+                QTest.keyClick(button, Qt.Key.Key_Space)
+            else:
+                QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        original_timer(20, press_when_ready)
+    original_timer(20, press_when_ready)
+    result = probe._focus_compare(tmp_path, tmp_path)
+    attempts = [row for row in result["events"] if row["kind"] == "attempt"]
+    assert len(attempts) == 5 and len({row["before"]["native_thread_id"] for row in attempts}) >= 2
+    assert attempts[0]["label"] == "background-gui" and attempts[1]["label"] == "background-worker"
+    assert any(row["kind"] == "button_input_event" and row["event"] == "KeyPress" for row in result["events"])
+    assert result["worker_stopped"] and result["foreground_restored"] and restored == [100]
+    assert json.loads((tmp_path / "focus-progress.json").read_text())["finished"] is True

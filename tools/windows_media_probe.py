@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import uuid
 
 
-SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox")
+SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare")
 GAME_FIELDS = ("name", "monitoring_path", "default_volume", "default_muted")
 DISPLAY_FIELDS = (
     "sidebar_clock_enabled", "sidebar_clock_format", "sidebar_playtime_enabled",
@@ -958,6 +958,271 @@ def _firefox(result_dir: Path) -> dict:
     return result
 
 
+def _focus_compare_registered(source_appdata: Path):
+    path = source_appdata / "HomeworkHelper/homework_helper_data/app_data.db"
+    with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=2) as db:
+        return list(db.execute("SELECT id,name,monitoring_path FROM managed_processes"))
+
+
+def _focus_compare_target(source_appdata: Path, registered=None, *, allow_empty=False):
+    import psutil
+    from src.core.game_audio import GameAudioTarget
+    from src.core.process_monitor import _normalize_process_path
+    from src.utils.audio_control import verify_identity
+    registered = _focus_compare_registered(source_appdata) if registered is None else registered
+    matches = []
+    for process in psutil.process_iter(["pid", "exe", "create_time"]):
+        for process_id, name, executable in registered:
+            if (process.info.get("exe") and executable
+                    and _normalize_process_path(process.info["exe"]) == _normalize_process_path(executable)):
+                target = GameAudioTarget(process_id, process.pid, process.info["create_time"], executable, False, None)
+                if verify_identity(target):
+                    matches.append((target, name))
+    if not matches and allow_empty:
+        return None
+    if len(matches) != 1:
+        raise ValueError(f"실행 중인 등록 게임이 정확히 하나여야 합니다: 관측={len(matches)}")
+    return matches[0]
+
+
+def _focus_compare_context(target) -> dict:
+    import ctypes
+    from ctypes import wintypes as wt
+    import win32gui
+    import win32process
+    from src.core.game_focus import WindowsGameFocusNative
+    from src.gui.runtime_logging import redact_sensitive_text
+    def token_context(pid):
+        import win32api
+        import win32security as security
+        try:
+            sid, session = _process_context(pid)
+            handle = win32api.OpenProcess(0x1000, False, pid)
+            try:
+                token = security.OpenProcessToken(handle, security.TOKEN_QUERY)
+                try:
+                    elevated = bool(security.GetTokenInformation(token, security.TokenElevation))
+                finally:
+                    token.Close()
+            finally:
+                handle.Close()
+            return {"pid": pid, "sid": sid, "session_id": session, "elevated": elevated}
+        except Exception as error:
+            return {"pid": pid, "error_type": type(error).__name__, "error": redact_sensitive_text(error)}
+    class LastInput(ctypes.Structure):
+        _fields_ = [("cbSize", wt.UINT), ("dwTime", wt.DWORD)]
+    class GuiInfo(ctypes.Structure):
+        _fields_ = [("cbSize", wt.DWORD), ("flags", wt.DWORD), *[(name, wt.HWND) for name in (
+            "hwndActive", "hwndFocus", "hwndCapture", "hwndMenuOwner", "hwndMoveSize", "hwndCaret")], ("rcCaret", wt.RECT)]
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetLastInputInfo.argtypes = [ctypes.POINTER(LastInput)]
+    user32.GetLastInputInfo.restype = wt.BOOL
+    user32.GetGUIThreadInfo.argtypes = [wt.DWORD, ctypes.POINTER(GuiInfo)]
+    user32.GetGUIThreadInfo.restype = wt.BOOL
+    info = LastInput(ctypes.sizeof(LastInput), 0)
+    input_ok = bool(user32.GetLastInputInfo(ctypes.byref(info)))
+    foreground = WindowsGameFocusNative().foreground()
+    foreground_thread = win32process.GetWindowThreadProcessId(foreground[1])[0] if foreground[1] else 0
+    gui = GuiInfo()
+    gui.cbSize = ctypes.sizeof(GuiInfo)
+    gui_ok = bool(user32.GetGUIThreadInfo(foreground_thread, ctypes.byref(gui)))
+    windows = []
+    def collect(hwnd, _unused):
+        thread, pid = win32process.GetWindowThreadProcessId(hwnd)
+        if target is not None and pid == target.pid:
+            windows.append({"hwnd": int(hwnd), "thread_id": thread, "visible": bool(win32gui.IsWindowVisible(hwnd)),
+                            "minimized": bool(win32gui.IsIconic(hwnd)), "rect": list(win32gui.GetWindowRect(hwnd)),
+                            "class": win32gui.GetClassName(hwnd),
+                            "title": redact_sensitive_text(win32gui.GetWindowText(hwnd))})
+    win32gui.EnumWindows(collect, None)
+    return {"pid": os.getpid(), "native_thread_id": threading.get_native_id(), "foreground": list(foreground),
+            "caller_token": token_context(os.getpid()), "target_token": token_context(target.pid) if target else None,
+            "foreground_thread_id": foreground_thread, "last_input_ok": input_ok, "last_input_tick": info.dwTime,
+            "gui_info_ok": gui_ok, "gui_active": int(gui.hwndActive or 0), "gui_focus": int(gui.hwndFocus or 0),
+            "target_windows": windows}
+
+
+def _focus_compare_startup(source_appdata: Path, result_dir: Path):
+    from src.core.game_focus import AutoFocusTracker, WindowsGameFocusNative
+    started, original, events = time.monotonic(), _focus_compare_context(None), []
+    registered, native = _focus_compare_registered(source_appdata), WindowsGameFocusNative()
+    target, name, prior = None, None, None
+    def progress(kind, **values):
+        events.append({"at_ms": round((time.monotonic() - started) * 1000, 2), "kind": kind, **values})
+        path = result_dir / "focus-progress.json"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"scenario": "focus-compare", "finished": False, "phase": "startup",
+            "target": asdict(target) if target else None, "name": name, "events": events}, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(path)
+    class TracedNative:
+        has_window = native.has_window
+        def focus(self, selected):
+            before = _focus_compare_context(selected)
+            accepted = native.focus(selected)
+            time.sleep(.25)
+            progress("startup-focus-request", accepted=accepted, before=before, after_250ms=_focus_compare_context(selected))
+            return accepted
+    tracker = AutoFocusTracker(started_at_wall=time.time(), native=TracedNative())
+    tracker.tick((), *native.foreground(), started, os.getpid())
+    progress("waiting-for-registered-game", maximum_seconds=60)
+    with _focus_diagnostics() as diagnostics:
+        while time.monotonic() - started < 60:
+            matched = _focus_compare_target(source_appdata, registered, allow_empty=True)
+            if matched:
+                target, name = matched
+            foreground = native.foreground()
+            ready = target is not None and native.has_window(target)
+            if prior != (foreground, target.pid if target else None, ready):
+                progress("startup-state", foreground=list(foreground), window_ready=ready, context=_focus_compare_context(target))
+                prior = (foreground, target.pid if target else None, ready)
+            tracker.tick((target,) if matched else (), *foreground, time.monotonic(), os.getpid())
+            if ready:
+                break
+            time.sleep(.2)
+    tracker.cancel()
+    progress("startup-finished", diagnostics=diagnostics)
+    if target is None:
+        raise ValueError("60초 안에 실행 중인 등록 게임 하나를 확인하지 못했습니다.")
+    return target, name, started, original, events
+
+
+def _focus_compare(source_appdata: Path, result_dir: Path) -> dict:
+    from PySide6.QtCore import QObject, QEvent, QEventLoop, QTimer, Qt, Signal
+    from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QVBoxLayout, QWidget
+    from src.utils.audio_control import verify_identity
+    from src.utils.windows import focus_managed_process_window
+    from src.gui.runtime_logging import redact_sensitive_text
+    target, name, started, original, records = _focus_compare_startup(source_appdata, result_dir)
+    app = QApplication.instance() or QApplication([])
+    loop, workers = QEventLoop(), []
+    busy, closing = False, False
+    progress_path = result_dir / "focus-progress.json"
+    def publish(row=None):
+        if row is not None:
+            records.append({"at_ms": round((time.monotonic() - started) * 1000, 2), **row})
+        value = {"scenario": "focus-compare", "target": asdict(target), "name": name, "events": records,
+                 "panel_pid": os.getpid(), "finished": closing}
+        temporary = progress_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(progress_path)
+    class Panel(QWidget):
+        def closeEvent(self, event):
+            nonlocal closing
+            closing = True
+            event.accept()
+            loop.quit()
+    class Signals(QObject):
+        done = Signal(object)
+    class ClickEvents(QObject):
+        def eventFilter(self, watched, event):
+            if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                                QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+                row = {"kind": "button_input_event", "button": watched.objectName(),
+                       "event": event.type().name, "spontaneous": event.spontaneous()}
+                row.update({"key": event.key(), "auto_repeat": event.isAutoRepeat()} if event.type() in (
+                    QEvent.Type.KeyPress, QEvent.Type.KeyRelease) else {"mouse_button": event.button().name})
+                publish(row)
+            return False
+    panel, signals, clicks = Panel(), Signals(), ClickEvents()
+    panel.setWindowTitle("HomeworkHelper · 게임 포커스 비교")
+    panel.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    layout = QVBoxLayout(panel)
+    status = QLabel(f"대상: {name} · PID {target.pid}\n먼저 입력 없이 GUI/worker 시도를 기록합니다.")
+    layout.addWidget(status)
+    buttons = []
+    def enable(value):
+        for button in buttons:
+            button.setEnabled(value)
+    def finished(row):
+        nonlocal busy
+        if closing:
+            return
+        busy = False
+        publish(row)
+        if row["label"] == "background-gui":
+            attempt("background-worker", True, False)
+        else:
+            enable(True)
+            status.setText(f"대상: {name} · PID {target.pid}\n자동 비교 완료. 실제 버튼 클릭으로 비교하세요.")
+    signals.done.connect(finished, Qt.ConnectionType.QueuedConnection)
+    def attempt(label, worker, manual):
+        nonlocal busy
+        if closing or busy:
+            return
+        busy = True
+        enable(False)
+        def call():
+            row = {"kind": "attempt", "label": label, "manual": manual, "thread": "worker" if worker else "gui"}
+            try:
+                row["before"] = _focus_compare_context(target)
+                row["input_changed_since_start"] = row["before"]["last_input_tick"] != original["last_input_tick"]
+                row["identity_valid"] = verify_identity(target)
+                with _focus_diagnostics() as diagnostics:
+                    row["accepted"] = (focus_managed_process_window(target.pid, target.create_time, target.path)
+                                       if row["identity_valid"] else False)
+                row["diagnostics"] = diagnostics
+            except Exception as error:
+                row.update(accepted=False, error=redact_sensitive_text(error), error_type=type(error).__name__)
+            def after():
+                try:
+                    row["after_250ms"] = _focus_compare_context(target)
+                    row["foreground_observed"] = row["after_250ms"]["foreground"][0] == target.pid
+                except Exception as error:
+                    row.update(foreground_observed=False, observation_error=redact_sensitive_text(error))
+                signals.done.emit(row)
+            if worker:
+                time.sleep(.25)
+                after()
+            else:
+                QTimer.singleShot(250, after)
+        if worker:
+            thread = threading.Thread(target=call, daemon=True, name="FocusCompareWorker")
+            workers.append(thread)
+            thread.start()
+        else:
+            call()
+    def manual(label, worker, delayed=False):
+        nonlocal busy
+        publish({"kind": "button_activated", "label": label, "panel_active": panel.isActiveWindow()})
+        if delayed:
+            panel.raise_()
+            panel.activateWindow()
+            busy = True
+            enable(False)
+            def delayed_call():
+                nonlocal busy
+                busy = False
+                attempt(label, worker, True)
+            QTimer.singleShot(2000, delayed_call)
+        else:
+            attempt(label, worker, True)
+    for label, text, worker, delayed in (("manual-gui", "GUI에서 게임 포커스", False, False),
+                                        ("manual-worker", "worker에서 게임 포커스", True, False),
+                                        ("manual-delayed-worker", "QA 활성화 후 2초 뒤 worker", True, True)):
+        button = QPushButton(text)
+        button.setObjectName(label)
+        button.installEventFilter(clicks)
+        button.clicked.connect(lambda _checked=False, key=label, work=worker, delay=delayed: manual(key, work, delay))
+        buttons.append(button)
+        layout.addWidget(button)
+    enable(False)
+    panel.resize(460, 220)
+    panel.show()
+    publish({"kind": "ready", "panel_hwnd": int(panel.winId()), "context": original})
+    QTimer.singleShot(0, lambda: attempt("background-gui", False, False))
+    QTimer.singleShot(max(1, round((85 - (time.monotonic() - started)) * 1000)), panel.close)
+    loop.exec()
+    panel.hide()
+    for thread in workers:
+        thread.join(timeout=1)
+    worker_stopped = not any(thread.is_alive() for thread in workers)
+    restored = _restore_foreground(original["foreground"][1]) if worker_stopped else False
+    publish({"kind": "finished", "worker_stopped": worker_stopped, "foreground_restored": restored})
+    return {"ok": worker_stopped, "supported": True, "scenario": "focus-compare", "target": asdict(target),
+            "name": name, "events": records, "foreground_restored": restored, "worker_stopped": worker_stopped,
+            "progress_file": str(progress_path), "limits": ["이 비교는 현재 한 게임의 포커스 요청 근거이며 개별 수락을 성공으로 확대하지 않습니다."]}
+
+
 def _fixture_main(kind: str, root: Path) -> int:
     """최대 90초의 소유 fixture. 프로덕션 모듈·DB·설정을 읽지 않는다."""
     def ready(**values):
@@ -1013,6 +1278,8 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
         return _triggers(result_dir)
     if scenario == "firefox":
         return _firefox(result_dir)
+    if scenario == "focus-compare":
+        return _focus_compare(source_appdata, result_dir)
     return _bgm()
 
 
