@@ -67,7 +67,7 @@ flowchart LR
 
 호스트의 주요 Python 의존성은 다음과 같습니다. 정확한 버전과 전체 목록은 `requirements.txt`를 따릅니다.
 
-- **GUI·Windows 제어:** PySide6 6.11.1, pywin32, psutil, pycaw, winshell.
+- **GUI·Windows 제어:** PySide6 6.11.1, pywin32, psutil, pycaw, winshell, PyWinRT.
 - **API·데이터:** FastAPI, uvicorn, SQLAlchemy, pydantic, requests, jsonschema.
 - **촬영·OBS·게임 연동:** mss, Pillow, websocket-client, genshin, pycryptodome.
 
