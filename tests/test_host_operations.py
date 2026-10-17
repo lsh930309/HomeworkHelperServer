@@ -397,3 +397,11 @@ def test_media_runtime_preparation_only_installs_declared_dependencies(monkeypat
     assert kwargs["cwd"] == tmp_path and kwargs["check"] is True
     assert kwargs["stderr"] == subprocess.STDOUT
     assert "requirements_log" in json.loads(capsys.readouterr().out)
+
+
+def test_native_media_failure_is_not_ssh_success(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(ops, "published_commit", lambda _: ("a" * 40, "media-center"))
+    monkeypatch.setattr(ops, "run_remote_powershell", lambda *args, **kwargs:
+                        subprocess.CompletedProcess([], 0, '{"ok":false,"scenario":"bgm"}', ''))
+    assert ops.main(["media-qa", "--host", "test.invalid", "--report-root", str(tmp_path)]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False

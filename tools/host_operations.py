@@ -109,7 +109,7 @@ def parser() -> argparse.ArgumentParser:
                    metavar="0..120", help="desktop observation duration; 0 takes one snapshot")
     p.add_argument("--log-lines", type=int, choices=range(1, 2001), default=80, metavar="1..2000")
     p.add_argument("--contains", default="", help="Literal substring filter for recent GUI log lines")
-    p.add_argument("--scenario", choices=("observe", "preview", "audio", "focus", "bgm"), default="observe",
+    p.add_argument("--scenario", choices=("observe", "preview", "audio", "focus", "bgm", "prepare-spotify"), default="observe",
                    help="media-qa only: explicit native verification scenario")
     p.add_argument("--prepare-runtime", action="store_true",
                    help="media-qa only: install declared requirements in the canonical Windows venv")
@@ -144,7 +144,8 @@ def main(argv=None) -> int:
             json.dumps(payload, ensure_ascii=False) if args.command == "media-qa" and payload is not None else result.stdout,
             encoding="utf-8")
         (report / "stderr.log").write_text(result.stderr, encoding="utf-8")
-        summary = {"ok": result.returncode == 0, "command": args.command, "commit": commit or None,
+        native_ok = (payload.get("ok", False) if args.command == "media-qa" and payload is not None else True)
+        summary = {"ok": result.returncode == 0 and native_ok, "command": args.command, "commit": commit or None,
                    "report": str(report), "result": payload}
         if args.command == "inspect":
             summary["local_source"] = source_state()
@@ -152,7 +153,7 @@ def main(argv=None) -> int:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         if result.returncode:
             print(result.stderr.strip(), file=sys.stderr)
-        return 0 if result.returncode == 0 else 1
+        return 0 if summary["ok"] else 1
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         message = ("SSH 작업 응답 시간 초과" if isinstance(error, subprocess.TimeoutExpired) else str(error))
         failure = {"ok": False, "command": args.command, "report": str(report), "error": message}

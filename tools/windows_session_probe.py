@@ -152,7 +152,7 @@ def close_obs(repo: Path, appdata: Path, pid: int, created: float, sid: str, ses
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("command", choices=("desktop", "close-obs", "media-qa"))
-    p.add_argument("--scenario", choices=("observe", "preview", "audio", "focus", "bgm"), default="observe")
+    p.add_argument("--scenario", choices=("observe", "preview", "audio", "focus", "bgm", "prepare-spotify"), default="observe")
     p.add_argument("--repo", type=Path, required=True)
     p.add_argument("--appdata", type=Path, required=True)
     p.add_argument("--result", type=Path, required=True)

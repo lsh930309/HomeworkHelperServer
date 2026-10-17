@@ -193,7 +193,9 @@ switch ($Command) {
     'media-qa' {
         Require-Source
         if ($PrepareRuntime) {
-            $null = Invoke-Probe 'prepare-runtime'
+            # pip 하위 프로세스를 만드는 준비는 stdin 코드 파이프가 아닌 고정 소스 파일로 실행한다.
+            $null = & $Python (Join-Path $Repo 'tools/windows_host_probe.py') prepare-runtime --repo $Repo --appdata $AppData --install $Install
+            if ($LASTEXITCODE -ne 0) { throw 'Windows 미디어 검수 의존성 준비 실패' }
         }
         $Result = Invoke-Session 'media-qa' (Service-Status)
         $Result | ConvertTo-Json -Depth 20

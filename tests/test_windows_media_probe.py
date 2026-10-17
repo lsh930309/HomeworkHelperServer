@@ -3,6 +3,9 @@ import hashlib
 import os
 from pathlib import Path
 import sqlite3
+import sys
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,12 +57,16 @@ def test_run_isolates_every_environment_before_native_or_gui_import(tmp_path, mo
 
 
 @pytest.mark.parametrize("scenario", ["audio", "focus", "bgm"])
-def test_not_implemented_native_scenarios_are_never_reported_as_pass(tmp_path, monkeypatch, scenario):
+def test_fixed_native_scenarios_dispatch_only_the_named_runner(tmp_path, monkeypatch, scenario):
     for name in ("APPDATA", "LOCALAPPDATA", "HH_TEST_APPDATA_DIR"):
         monkeypatch.setenv(name, "original")
+    calls = []
+    def runner(*args):
+        calls.append(args)
+        return {"ok": False, "scenario": scenario, "reason": "native 결과 확인 필요"}
+    monkeypatch.setattr(probe, "_" + scenario, runner)
     result = probe.run(tmp_path, tmp_path, tmp_path / "result", scenario)
-    assert result["ok"] is False and result["supported"] is False
-    assert result["scenario"] == scenario and result["reason"]
+    assert result["ok"] is False and result["scenario"] == scenario and len(calls) == 1
 
 
 def test_unknown_scenario_does_not_create_fixture(tmp_path):
@@ -117,3 +124,158 @@ def test_preview_renders_actual_widgets_without_operational_writer(tmp_path, mon
     assert [row["geometry"][3] for row in result["layouts"]][1:] == [760, 1080]
     assert result["commands"] == [] and result["fixture_saves"] == 0
     assert MainWindow.INSTANCE is original and dbpath.read_bytes() == before
+
+
+@pytest.fixture
+def owned_fixture(tmp_path, monkeypatch):
+    root = tmp_path / "fixture"
+    root.mkdir()
+    child = SimpleNamespace(pid=111)
+    calls = []
+    monkeypatch.setattr(probe, "_spawn_fixture", lambda _dir, kind: (child, root, {"hwnd": 1111}))
+    monkeypatch.setattr(probe, "_stop_fixture", lambda process, folder: calls.append((process.pid, folder)) or True)
+    import psutil
+    monkeypatch.setattr(psutil, "Process", lambda _pid: SimpleNamespace(
+        create_time=lambda: time.time(), exe=lambda: "C:/fixture/pythonw.exe"))
+    return root, calls
+
+
+def test_audio_uses_owned_identity_and_restores_original_native_levels(tmp_path, monkeypatch, owned_fixture):
+    from src.utils import audio_control
+    monkeypatch.setitem(sys.modules, "pythoncom", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "comtypes", SimpleNamespace())
+    class Session:
+        pid = 111
+        key = ("fixture-endpoint", "fixture-session")
+        volume = .72
+        muted = True
+        def get_volume(self): return self.volume
+        def get_mute(self): return self.muted
+        def set_volume(self, value): self.volume = value
+        def set_mute(self, value): self.muted = value
+    session = Session()
+    monkeypatch.setattr(audio_control, "enumerate_sessions", lambda: (session,))
+    monkeypatch.setattr(audio_control, "verify_identity", lambda target: target.pid == 111)
+    result = probe._audio(tmp_path)
+    assert result["ok"] and len(result["steps"]) == 5
+    assert all(row["ok"] for row in result["steps"])
+    assert (session.volume, session.muted) == (.72, True)
+    assert result["identity"]["user_muted"] is False and result["identity"]["user_volume"] == 55
+    assert result["initial_audio_restored"] and result["fixture_exited"]
+    assert owned_fixture[1] == [(111, owned_fixture[0])]
+
+
+def test_audio_cleanup_exception_still_restores_and_stops_owned_fixture(tmp_path, monkeypatch, owned_fixture):
+    from src.core.game_audio import GameAudioCoordinator
+    from src.utils import audio_control
+    monkeypatch.setitem(sys.modules, "pythoncom", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "comtypes", SimpleNamespace())
+    session = SimpleNamespace(pid=111, key=("endpoint", "session"), get_volume=lambda: .55,
+                              get_mute=lambda: False, set_volume=lambda _v: None, set_mute=lambda _v: None)
+    monkeypatch.setattr(audio_control, "enumerate_sessions", lambda: (session,))
+    monkeypatch.setattr(audio_control, "verify_identity", lambda _target: True)
+    def failed(_self):
+        raise RuntimeError("cleanup failed")
+    monkeypatch.setattr(GameAudioCoordinator, "cleanup", failed)
+    result = probe._audio(tmp_path)
+    assert not result["ok"] and not result["cleanup_ok"]
+    assert result["initial_audio_restored"] and result["fixture_exited"]
+    assert result["errors"][0]["stage"] == "cleanup" and owned_fixture[1]
+
+
+@pytest.mark.parametrize("accept", [True, False])
+def test_focus_distinguishes_request_from_native_result_and_restores_foreground(tmp_path, monkeypatch, owned_fixture, accept):
+    from src.core import game_focus
+    foreground = [123, 1234]
+    class Native:
+        def foreground(self): return tuple(foreground)
+        def has_window(self, target): return target.pid == 111
+        def focus(self, target):
+            if accept:
+                foreground[:] = [target.pid, 1111]
+            return accept
+    monkeypatch.setattr(game_focus, "WindowsGameFocusNative", Native)
+    restored = []
+    def restore(hwnd):
+        restored.append(hwnd)
+        foreground[:] = [123, hwnd]
+        return True
+    monkeypatch.setattr(probe, "_restore_foreground", restore)
+    monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
+    result = probe._focus(tmp_path)
+    assert result["ok"] is accept and result["foreground_observed"] is accept
+    assert result["requests"] == [{"pid": 111, "accepted": accept}]
+    assert result["foreground_restored"] and result["fixture_exited"]
+    assert restored == [1234] and owned_fixture[1]
+
+
+@pytest.mark.parametrize("status, actions", [("playing", ["pause", "play"]), ("paused", ["play", "pause"]),
+                                            ("stopped", []), ("missing", []), ("multiple", [])])
+def test_bgm_only_controls_unambiguous_existing_session_and_restores_state(monkeypatch, status, actions):
+    from src.core import media_center
+    from src.core.media_sessions import MediaSessionInfo
+    calls, cleanup = [], []
+    initial = MediaSessionInfo("spotify", "Spotify.exe", status=status, can_play=True, can_pause=True)
+    sessions = (() if status == "missing" else (initial, initial) if status == "multiple" else (initial,))
+    class Runtime:
+        running = True
+        def __init__(self, on_change, spotify_launcher):
+            self.on_change, self.launcher = on_change, spotify_launcher
+            self.snapshot = media_center.MediaCenterSnapshot(sessions=sessions, bgm_session_id="spotify", running=True)
+        def start(self, options):
+            assert not any((options.auto_bgm, options.background_mute, options.auto_focus))
+            assert self.launcher() is False
+            self.on_change(self.snapshot)
+            return True
+        def request(self, action, session_id):
+            calls.append(action)
+            assert session_id == "spotify"
+            self.snapshot = media_center.MediaCenterSnapshot(
+                sessions=(probe.replace(initial, status="playing" if action == "play" else "paused"),), running=True)
+            return True
+        def stop(self, **_kwargs):
+            cleanup.append(True)
+            return True
+    monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
+    monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
+    result = probe._bgm()
+    assert result["ok"] is bool(actions) and result["supported"] is bool(actions)
+    assert calls == actions and cleanup == [True]
+    assert result["cleanup_ok"]
+    if actions:
+        assert result["playback_state_restored"]
+
+
+@pytest.mark.parametrize("uri_accepted, session_present", [(True, True), (True, False), (False, False)])
+def test_explicit_spotify_prepare_launches_once_without_play_or_credentials(monkeypatch, uri_accepted, session_present):
+    from src.core import media_center, media_sessions
+    calls, cleanup, launches = [], [], []
+    session = media_sessions.MediaSessionInfo("spotify", "Spotify.exe", status="paused")
+    def launch():
+        launches.append(True)
+        return uri_accepted
+    class Runtime:
+        def __init__(self, spotify_launcher):
+            self.launcher = spotify_launcher
+            self.snapshot = media_center.MediaCenterSnapshot(running=True)
+        def start(self, options):
+            assert not any((options.auto_bgm, options.background_mute, options.auto_focus))
+            return True
+        def request(self, action):
+            calls.append(action)
+            self.launcher()
+            self.snapshot = media_center.MediaCenterSnapshot(sessions=(session,) if session_present else (), running=True)
+            return True
+        def stop(self, **_kwargs):
+            cleanup.append(True)
+            return True
+    monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
+    monkeypatch.setattr(media_sessions, "launch_spotify", launch)
+    monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
+    result = probe._prepare_spotify()
+    assert result["ok"] is (uri_accepted and session_present)
+    assert result["uri_accepted"] is uri_accepted and result["session_observed"] is session_present
+    assert result["request_queued"] and result["play_requested"] is False
+    assert calls == ["prepare"] and launches == cleanup == [True]
+    if not session_present:
+        assert result["reason"]

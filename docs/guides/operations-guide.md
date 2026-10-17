@@ -11,7 +11,7 @@
 | `tools/windows_host_operations.ps1` | 고정 Windows 절차. 임의 PowerShell 명령을 사용자 입력으로 받지 않음 |
 | `tools/windows_host_probe.py` | 읽기 전용 DB·API·프로세스/토큰·OBS 상태·payload 조회. 명시적 backup만 기존 writer, build만 `build.py` 호출 |
 | `tools/windows_session_probe.py` | 일회성 InteractiveToken에서 비활성 데스크톱 관찰 또는 설치에 필요한 OBS 정상 종료. SYSTEM 토큰 복제·강제 종료 없음 |
-| `tools/windows_media_probe.py` | 설치 전 미디어 관측·격리된 실제 사이드바 렌더링. 운영 DB는 표시 필드만 읽고 자동 재생·음량·포커스 조작은 하지 않음 |
+| `tools/windows_media_probe.py` | 설치 전 미디어·음량·포커스 검수와 격리된 실제 사이드바 렌더링. 운영 DB는 표시 필드만 읽고 조작은 명시한 시나리오만 수행 |
 | `tools/ssh_host_testbench.py` | 설치 패키지 shadow copy의 격리 API 시험. 운영 설치·서비스·전원·게임 시험에 사용하지 않음 |
 | `tools/verify_remote_controller.py`, `tools/smoke_*.py` | 기존 원격 계약 자동 검증. 변경 범위에 필요한 검사만 선택 |
 | `tools/diagnose_button.py` | 명시적으로 요청된 Windows 입력 이벤트 조사. 일반 진단에서 자동 실행하지 않음 |
@@ -164,8 +164,18 @@ service.log가 있다고 추측하지 않는다.
 결과에는 단계별 native 오류·정리 결과 또는 작업 영역/760/1080 높이의 PNG·DPR·컨트롤 좌표·
 스크롤 범위가 포함된다. PNG는 같은 로컬 실행 보고서에 저장한다. 위젯 PNG는 실제 Windows
 폰트·레이아웃의 근거이며 DWM이 배경과 합성한 Acrylic 품질의 증거는 아니다.
-미구현 `audio`·`focus`·`bgm` 시나리오는 지원하지 않는다는 실패 결과를 반환한다.
-관측·렌더링 성공을 실제 재생·음량·포커스 전환 성공으로 확대하지 않는다.
+`audio`는 매우 낮은 소리의 자기 소유 WAV 프로세스로 실제 WASAPI의 전경·배경·사용자 음소거·
+0%와 55%를 확인하고 초기 음량을 복원한다. `focus`는 자기 소유 비활성 Qt 창에 한 번 전환한 뒤
+실제 foreground PID와 중복 요청 부재를 확인하고 원래 창을 복원한다. 두 fixture는 정상 종료하며
+90초 자체 상한을 둔다. 운영 게임 실행·DB 이용 기록을 만들지 않는다.
+
+`prepare-spotify`는 실제 제품의 명시적 준비 요청을 한 번 실행하고 세션 출현을 관측한다.
+재생은 요청하지 않는다. `bgm`은 이미 있는 명확한 단일 playing/paused Spotify 세션에서
+Play/Pause 전환을 관측한 뒤 원래 재생 상태로 복원한다. 세션 없음·복수·unknown·stopped처럼
+복원할 수 없는 조건에서는 실패 사유를 반환하고 임의 재생하지 않는다. 로그인이나 곡 선택은
+제품에서 사용자가 준비해야 하며 자격 증명을 도구가 읽거나 대신 입력하지 않는다.
+관측·렌더링 성공을 실제 재생·음량·포커스 전환 성공으로 확대하지 않는다. 자동 정책 입력의 합성
+검증과 실제 Windows I/O 검증을 각각 기록하며 Firefox의 탭 종료를 추정하지 않는다.
 
 먼저 [빌드](build-guide.md)와 [Windows 설치](windows-package-install-guide.md) 가이드를 읽는다.
 배포가 승인된 작업에서 관련 검증·커밋·해당 브랜치 푸시 후 순서대로 호출한다.
