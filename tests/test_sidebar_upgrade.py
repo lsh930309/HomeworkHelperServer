@@ -417,8 +417,8 @@ def test_native_acrylic_owns_tint_and_failure_keeps_same_fixed_background(sideba
 def test_section_dividers_reserve_equal_space_above_and_below_line(sidebar):
     view, _game, _settings, _writes = sidebar
     dividers = view.findChildren(SidebarDivider)
-    assert len(dividers) == 2
-    assert [divider.height() for divider in dividers] == [14,14]
+    assert len(dividers) == 3
+    assert [divider.height() for divider in dividers] == [14,14,14]
 
 
 def test_qt_empty_surfaces_leave_native_backdrop_visible(sidebar, app, monkeypatch):

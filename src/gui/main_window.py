@@ -251,7 +251,8 @@ class MainWindow(QMainWindow):
         self._wake_recovery_in_progress = False
         self._mute_retry_tokens: dict[str, int] = {}
         self._volume_retry_tokens: dict[str, int] = {}
-        # UI 확정 전 자동으로 활성화하지 않는다. 생성·조회만으로 OS를 조작하지 않는다.
+        # 정상 초기화 뒤 첫 감시 결과가 준비되면 한 번만 미디어 기능을 시작한다.
+        self._media_startup_pending = True
         self._media_center = None
         self._media_center_snapshot = None
         self._media_center_sig.connect(self._on_media_center_snapshot)
@@ -1539,6 +1540,10 @@ class MainWindow(QMainWindow):
         self._check_and_toggle_game_mode()
 
         self._publish_media_targets()
+        if self._media_startup_pending:
+            self._media_startup_pending = False
+            if is_windows():
+                self.configure_media_center(MediaOptions())
 
     def _check_and_toggle_game_mode(self):
         """실행 중인 게임이 있는지 확인하고, 그에 따라 창을 숨기거나 표시합니다."""
@@ -2395,9 +2400,11 @@ class MainWindow(QMainWindow):
     # ───────── 볼륨 패널 ─────────
 
     def configure_media_center(self, options: MediaOptions | None) -> bool:
-        """확정될 UI의 명시적 활성화 경계. 호스트·DB·기존 설정을 자동 변경하지 않는다."""
+        """초기화·UI 옵션의 단일 활성화 경계. DB 설정은 변경하지 않는다."""
         if self._shutting_down or self._beholder_restore_runtime_suspended:
             return False
+        # 먼저 사용자가 고른 옵션을 이후 초기화의 기본값으로 덮지 않는다.
+        self._media_startup_pending = False
         if options is None:
             return self._stop_media_center()
         if not is_windows():
@@ -2412,6 +2419,7 @@ class MainWindow(QMainWindow):
                 logger.warning("미디어 센터 시작 실패: %s", runtime.snapshot.error)
                 self._media_center = None
                 self._media_center_snapshot = runtime.snapshot
+                self._sidebar_controller.dispatch_media_state(runtime.snapshot)
                 return False
         else:
             if not self._media_center.configure(options):
@@ -2424,8 +2432,14 @@ class MainWindow(QMainWindow):
         return True
 
     def request_media_command(self, action: str, session_id: str | None = None) -> bool:
+        if self._shutting_down or self._beholder_restore_runtime_suspended:
+            return False
         runtime = self._media_center
         return bool(runtime is not None and runtime.request(action, session_id))
+
+    def media_center_state(self):
+        """사이드바가 읽는 불변 투영. 조회로 시작·재생 명령을 보내지 않는다."""
+        return self._media_center_snapshot
 
     @Slot(object)
     def _on_media_center_snapshot(self, event) -> None:
@@ -2435,7 +2449,7 @@ class MainWindow(QMainWindow):
         if owner is not self._media_center:
             return
         self._media_center_snapshot = snapshot
-        # 레이아웃을 확정하기 전에는 상태를 보관만 한다. 실제 UI는 이 불변 투영을 소비한다.
+        self._sidebar_controller.dispatch_media_state(snapshot)
 
     def _publish_media_targets(self, changed_process: ManagedProcess | None = None) -> None:
         runtime = getattr(self, "_media_center", None)
@@ -2478,6 +2492,7 @@ class MainWindow(QMainWindow):
             self._media_center = None
             self._media_center_snapshot = None
             self._volume_applied_pids.clear()
+            self._sidebar_controller.dispatch_media_state(None)
         else:
             logger.warning("미디어 센터 종료 또는 사용자 음소거 복원이 완료되지 않았습니다.")
         return stopped

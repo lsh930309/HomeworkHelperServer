@@ -16,18 +16,20 @@ flowchart LR
     Sidebar --> Capture["📷 스크린샷·갤러리"]
     Sidebar --> OBS["🎬 OBS 녹화·파일 보기"]
     Sidebar --> Audio["🔊 앱별 음량"]
+    Sidebar --> Media["🎵 Spotify · 미디어 센터"]
     classDef client fill:#dbeafe,stroke:#2563eb,color:#172554
     classDef host fill:#ede9fe,stroke:#7c3aed,color:#2e1065
     classDef feature fill:#f1f5f9,stroke:#64748b,color:#0f172a
     class Mac client
     class Host,Sidebar host
-    class Games,Data,Capture,OBS,Audio feature
+    class Games,Data,Capture,OBS,Audio,Media feature
 ```
 
 | 원하는 일 | 사용하는 곳 |
 |---|---|
 | 🎮 게임·프로그램 실행과 종료 | Windows 메인 창 · 사이드바 · Mac 클라이언트 |
 | 🎛️ 게임별 창 전환·음량 조절 | Windows 사이드바의 통합 게임 목록 |
+| 🎵 Spotify BGM·게임 소리 자동 전환 | Windows 사이드바의 미디어 센터 |
 | ⏱️ 이용 시간·기록 확인 | 호스트 앱 · 대시보드 |
 | ⚡ 게임 자원·회복 시간 확인 | 호스트 앱 · Mac 클라이언트 |
 | 📷 촬영·갤러리·음량·녹화 | Windows 사이드바 |
@@ -56,6 +58,8 @@ flowchart LR
 
 스크린샷은 호스트 앱이 촬영하고, 녹화는 OBS와 연동합니다. 녹화 품질·저장 위치는 OBS에서 설정합니다.
 지원하는 게임의 자원은 종료 후에도 조회하며, 예상 회복값과 같으면 기존 타이머를 유지합니다.
+미디어 센터는 게임 포커스·음소거에 맞춰 Spotify BGM을 한 번씩 제어합니다. 다른 미디어가
+멈췄을 때는 임의로 재개하지 않으며 사용자의 재생 조작을 유지합니다.
 
 ## 실행 환경과 의존성
 
@@ -80,6 +84,7 @@ flowchart LR
 | OpenSSH Server — 호스트 | 로그인 후 원격 절전·재시작·종료. 기존 SSH 키 인증을 사용합니다. |
 | SmartThings CLI — Mac · 등록된 전원 장치 | 기존 원격 부팅/Wake 경로를 사용할 때 필요합니다. |
 | OBS Studio — 호스트 | 녹화 연동을 사용할 때 필요합니다. 녹화 제어에는 OBS WebSocket 서버 설정이 필요하며, 스크린샷 촬영에는 OBS가 필요하지 않습니다. |
+| Spotify — 호스트 | BGM 재생에 필요합니다. 설치 앱과 Windows 미디어 세션을 사용하며 별도 Web API 인증은 요구하지 않습니다. |
 
 ### 개발·빌드 도구
 

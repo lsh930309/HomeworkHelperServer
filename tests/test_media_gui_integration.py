@@ -8,7 +8,8 @@ import pytest
 from PySide6.QtWidgets import QApplication, QPushButton, QSlider
 
 from src.core.game_audio import GameAudioObservation, GameAudioTarget
-from src.core.media_center import MediaCenterRuntime, MediaOptions
+from src.core.media_center import MediaCenterRuntime, MediaCenterSnapshot, MediaOptions
+from src.core.process_monitor import ProcessScanSnapshot
 from src.data.data_models import GlobalSettings, ManagedProcess
 from src.gui.sidebar.controls import VolumeDial
 from test_gui_layout import _FakeApiClient, _patch_main_window_deps, _stop_window
@@ -23,6 +24,7 @@ class FakeRuntime:
         self.stop_result = True
         self.stopping = False
         self.on_change = _kwargs.get("on_change")
+        self.snapshot = MediaCenterSnapshot()
 
     def update_targets(self, targets):
         self.targets.append(targets)
@@ -92,6 +94,60 @@ def test_runtime_constructor_and_default_main_window_do_not_start_native_work(wi
     assert not runtime.request("play")
     assert view._media_center is None
     assert not view.request_media_command("play")
+
+
+@pytest.mark.parametrize("windows, accepted", [(True, True), (True, False), (False, True)])
+def test_only_first_successful_process_observation_attempts_start_once(window, monkeypatch, windows, accepted):
+    view, module = window
+    calls = []
+    monkeypatch.setattr(module, "is_windows", lambda: windows)
+    monkeypatch.setattr(view, "configure_media_center", lambda options: calls.append(options) or accepted)
+    assert view._media_startup_pending
+    # 생성·조회는 초기 프로세스 감시가 준비되기 전이므로 자동 실행 계기가 아니다.
+    assert view.media_center_state() is None and calls == []
+    snapshot = ProcessScanSnapshot((), 123.0)
+    for _ in range(3):
+        view._apply_process_scan_snapshot(snapshot)
+    assert calls == ([MediaOptions()] if windows else [])
+    assert view._media_startup_pending is False
+
+
+def test_explicit_options_before_first_scan_are_not_overwritten_by_startup(window, monkeypatch):
+    view, _module = window
+    runtime = activate(window, monkeypatch)
+    changed = MediaOptions(auto_bgm=False, background_mute=False, auto_focus=False)
+    assert view.configure_media_center(changed)
+    before = list(runtime.options)
+    view._apply_process_scan_snapshot(ProcessScanSnapshot((), 123.0))
+    assert runtime.options == before and runtime.options[-1] == changed
+
+
+def test_failed_start_is_visible_and_not_retried_by_future_observations(window, monkeypatch):
+    view, module = window
+    constructed = []
+    class FailedRuntime(FakeRuntime):
+        def start(self, options):
+            constructed.append(self)
+            self.snapshot = MediaCenterSnapshot(error="격리된 미디어 준비 실패")
+            return False
+    monkeypatch.setattr(module, "MediaCenterRuntime", FailedRuntime)
+    monkeypatch.setattr(module, "is_windows", lambda: True)
+    for _ in range(3):
+        view._apply_process_scan_snapshot(ProcessScanSnapshot((), 123.0))
+    assert len(constructed) == 1 and view._media_center is None
+    assert view.media_center_state().error == "격리된 미디어 준비 실패"
+    assert not view.request_media_command("play")
+
+
+@pytest.mark.parametrize("field", ["_shutting_down", "_beholder_restore_runtime_suspended"])
+def test_shutdown_and_restore_reject_commands_even_while_runtime_is_present(window, monkeypatch, field):
+    view, _module = window
+    runtime = activate(window, monkeypatch)
+    setattr(view, field, True)
+    assert not view.request_media_command("play")
+    assert not view.configure_media_center(MediaOptions())
+    assert not runtime.commands
+    setattr(view, field, False)
 
 
 def test_enabled_window_publishes_runtime_identity_without_session_database_ack(window, game, monkeypatch):

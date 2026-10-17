@@ -7,7 +7,7 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import (
     Qt, QObject, QPropertyAnimation, QEasingCurve, QSize,
-    QEvent, QRect, QTimer, QRunnable, QThreadPool, Signal, Slot,
+    QEvent, QRect, QTimer, QRunnable, QThreadPool, QSignalBlocker, Signal, Slot,
 )
 from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -22,6 +22,7 @@ from src.core.launch_target import resolve_launch_args
 from src.utils import audio_control
 from src.utils.windows import get_visible_taskbar_work_area, focus_managed_process_window
 from src.gui.sidebar.controls import SidebarClockFace, SidebarDivider, VolumeDial
+from src.gui.sidebar.media_panel import MediaCenterPanel
 from src.gui.sidebar.win32_effects import ACRYLIC_TINT
 from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
@@ -38,7 +39,7 @@ _DEFAULT_AUTO_HIDE_MS = 3000
 
 # 갤러리 셀은 가용 너비에서 계산한다. 디코딩 해상도는 배치 치수와 독립이다.
 _THUMB_COLS = 3
-_THUMB_MAX_ROWS = 3
+_THUMB_MAX_ROWS = 2
 
 # 고화질 썸네일 로드 크기 (hover 확대 시 선명도 확보)
 _THUMB_HIRES_W = 152
@@ -423,6 +424,9 @@ class SidebarWidget(QWidget):
         parent: Optional[QWidget] = None,
         on_audio_change: Optional[Callable[[ManagedProcess], bool]] = None,
         audio_state: Optional[Callable] = None,
+        on_media_options: Optional[Callable] = None,
+        on_media_command: Optional[Callable] = None,
+        media_state: Optional[Callable] = None,
     ):
         super().__init__(
             parent,
@@ -439,6 +443,9 @@ class SidebarWidget(QWidget):
         self._on_hidden = on_hidden
         self._on_audio_change = on_audio_change
         self._audio_state = audio_state
+        self._on_media_options = on_media_options
+        self._on_media_command = on_media_command
+        self._media_state = media_state
         self._start_recording_callback: Optional[Callable[[], None]] = None
         self._rec_state = "obs_offline"
         self._rec_elapsed_sec = 0
@@ -601,6 +608,12 @@ class SidebarWidget(QWidget):
         media_layout.setContentsMargins(0, gap, 0, 0)
         media_layout.setSpacing(gap)
         media_layout.addWidget(self._section_divider())
+        self._media_center_panel = MediaCenterPanel(
+            self.width(), on_options=self._on_media_options,
+            on_command=self._on_media_command, parent=self._media_section,
+        )
+        media_layout.addWidget(self._media_center_panel)
+        media_layout.addWidget(self._section_divider())
 
         # 스크린샷 섹션
         self._screenshot_section = self._build_screenshot_section()
@@ -623,7 +636,7 @@ class SidebarWidget(QWidget):
         self._gallery_layout = QGridLayout(self._gallery)
         self._gallery_layout.setContentsMargins(0, 0, 0, 0)
         self._gallery_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        # 현재 3행의 최소 크기가 다음 높이 감소를 막지 않게 한다.
+        # 현재 행의 최소 크기가 다음 높이 감소를 막지 않게 한다.
         self._gallery_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         self._gallery.setFixedHeight(0)
         self._gallery.installEventFilter(self)
@@ -669,6 +682,36 @@ class SidebarWidget(QWidget):
         self._refresh_screenshot_section()
         self._refresh_recording_section()
         self._refresh_gallery()
+        if self._media_state is not None:
+            self.update_media_state(self._media_state())
+
+    def update_media_state(self, snapshot) -> None:
+        """관측을 투영할 뿐 시작·설정 변경·오디오 native 조회를 수행하지 않는다."""
+        self._media_center_panel.update_snapshot(snapshot)
+        if snapshot is None or not self.isVisible():
+            return
+        observations = {item.target.process_id: item for item in snapshot.game_audio}
+        processes = {process.id: process for process in self._data_manager.managed_processes}
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            process_id = row.property("processId")
+            process = processes.get(process_id)
+            dial = row.findChild(VolumeDial)
+            observation = observations.get(process_id)
+            if process is None or dial is None:
+                continue
+            with QSignalBlocker(dial):
+                # 자신의 휠 입력을 worker의 이전 관측값으로 되감지 않는다.
+                pending = self._volume_save_timers.get(process_id)
+                if (observation is not None and observation.available
+                        and observation.volume is not None
+                        and not (pending is not None and pending.isActive())):
+                    dial.setValue(round(observation.volume * 100 / 5) * 5)
+                dial.setChecked(process.default_muted)
+            dial._describe_value()
+            dial.setToolTip("백그라운드 자동 음소거 · 클릭은 사용자 음소거 설정 변경"
+                            if observation is not None and observation.policy_muted
+                            else "휠로 5% 조절 · 클릭으로 음소거")
 
     def slide_in(self) -> None:
         """사이드바를 화면 우측에서 슬라이드인합니다."""
@@ -705,6 +748,7 @@ class SidebarWidget(QWidget):
             return
 
         self._auto_hide_timer.stop()
+        self._media_center_panel.close_options()
         self._playtime_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
@@ -721,6 +765,7 @@ class SidebarWidget(QWidget):
 
     def cleanup(self, deadline_ms: int = 2000) -> bool:
         """타이머와 애니메이션을 정리합니다."""
+        self._media_center_panel.close_options()
         self._gallery.removeEventFilter(self)
         self._main_scroll.viewport().removeEventFilter(self)
         self._scroll_content.removeEventFilter(self)
@@ -1141,6 +1186,9 @@ class SidebarWidget(QWidget):
                 self.setGeometry(geo)
         cursor_pos = QCursor.pos()
         inside = self.rect().contains(self.mapFromGlobal(cursor_pos))
+        if self._media_center_panel.options_open:
+            self._auto_hide_timer.stop()
+            return
 
         # 자동 숨김 타이머 관리
         if inside:
@@ -1274,9 +1322,11 @@ class SidebarWidget(QWidget):
             painter.drawArc(QRectF(2, 3, 12, 12), 135 * 16, 270 * 16)
             painter.drawLine(8, 1, 8, 8)
         elif kind == "focus":
-            painter.drawLine(3, 13, 13, 3)
-            painter.drawLine(5, 3, 13, 3)
-            painter.drawLine(13, 3, 13, 11)
+            for x, y, dx, dy in ((2, 2, 4, 4), (14, 2, -4, 4),
+                                  (2, 14, 4, -4), (14, 14, -4, -4)):
+                painter.drawLine(x, y, x + dx, y)
+                painter.drawLine(x, y, x, y + dy)
+            painter.drawEllipse(QRectF(5.5, 5.5, 5, 5))
         elif kind == "close":
             painter.drawLine(6, 3, 11, 8)
             painter.drawLine(11, 8, 6, 13)
@@ -1419,7 +1469,7 @@ class SidebarWidget(QWidget):
         return cell_width, max(1, round(cell_width * 0.75)), gap
 
     def _refresh_gallery(self, _index: int = -1) -> None:
-        """콘텐츠 진입점에서만 파일을 읽고 최대 8개 미리보기를 준비한다."""
+        """콘텐츠 진입점에서만 파일을 읽고 최대 5개 미리보기를 준비한다."""
         if not hasattr(self, "_thumb_pool"):
             return  # UI 구성 중에는 디코딩 작업을 등록하지 않는다.
         self._thumb_request_id += 1
