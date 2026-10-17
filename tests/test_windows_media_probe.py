@@ -268,7 +268,8 @@ def test_spotify_window_experiments_keep_warm_identity_and_trace_post_request_wi
 
 
 @pytest.mark.parametrize("condition", ["cold", "process", "session", "external", "no_window"])
-def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_phases(tmp_path, monkeypatch, condition):
+@pytest.mark.parametrize("first_action", ["minimize", "close"])
+def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_phases(tmp_path, monkeypatch, condition, first_action):
     import asyncio
     from src.core import media_center, media_sessions, spotify_app
     clock, calls, phases = [0.0], [], {"cold": False, "minimizes": 0, "closed": False}
@@ -328,7 +329,7 @@ def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_ph
     monkeypatch.setattr(probe, "_spotify_window_action", window_action)
     monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    result = probe._spotify_window_startup(tmp_path, None)
+    result = probe._spotify_window_startup(tmp_path, None, first_action=first_action)
     assert result["cleanup_ok"] and not result["writes"] and calls[-1] == ("stop",)
     if condition in ("process", "session", "external"):
         assert not result["ok"] and not result["request_queued"]
@@ -339,10 +340,13 @@ def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_ph
         assert [row for row in calls if row[0] == "uri"] == [("uri", {"dj": True})]
     else:
         assert result["ok"] and clock[0] == 15
-        assert calls[:-1] == [("request", "play"), ("uri", {"dj": True}),
-                             ("window", "minimize", 0, False), ("control", "spotify", "play"),
-                             ("window", "minimize", 5, False), ("window", "close", 10, True)]
-        assert [row["at_ms"] for row in result["events"] if row["kind"] in ("initial_minimize", "late_minimize", "close")] == [0, 5000, 10000]
+        expected = [("request", "play"), ("uri", {"dj": True}),
+                    ("window", first_action, 0, False), ("control", "spotify", "play")]
+        if first_action == "minimize":
+            expected.extend([("window", "minimize", 5, False), ("window", "close", 10, True)])
+        assert calls[:-1] == expected
+        timed = [row["at_ms"] for row in result["events"] if row["kind"] in ("initial_minimize", "initial_close", "late_minimize", "close")]
+        assert timed == ([0] if first_action == "close" else [0, 5000, 10000])
         assert not result["trace"][-1]["windows"][0]["visible"]
         assert result["final_media"]["sessions"][0]["status"] == "playing"
     json.dumps(result)

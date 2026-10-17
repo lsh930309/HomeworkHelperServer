@@ -19,7 +19,7 @@ from tools import windows_host_probe as probe
 from src.core.tailscale import TailscalePeer, TailscaleSnapshot
 
 
-@pytest.mark.parametrize("scenario", ["spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-startup"])
+@pytest.mark.parametrize("scenario", ["spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-startup", "spotify-window-startup-close"])
 def test_spotify_window_observation_is_a_fixed_media_scenario(scenario):
     args = ops.parser().parse_args(["media-qa", "--host", "test.invalid", "--scenario", scenario])
     assert args.scenario == scenario
