@@ -414,7 +414,7 @@ def test_native_optional_rate_controls_only_display_progress_and_does_not_mutate
     view.update_snapshot(snapshot)
     view.show()
     app.processEvents()
-    assert view._progress_timer.interval() == 100
+    assert view._progress_timer.interval() == 16
     assert view._progress_timer.isActive() is (expected > 0)
     clock["mono"] += 5
     view.update_snapshot(snapshot)
@@ -480,4 +480,66 @@ def test_album_source_stays_full_size_while_only_target_dpr_image_is_resampled(p
     assert view._cover._target_pixmap(1.25).cacheKey() == target_key
     assert view._cover._target_pixmap(2).size().toTuple() == (70, 35)
     assert view._cover.pixmap().size().toTuple() == (1400, 700)
+    assert not commands
+
+
+@pytest.mark.parametrize("dpr", [1, 1.25, 2])
+def test_progress_paints_subpixel_changes_even_when_integer_accessibility_value_is_equal(app, dpr):
+    import math
+    from PySide6.QtGui import QImage, QPainter
+    from src.gui.sidebar.media_panel import _PlaybackProgress
+    bar = _PlaybackProgress()
+    bar.resize(200, 3)
+    bar.show()
+    app.processEvents()
+    def rendered(fraction):
+        bar.setFraction(fraction)
+        image = QImage(math.ceil(bar.width()*dpr), math.ceil(bar.height()*dpr), QImage.Format.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(dpr)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        bar.render(painter, QPoint())
+        painter.end()
+        return image
+    try:
+        first = rendered(.5001)
+        assert bar.value() == 500
+        second = rendered(.5004)
+        assert bar.value() == 500
+        # 같은 정수 값 안의 소수 픽셀 경계도 실제 이미지에 반영된다.
+        assert first != second
+        assert bar._fraction == .5004
+        rendered(0)
+        assert bar._fraction == 0 and bar.value() == 0
+        rendered(1)
+        assert bar._fraction == 1 and bar.value() == 1000
+    finally:
+        bar.close()
+
+
+def test_frame_progress_retains_float_monotonic_position_without_changing_second_labels(panel, monkeypatch, app):
+    from src.gui.sidebar import media_panel as module
+    view, _options, commands, _state = panel
+    clock = {"wall": 1000.0, "mono": 20.0}
+    monkeypatch.setattr(module, "time", SimpleNamespace(time=lambda: clock["wall"], monotonic=lambda: clock["mono"]))
+    session = replace(spotify(status="playing"), position_seconds=6.905, duration_seconds=246.786,
+                      timeline_updated_at=1000, playback_rate=None)
+    snapshot = MediaCenterSnapshot(sessions=(session,), bgm_session_id=session.session_id, running=True)
+    view.update_snapshot(snapshot)
+    view.show()
+    app.processEvents()
+    previous_fraction = view._progress_bar._fraction
+    previous_integer = view._progress_bar.value()
+    previous_label = view._elapsed_label.text()
+    previous_description = view._progress_bar.accessibleDescription()
+    clock["mono"] += .016
+    view._refresh_progress()
+    assert view._progress_bar._fraction > previous_fraction
+    assert view._progress_bar.value() == previous_integer
+    assert view._elapsed_label.text() == previous_label
+    assert view._progress_bar.accessibleDescription() == previous_description
+    assert view._progress_timer.timerType() == Qt.TimerType.PreciseTimer
+    assert view._progress_timer.interval() == 16
+    view.hide()
+    assert not view._progress_timer.isActive()
     assert not commands

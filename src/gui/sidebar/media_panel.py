@@ -155,6 +155,37 @@ class _ArtworkLabel(QLabel):
             painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
 
 
+class _PlaybackProgress(QProgressBar):
+    """접근성 값은 유지하고 표시 폭은 현재의 실수 비율로 직접 그린다."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._fraction = 0.0
+        self.setTextVisible(False)
+        self.setRange(0, 1000)
+        self.setValue(0)
+
+    def setFraction(self, fraction: float) -> None:
+        fraction = max(0.0, min(1.0, fraction))
+        if fraction != self._fraction:
+            self._fraction = fraction
+            self.setValue(round(fraction * 1000))
+            # 정수 접근성 값이 같아도 소수 픽셀 경계는 다음 위치를 그려야 한다.
+            self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        rect = QRectF(self.contentsRect())
+        painter.setBrush(QColor(255, 255, 255, 23))
+        painter.drawRoundedRect(rect, 1, 1)
+        if self._fraction > 0:
+            filled = QRectF(rect.x(), rect.y(), rect.width() * self._fraction, rect.height())
+            painter.setBrush(QColor("#b7d8ca"))
+            painter.drawRoundedRect(filled, min(1.0, filled.width() / 2), 1)
+
+
 class MediaCenterPanel(QWidget):
     """명령 수락을 재생 성공으로 바꾸지 않고 최신 snapshot만 표시한다."""
 
@@ -173,7 +204,8 @@ class MediaCenterPanel(QWidget):
         self._timeline_rate = 0.0
         self._timeline_monotonic = time.monotonic()
         self._progress_timer = QTimer(self)
-        self._progress_timer.setInterval(100)
+        self._progress_timer.setInterval(16)
+        self._progress_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._progress_timer.timeout.connect(self._refresh_progress)
         gap = round(width * 0.018)
         control_size = round(width * 0.085)
@@ -248,11 +280,9 @@ class MediaCenterPanel(QWidget):
         self._elapsed_label, self._duration_label = QLabel(), QLabel()
         for label in (self._elapsed_label, self._duration_label):
             label.setProperty("hhRole", "sidebarSecondary")
-        self._progress_bar = QProgressBar()
+        self._progress_bar = _PlaybackProgress()
         self._progress_bar.setObjectName("mediaPlaybackProgress")
         self._progress_bar.setAccessibleName("곡 재생 진행률")
-        self._progress_bar.setTextVisible(False)
-        self._progress_bar.setRange(0, 1000)
         self._progress_bar.setFixedHeight(max(2, round(width * .012)))
         progress_layout.addWidget(self._elapsed_label)
         progress_layout.addWidget(self._progress_bar, 1)
@@ -269,8 +299,7 @@ class MediaCenterPanel(QWidget):
                 font-size: {round(width * .037)}px; }}
             QPushButton#mediaAutoBgm:checked {{ background: rgba(76,150,108,45); color: #a4dfb9; }}
             QPushButton#mediaPlayPause {{ background: rgba(176,210,237,42); }}
-            QProgressBar#mediaPlaybackProgress {{ background: rgba(255,255,255,23); border: none; border-radius: 1px; }}
-            QProgressBar#mediaPlaybackProgress::chunk {{ background: #b7d8ca; border-radius: 1px; }}
+            QProgressBar#mediaPlaybackProgress {{ background: transparent; border: none; }}
         """)
         self.update_snapshot(None)
 
@@ -403,10 +432,14 @@ class MediaCenterPanel(QWidget):
             return
         position = self._position_at(time.monotonic())
         elapsed, duration = self._time_text(position), self._time_text(self._timeline_duration)
-        self._elapsed_label.setText(elapsed)
-        self._duration_label.setText(duration)
-        self._progress_bar.setValue(round(position / self._timeline_duration * 1000))
-        self._progress_bar.setAccessibleDescription(f"{elapsed} / {duration} · 재생 위치 표시")
+        if self._elapsed_label.text() != elapsed:
+            self._elapsed_label.setText(elapsed)
+        if self._duration_label.text() != duration:
+            self._duration_label.setText(duration)
+        self._progress_bar.setFraction(position / self._timeline_duration)
+        description = f"{elapsed} / {duration} · 재생 위치 표시"
+        if self._progress_bar.accessibleDescription() != description:
+            self._progress_bar.setAccessibleDescription(description)
         if self.isVisible() and self._timeline_rate > 0 and position < self._timeline_duration:
             if not self._progress_timer.isActive():
                 self._progress_timer.start()
