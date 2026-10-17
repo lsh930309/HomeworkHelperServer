@@ -206,7 +206,77 @@ def test_spotify_window_action_verifies_identity_and_sends_at_most_one_request(m
             assert calls == [(11, 0x0010, 0, 0)] if action == "close" else calls == [(11, 7)]
 
 
-@pytest.mark.parametrize("scenario, duration", [("spotify-window-open", 10), ("spotify-window-close", 5), ("spotify-window-minimize", 5)])
+@pytest.mark.parametrize("condition", ["exit", "korean_accelerator", "invoke_only", "no_exit", "disabled", "duplicate", "wrong_owner", "identity_changed", "timed_out", "cancelled", "multiple_buttons", "native_error"])
+def test_spotify_normal_exit_only_uses_actual_semantic_id_and_cancels_own_menu(monkeypatch, condition):
+    import ctypes
+    import threading
+    from src.utils import audio_control
+    opened, calls, clock, live = [], [], [0.0], [True]
+    cancelled = threading.Event()
+    if condition == "cancelled":
+        cancelled.set()
+    def open_menu():
+        opened.append(True)
+    class Pattern:
+        Expand = staticmethod(open_menu)
+        Invoke = staticmethod(open_menu)
+        def QueryInterface(self, interface):
+            return self
+    def get_pattern(pattern_id):
+        if condition == "invoke_only" and pattern_id == 10005:
+            raise ValueError("unsupported ExpandCollapse")
+        return Pattern()
+    button = SimpleNamespace(GetCurrentPattern=get_pattern)
+    def enumerate_windows(callback, context):
+        if opened:
+            callback(22, context)
+    def post(hwnd, message, value, unused):
+        calls.append((hwnd, message, value))
+        if condition == "native_error" and message == 0x0111:
+            raise OSError("command failed")
+    monkeypatch.setitem(sys.modules, "win32gui", SimpleNamespace(
+        EnumWindows=enumerate_windows, GetClassName=lambda hwnd: "#32768", IsWindowVisible=lambda hwnd: True,
+        GetWindow=lambda hwnd, kind: 99 if condition == "wrong_owner" else 11, PostMessage=post))
+    monkeypatch.setitem(sys.modules, "win32process", SimpleNamespace(GetWindowThreadProcessId=lambda hwnd: (1, 41)))
+    monkeypatch.setattr(audio_control, "verify_identity", lambda target: live[0])
+    class GetMenu:
+        def __call__(self, hwnd, object_id, item, pointer):
+            assert (hwnd, object_id, item) == (22, -4, 0)
+            assert pointer._obj.cbSize == ctypes.sizeof(pointer._obj)
+            pointer._obj.hMenu = 123
+            return True
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: SimpleNamespace(GetMenuBarInfo=GetMenu()), raising=False)
+    def read_menu(handle, **kwargs):
+        assert handle == 123
+        if condition == "identity_changed":
+            live[0] = False
+        if condition == "timed_out":
+            clock[0] = 10
+        name = "종료(&X)\tAlt+F4" if condition == "korean_accelerator" else "닫기" if condition == "no_exit" else "E&xit\tAlt+F4"
+        item = {"path": ["File", name], "id": 42, "submenu": 0, "state": 3 if condition == "disabled" else 0}
+        return {"handle": handle, "items": [item, item] if condition == "duplicate" else [item]}
+    monkeypatch.setattr(probe, "_spotify_native_menu", read_menu)
+    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    module = SimpleNamespace(IUIAutomationExpandCollapsePattern=object, IUIAutomationInvokePattern=object)
+    result = probe._spotify_normal_exit({"pid": 41, "create_time": 123, "path": "C:/Spotify.exe", "hwnd": 11},
+        [button, button] if condition == "multiple_buttons" else [button], module,
+        cancelled=cancelled, deadline=4, is_current=lambda: True)
+    success = condition in ("exit", "korean_accelerator", "invoke_only")
+    assert bool(result["exit"].get("accepted")) == success
+    if success:
+        assert opened == [True] and calls == [(11, 0x0111, 42)]
+    elif condition in ("cancelled", "multiple_buttons"):
+        assert not opened and not calls and not result["menu_open"]["attempted"]
+    elif condition in ("wrong_owner", "identity_changed"):
+        assert opened == [True] and not calls
+    else:
+        expected = [(11, 0x0111, 42), (11, 0x001f, 0)] if condition == "native_error" else [(11, 0x001f, 0)]
+        assert calls == expected and result["cancelled_menu"]
+    json.dumps(result)
+
+
+@pytest.mark.parametrize("scenario, duration", [("spotify-window-open", 10), ("spotify-window-close", 5), ("spotify-window-minimize", 5), ("spotify-window-exit", 5)])
 def test_spotify_window_experiments_keep_warm_identity_and_trace_post_request_without_playback(tmp_path, monkeypatch, scenario, duration):
     from src.core import media_center, spotify_app
     from src.core.media_sessions import MediaSessionInfo
@@ -235,7 +305,12 @@ def test_spotify_window_experiments_keep_warm_identity_and_trace_post_request_wi
         "windows": [{**window, "iconic": clock[0] < .5}], "foreground_hwnd": 11})
     monkeypatch.setattr(probe, "_spotify_window_action", lambda target, action, is_current: (
         actions.append((target, action, is_current())) or {"attempted": True, "accepted": True}))
-    monkeypatch.setattr(probe, "_spotify_chrome_controls", lambda target: chrome.append(target) or {"controls": []})
+    def chrome_controls(target, **kwargs):
+        chrome.append(target)
+        if kwargs:
+            assert kwargs["exit_requested"] and kwargs["is_current"]()
+        return {"controls": [], "normal_exit": {"exit": {"attempted": True, "accepted": True}}}
+    monkeypatch.setattr(probe, "_spotify_chrome_controls", chrome_controls)
     result = probe._spotify_window_observe(tmp_path, None, scenario)
     assert result["ok"] and result["cleanup_ok"] and not result["writes"]
     assert result["request"]["accepted"] and result["request"]["attempted"]
@@ -245,6 +320,8 @@ def test_spotify_window_experiments_keep_warm_identity_and_trace_post_request_wi
     assert all(not any((value.auto_bgm, value.background_mute, value.auto_focus)) for value in options)
     if scenario.endswith("-open"):
         assert launches == ["spotify:"] and not actions and len(chrome) == 1
+    elif scenario.endswith("-exit"):
+        assert not launches and not actions and len(chrome) == 1
     else:
         assert not launches and actions == [(window | {"iconic": True}, scenario.removeprefix("spotify-window-"), True)] and not chrome
     json.dumps(result)

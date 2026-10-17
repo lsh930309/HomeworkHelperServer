@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import uuid
 
 
-SPOTIFY_WINDOW_SCENARIOS = ("spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close")
+SPOTIFY_WINDOW_SCENARIOS = ("spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-exit")
 SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare", "focus-uia", "focus-lifecycle", *SPOTIFY_WINDOW_SCENARIOS)
 GAME_FIELDS = ("name", "monitoring_path", "default_volume", "default_muted")
 DISPLAY_FIELDS = (
@@ -107,8 +107,116 @@ def _spotify_window_state(source_appdata: Path, source_local_appdata: str | None
             "foreground_hwnd": int(win32gui.GetForegroundWindow() or 0)}
 
 
-def _spotify_chrome_controls(window: dict) -> dict:
-    """최상위 Spotify 창의 고정 메뉴 명칭만 읽는다. 클릭·포커스·본문 수집은 없다."""
+def _spotify_native_menu(handle: int, *, cancelled, deadline: float) -> dict:
+    import win32gui
+    import win32gui_struct
+    from src.gui.runtime_logging import redact_sensitive_text
+    result = {"handle": handle, "items": []}
+    menus = deque([(handle, [])]) if handle else deque()
+    while menus and len(result["items"]) < 40 and not cancelled.is_set() and time.monotonic() < deadline:
+        menu, parents = menus.popleft()
+        for index in range(min(win32gui.GetMenuItemCount(menu), 40 - len(result["items"]))):
+            if cancelled.is_set() or time.monotonic() >= deadline:
+                break
+            info, extra = win32gui_struct.EmptyMENUITEMINFO(mask=0x47, text_buf_size=256)
+            win32gui.GetMenuItemInfo(menu, index, True, info)
+            item = win32gui_struct.UnpackMENUITEMINFO(info)
+            name = redact_sensitive_text(item.text or "")[:128]
+            path = [*parents, name]
+            result["items"].append({"path": path, "id": int(item.wID),
+                                    "submenu": int(item.hSubMenu or 0), "state": int(item.fState)})
+            if item.hSubMenu and len(path) < 3:
+                menus.append((int(item.hSubMenu), path))
+    return result
+
+
+def _spotify_normal_exit(window, buttons, module, *, cancelled, deadline, is_current) -> dict:
+    """사용자가 승인한 메인 메뉴만 한 번 열고 실제 Exit 항목의 ID만 전달한다."""
+    import ctypes
+    from ctypes import wintypes
+    import win32gui
+    import win32process
+    from src.core.spotify_app import SpotifyProcess
+    from src.utils.audio_control import verify_identity
+    target = SpotifyProcess(window["pid"], window["create_time"], window["path"])
+    result = {"menu_open": {"attempted": False}, "exit": {"attempted": False}, "cancelled_menu": False}
+    popup = None
+    def current():
+        return (not cancelled.is_set() and time.monotonic() < deadline and is_current()
+                and verify_identity(target) and win32process.GetWindowThreadProcessId(window["hwnd"])[1] == target.pid)
+    def popups():
+        found = []
+        def collect(hwnd, _context):
+            if (win32gui.GetClassName(hwnd) == "#32768" and win32gui.IsWindowVisible(hwnd)
+                    and win32process.GetWindowThreadProcessId(hwnd)[1] == target.pid):
+                found.append({"hwnd": int(hwnd), "owner": int(win32gui.GetWindow(hwnd, 4) or 0)})
+        win32gui.EnumWindows(collect, None)
+        return found
+    try:
+        if len(buttons) != 1 or not current() or popups():
+            raise ValueError("유일한 Spotify 메뉴 버튼 또는 독립된 요청을 확인하지 못했습니다.")
+        button = buttons[0]
+        try:
+            pattern = button.GetCurrentPattern(10005).QueryInterface(module.IUIAutomationExpandCollapsePattern)
+            action, result["menu_open"]["pattern"] = pattern.Expand, "ExpandCollapse"
+        except Exception:
+            pattern = button.GetCurrentPattern(10000).QueryInterface(module.IUIAutomationInvokePattern)
+            action, result["menu_open"]["pattern"] = pattern.Invoke, "Invoke"
+        if not current():
+            raise ValueError("메뉴 요청이 취소되어 실행하지 않았습니다.")
+        result["menu_open"]["attempted"] = True
+        action()
+        result["menu_open"]["accepted"] = True
+        until = min(deadline, time.monotonic() + 1.5)
+        while current() and time.monotonic() < until:
+            found = popups()
+            result["popup_candidates"] = found
+            if len(found) == 1 and found[0]["owner"] == window["hwnd"]:
+                popup = found[0]
+                break
+            time.sleep(.05)
+        if popup is None:
+            raise ValueError("현재 Spotify 창이 소유한 실제 popup 메뉴를 확인하지 못했습니다.")
+        class MenuBarInfo(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcBar", wintypes.RECT), ("hMenu", wintypes.HMENU),
+                        ("hwndMenu", wintypes.HWND), ("flags", wintypes.DWORD)]
+        get_menu = ctypes.WinDLL("user32", use_last_error=True).GetMenuBarInfo
+        get_menu.argtypes = [wintypes.HWND, wintypes.LONG, wintypes.LONG, ctypes.POINTER(MenuBarInfo)]
+        get_menu.restype = wintypes.BOOL
+        info = MenuBarInfo()
+        info.cbSize = ctypes.sizeof(info)
+        if not current() or not get_menu(popup["hwnd"], -4, 0, ctypes.byref(info)) or not info.hMenu:
+            raise ValueError("실제 popup의 표준 메뉴 handle을 조회하지 못했습니다.")
+        result["menu"] = _spotify_native_menu(int(info.hMenu), cancelled=cancelled, deadline=deadline)
+        exits = []
+        for item in result["menu"]["items"]:
+            name = item["path"][-1].split("\t", 1)[0].replace("&", "").strip().casefold()
+            if len(name) >= 3 and name[-3] == "(" and name[-1] == ")":
+                name = name[:-3].strip()
+            if name in ("exit", "quit", "종료", "끝내기") and not item["submenu"] and not item["state"] & 3 and 0 < item["id"] <= 0xffff:
+                exits.append(item)
+        if len(exits) != 1 or not current() or popups() != [popup]:
+            raise ValueError("유일한 실제 Exit 메뉴 또는 현재 요청을 확인하지 못해 종료하지 않았습니다.")
+        result["exit"].update(attempted=True, item=exits[0])
+        win32gui.PostMessage(window["hwnd"], 0x0111, exits[0]["id"], 0)  # 실제 WM_COMMAND ID 1회.
+        result["exit"]["accepted"] = True
+    except Exception as error:
+        result.update(error_type=type(error).__name__, error=str(error))
+    finally:
+        if result["menu_open"]["attempted"] and not result["exit"].get("accepted"):
+            if (popup and verify_identity(target)
+                    and win32process.GetWindowThreadProcessId(window["hwnd"])[1] == target.pid
+                    and popup in popups()):
+                try:
+                    win32gui.PostMessage(window["hwnd"], 0x001f, 0, 0)  # 시간 초과 후에도 자기 메뉴만 취소한다.
+                    result["cancelled_menu"] = True
+                except Exception as error:
+                    result["cancel_error"] = str(error)
+    return result
+
+
+def _spotify_chrome_controls(window: dict, *, exit_requested=False, is_current=lambda: True) -> dict:
+    """기본은 명칭 조회만 하며 고정 exit 시나리오에서만 실제 메뉴 종료를 요청한다."""
     import comtypes
     from src.core.spotify_app import SpotifyProcess
     from src.utils.audio_control import verify_identity
@@ -122,6 +230,7 @@ def _spotify_chrome_controls(window: dict) -> dict:
     def worker():
         initialized = False
         automation = element = walker = None
+        buttons = []
         try:
             comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
             initialized = True
@@ -132,29 +241,12 @@ def _spotify_chrome_controls(window: dict) -> dict:
                 raise ValueError("Spotify 창 identity가 변경되어 UIA 조회를 중단했습니다.")
             deadline = time.monotonic() + 4
             # 표준 Win32 메뉴만 읽는다. custom 메뉴의 GetMenu(NULL)는 메뉴 부재 증명이 아니다.
-            native_menu = {"handle": 0, "items": []}
-            result["native_menu"] = native_menu
             try:
                 import win32gui
-                import win32gui_struct
-                native_menu["handle"] = int(win32gui.GetMenu(window["hwnd"]) or 0)
-                menus = deque([(native_menu["handle"], [])]) if native_menu["handle"] else deque()
-                while menus and len(native_menu["items"]) < 40 and not cancelled.is_set() and time.monotonic() < deadline:
-                    menu, parents = menus.popleft()
-                    for index in range(min(win32gui.GetMenuItemCount(menu), 40 - len(native_menu["items"]))):
-                        if cancelled.is_set() or time.monotonic() >= deadline:
-                            break
-                        info, extra = win32gui_struct.EmptyMENUITEMINFO(mask=0x47, text_buf_size=256)
-                        win32gui.GetMenuItemInfo(menu, index, True, info)
-                        item = win32gui_struct.UnpackMENUITEMINFO(info)
-                        name = redact_sensitive_text(item.text or "")[:128]
-                        path = [*parents, name]
-                        native_menu["items"].append({"path": path, "id": int(item.wID),
-                                                     "submenu": int(item.hSubMenu or 0), "state": int(item.fState)})
-                        if item.hSubMenu and len(path) < 3:
-                            menus.append((int(item.hSubMenu), path))
+                result["native_menu"] = _spotify_native_menu(int(win32gui.GetMenu(window["hwnd"]) or 0),
+                                                              cancelled=cancelled, deadline=deadline)
             except Exception as error:
-                native_menu.update(error_type=type(error).__name__, error=redact_sensitive_text(error))
+                result["native_menu"] = {"handle": 0, "items": [], "error_type": type(error).__name__, "error": redact_sensitive_text(error)}
             module = client.GetModule("UIAutomationCore.dll")
             automation = client.CreateObject("{E22AD333-B25F-460C-83D0-0581107395C9}", interface=module.IUIAutomation2)
             automation.ConnectionTimeout, automation.TransactionTimeout = 500, 1500
@@ -176,6 +268,9 @@ def _spotify_chrome_controls(window: dict) -> dict:
                     # 상단 왼쪽 chrome만 명칭을 확장한다. 오른쪽 계정·본문 미디어는 제외한다.
                     chrome = (top <= bounds.top < bounds.bottom <= top + min(96, (bottom - top) * .12)
                               and left <= bounds.left < left + (right - left) * .6)
+                    if exit_requested and control_type == 50000 and not node.CurrentIsOffscreen:
+                        if left <= bounds.left < bounds.right <= left + 60 and top <= bounds.top < bounds.bottom <= top + 60:
+                            buttons.append(node)
                     if known or chrome:
                         result["controls"].append({"name": redact_sensitive_text(name)[:128],
                                                    "control_type": control_type, "depth": depth})
@@ -186,10 +281,14 @@ def _spotify_chrome_controls(window: dict) -> dict:
                     queue.append((child, depth + 1))
                     child = walker.GetNextSiblingElement(child)
             result["visited"] = visited
+            if exit_requested:
+                result["normal_exit"] = _spotify_normal_exit(window, buttons, module, cancelled=cancelled,
+                                                             deadline=deadline, is_current=is_current)
         except Exception as error:
             result.update(error_type=type(error).__name__, error=redact_sensitive_text(error))
         finally:
             queue = None
+            buttons = None
             node = child = walker = element = automation = None
             if initialized:
                 comtypes.CoUninitialize()
@@ -275,7 +374,14 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
                         if len(candidates) != 1:
                             raise ValueError("유일한 Spotify 메인 창을 확인하지 못해 명령을 보내지 않았습니다.")
                         request["target"] = candidates[0]
-                        request.update(_spotify_window_action(candidates[0], action, is_current=lambda: runtime.running))
+                        if action == "exit":
+                            chrome = _spotify_chrome_controls(candidates[0], exit_requested=True, is_current=lambda: runtime.running)
+                            normal_exit = chrome.get("normal_exit", {})
+                            request.update(normal_exit.get("exit", {}))
+                            if not request.get("accepted"):
+                                raise ValueError(normal_exit.get("error") or chrome.get("error") or "정상 Exit 경로를 실행하지 못했습니다.")
+                        else:
+                            request.update(_spotify_window_action(candidates[0], action, is_current=lambda: runtime.running))
                         if request.get("error_type"):
                             errors.append({"stage": "request", **request})
                 except Exception as error:
