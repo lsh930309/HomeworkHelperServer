@@ -6,8 +6,9 @@ import logging
 import math
 import time
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QTimer, QSignalBlocker
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, QSizeF, Qt, QTimer, QSignalBlocker
 from PySide6.QtGui import QActionGroup, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -94,7 +95,47 @@ class _MarqueeLabel(QLabel):
 
 
 class _ArtworkLabel(QLabel):
-    """원본 전체 비율을 유지하여 둥근 슬롯 안에 맞춘다."""
+    """원본과 표시용 결과를 분리하고 현재 크기·DPR의 한 결과만 보관한다."""
+
+    def __init__(self, default_path: str, parent=None):
+        super().__init__(parent)
+        self._default_renderer = QSvgRenderer(default_path, self)
+        self._default_renderer.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self._render_key = None
+        self._rendered = QPixmap()
+        if not self._default_renderer.isValid():
+            logger.warning("기본 Spotify 벡터 아이콘 로드 실패: %s", default_path)
+
+    def _target_pixmap(self, dpr: float) -> QPixmap:
+        original = self.pixmap()
+        source_size = QSizeF(original.size()) if not original.isNull() else self._default_renderer.viewBoxF().size()
+        if source_size.isEmpty():
+            return QPixmap()
+        logical_size = source_size.scaled(QSizeF(self.contentsRect().size()), Qt.AspectRatioMode.KeepAspectRatio)
+        physical_size = QSize(max(1, math.ceil(logical_size.width() * dpr)),
+                              max(1, math.ceil(logical_size.height() * dpr)))
+        key = (original.cacheKey(), physical_size.width(), physical_size.height(), dpr)
+        if key == self._render_key:
+            return self._rendered
+        if original.isNull():
+            # SVG 원본을 목표 물리 크기보다 2배 크게 렌더링한 뒤 한 번 Smooth 축소한다.
+            # 원본의 viewBox 크기로 먼저 래스터화하는 중간 단계를 두지 않는다.
+            supersampled = QPixmap(physical_size * 2)
+            supersampled.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(supersampled)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._default_renderer.render(painter, QRectF(supersampled.rect()))
+            painter.end()
+            image = supersampled.toImage().scaled(physical_size, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                                 Qt.TransformationMode.SmoothTransformation)
+        else:
+            # 공급자의 원본을 보존한다. 표시는 목표 물리 픽셀로 축소한 파생값만 사용한다.
+            image = original.toImage().scaled(physical_size, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                             Qt.TransformationMode.SmoothTransformation)
+        self._rendered = QPixmap.fromImage(image)
+        self._rendered.setDevicePixelRatio(dpr)
+        self._render_key = key
+        return self._rendered
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -105,9 +146,11 @@ class _ArtworkLabel(QLabel):
         clip.addRoundedRect(rect, rect.width() * .2, rect.height() * .2)
         painter.setClipPath(clip)
         painter.fillRect(rect, QColor("#172b2b"))
-        pixmap = self.pixmap()
+        pixmap = self._target_pixmap(self.devicePixelRatioF())
         if not pixmap.isNull():
-            size = pixmap.size().scaled(self.contentsRect().size(), Qt.AspectRatioMode.KeepAspectRatio)
+            original = self.pixmap()
+            source_size = QSizeF(original.size()) if not original.isNull() else self._default_renderer.viewBoxF().size()
+            size = source_size.scaled(rect.size(), Qt.AspectRatioMode.KeepAspectRatio)
             target = QRectF((self.width()-size.width())/2, (self.height()-size.height())/2, size.width(), size.height())
             painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
 
@@ -124,14 +167,13 @@ class MediaCenterPanel(QWidget):
         self._snapshot: MediaCenterSnapshot | None = None
         self._menu: QMenu | None = None
         self._artwork_key = None
-        self._default_cover = QPixmap(get_bundle_resource_path("assets/icons/media/spotify.svg"))
         self._timeline_key = None
         self._timeline_position = 0.0
         self._timeline_duration = 0.0
         self._timeline_rate = 0.0
         self._timeline_monotonic = time.monotonic()
         self._progress_timer = QTimer(self)
-        self._progress_timer.setInterval(250)
+        self._progress_timer.setInterval(100)
         self._progress_timer.timeout.connect(self._refresh_progress)
         gap = round(width * 0.018)
         control_size = round(width * 0.085)
@@ -165,14 +207,13 @@ class MediaCenterPanel(QWidget):
 
         track = QHBoxLayout()
         track.setSpacing(gap)
-        self._cover = _ArtworkLabel()
+        self._cover = _ArtworkLabel(get_bundle_resource_path("assets/icons/media/spotify.svg"))
         self._cover.setObjectName("mediaCover")
         # 컴팩트 목업의 비율을 반영하고 게임 아이콘 슬롯과 크기를 맞춘다.
         cover_size = round(width * 0.125)
         self._cover.setFixedSize(cover_size, cover_size)
         self._cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._cover.setAccessibleName("Spotify")
-        self._cover.setPixmap(self._default_cover)
         track.addWidget(self._cover)
         metadata = QVBoxLayout()
         metadata.setContentsMargins(0, 0, 0, 0)
@@ -311,8 +352,6 @@ class MediaCenterPanel(QWidget):
         decoded = bool(artwork and pixmap.loadFromData(artwork))
         if artwork and not decoded:
             logger.warning("미디어 앨범 표지 디코딩 실패: 대상=%s", selected.session_id)
-        if pixmap.isNull():
-            pixmap = self._default_cover
         self._cover.setPixmap(pixmap)
         self._cover.setAccessibleName(f"{selected.title} 앨범 표지" if decoded else "Spotify")
 
@@ -326,6 +365,10 @@ class MediaCenterPanel(QWidget):
             self._progress_timer.stop()
             return
         rate = selected.playback_rate
+        # Spotify는 재생 중에도 선택적인 rate를 게시하지 않을 수 있다.
+        # native None은 보존하고 표시에서만 정상 재생의 1배 진행으로 해석한다.
+        if selected.status == "playing" and rate is None:
+            rate = 1.0
         rate = rate if selected.status == "playing" and rate is not None and math.isfinite(rate) and rate > 0 else 0.0
         key = (selected.session_id, selected.position_seconds, selected.duration_seconds,
                selected.timeline_updated_at, rate, selected.status)

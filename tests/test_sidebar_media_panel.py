@@ -344,8 +344,9 @@ def test_album_art_bytes_and_official_fallback_are_projected_without_distortion(
     view.update_snapshot(snapshot)
     assert view._cover.pixmap().cacheKey() == previous
     view.update_snapshot(replace(snapshot, sessions=(replace(session, artwork=b"invalid PNG"),)))
-    assert not view._default_cover.isNull()
-    assert view._cover.pixmap().cacheKey() == view._default_cover.cacheKey()
+    assert view._cover._default_renderer.isValid()
+    assert view._cover.pixmap().isNull()  # 기본 표지는 원본 SVG를 직접 렌더링한다.
+    assert not view._cover._target_pixmap(1).isNull()
     assert not commands
 
 
@@ -398,3 +399,85 @@ def test_long_title_and_artist_marquee_do_not_restart_on_same_snapshot_and_stop_
     view.hide()
     assert not view._title_label._timer.isActive() and not view._artist_label._timer.isActive()
     assert not view._progress_timer.isActive() and not commands
+
+
+@pytest.mark.parametrize("rate,status,expected", [(None, "playing", 1.0), (0, "playing", 0.0),
+                                                  (1.25, "playing", 1.25), (None, "paused", 0.0)])
+def test_native_optional_rate_controls_only_display_progress_and_does_not_mutate_snapshot(panel, monkeypatch, app, rate, status, expected):
+    from src.gui.sidebar import media_panel as module
+    view, _options, commands, _state = panel
+    clock = {"wall": 1000.0, "mono": 20.0}
+    monkeypatch.setattr(module, "time", SimpleNamespace(time=lambda: clock["wall"], monotonic=lambda: clock["mono"]))
+    session = replace(spotify(status=status), position_seconds=6.905, duration_seconds=246.786,
+                      timeline_updated_at=1000, playback_rate=rate)
+    snapshot = MediaCenterSnapshot(sessions=(session,), bgm_session_id=session.session_id, running=True)
+    view.update_snapshot(snapshot)
+    view.show()
+    app.processEvents()
+    assert view._progress_timer.interval() == 100
+    assert view._progress_timer.isActive() is (expected > 0)
+    clock["mono"] += 5
+    view.update_snapshot(snapshot)
+    assert view._position_at(clock["mono"]) == pytest.approx(6.905 + expected * 5)
+    assert view._snapshot.sessions[0].playback_rate is rate
+    view.hide()
+    assert not view._progress_timer.isActive()
+    clock["mono"] += 2
+    view.show()
+    app.processEvents()
+    assert view._position_at(clock["mono"]) == pytest.approx(6.905 + expected * 7)
+    assert view._progress_timer.isActive() is (expected > 0)
+    seeked = replace(session, position_seconds=2.0, timeline_updated_at=clock["wall"])
+    view.update_snapshot(replace(snapshot, sessions=(seeked,)))
+    assert view._position_at(clock["mono"]) == 2.0
+    assert not commands
+
+
+def test_default_svg_is_supersampled_for_target_dpr_and_reuses_only_current_render(panel, monkeypatch):
+    import math
+    view, _options, _commands, _state = panel
+    cover = view._cover
+    renderer = cover._default_renderer
+    original_render = renderer.render
+    calls = []
+    def counted_render(painter, bounds):
+        calls.append((bounds.width(), bounds.height()))
+        original_render(painter, bounds)
+    monkeypatch.setattr(renderer, "render", counted_render)
+    for dpr in (1, 1.25, 2):
+        current = cover._target_pixmap(dpr)
+        assert current.devicePixelRatio() == dpr
+        assert current.width() == math.ceil(cover.width() * dpr)
+        assert calls[-1] == (current.width() * 2, current.height() * 2)
+        previous_calls, previous_key = len(calls), current.cacheKey()
+        observed(view)  # 같은 기본 표지의 메타데이터 관측은 래스터화를 반복하지 않는다.
+        assert cover._target_pixmap(dpr).cacheKey() == previous_key
+        assert len(calls) == previous_calls
+    assert len(calls) == 3
+    cover.setFixedSize(42, 42)
+    assert cover._target_pixmap(2).width() == 84
+    assert len(calls) == 4
+
+
+def test_album_source_stays_full_size_while_only_target_dpr_image_is_resampled(panel):
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QColor, QImage
+    view, _options, commands, _state = panel
+    image = QImage(1400, 700, QImage.Format.Format_RGB32)
+    image.fill(QColor("red"))
+    buffer = QBuffer()
+    assert buffer.open(QIODevice.OpenModeFlag.WriteOnly) and image.save(buffer, "PNG")
+    session = replace(spotify(), artwork=bytes(buffer.data()))
+    snapshot = MediaCenterSnapshot(sessions=(session,), bgm_session_id=session.session_id, running=True)
+    view.update_snapshot(snapshot)
+    source_key = view._cover.pixmap().cacheKey()
+    target = view._cover._target_pixmap(1.25)
+    assert view._cover.pixmap().size().toTuple() == (1400, 700)
+    assert target.size().toTuple() == (44, 22) and target.devicePixelRatio() == 1.25
+    target_key = target.cacheKey()
+    view.update_snapshot(snapshot)
+    assert view._cover.pixmap().cacheKey() == source_key
+    assert view._cover._target_pixmap(1.25).cacheKey() == target_key
+    assert view._cover._target_pixmap(2).size().toTuple() == (70, 35)
+    assert view._cover.pixmap().size().toTuple() == (1400, 700)
+    assert not commands
