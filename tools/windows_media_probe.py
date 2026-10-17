@@ -25,7 +25,8 @@ from types import SimpleNamespace
 import uuid
 
 
-SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare", "focus-uia", "focus-lifecycle", "spotify-window-observe")
+SPOTIFY_WINDOW_SCENARIOS = ("spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close")
+SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox", "focus-compare", "focus-uia", "focus-lifecycle", *SPOTIFY_WINDOW_SCENARIOS)
 GAME_FIELDS = ("name", "monitoring_path", "default_volume", "default_muted")
 DISPLAY_FIELDS = (
     "sidebar_clock_enabled", "sidebar_clock_format", "sidebar_playtime_enabled",
@@ -164,35 +165,99 @@ def _spotify_chrome_controls(window: dict) -> dict:
     return {**result, "controls": list(result["controls"]), "worker_stopped": not thread.is_alive()}
 
 
-def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | None) -> dict:
+def _spotify_window_action(window: dict, action: str, *, is_current) -> dict:
+    """읽기 snapshot의 같은 사용자·프로세스·창에 고정 명령을 한 번만 전달한다."""
+    import win32gui
+    import win32process
+    from src.core.spotify_app import SpotifyProcess
+    from src.utils.audio_control import verify_identity
+    if action not in ("minimize", "close"):
+        raise ValueError("지원하지 않는 Spotify 창 명령입니다.")
+    if action == "minimize":
+        import ctypes
+        from ctypes import wintypes
+        show = ctypes.WinDLL("user32", use_last_error=True).ShowWindowAsync
+        show.argtypes, show.restype = [wintypes.HWND, ctypes.c_int], wintypes.BOOL
+    target = SpotifyProcess(window["pid"], window["create_time"], window["path"])
+    hwnd = window["hwnd"]
+    if (not is_current() or not verify_identity(target)
+            or win32process.GetWindowThreadProcessId(hwnd)[1] != target.pid
+            or not win32gui.IsWindowVisible(hwnd) or win32gui.GetWindow(hwnd, 4)
+            or not is_current()):
+        raise ValueError("Spotify 창 identity 또는 요청이 변경되어 명령을 보내지 않았습니다.")
+    if action == "minimize" and win32gui.IsIconic(hwnd):
+        return {"attempted": False, "accepted": None, "already_minimized": True}
+    if not is_current():
+        raise ValueError("Spotify 창 요청이 취소되어 명령을 보내지 않았습니다.")
+    try:
+        if action == "close":
+            win32gui.PostMessage(hwnd, 0x0010, 0, 0)  # WM_CLOSE: 강제 종료·WM_QUIT가 아니다.
+        elif not show(hwnd, 7):  # SW_SHOWMINNOACTIVE; 실제 완료는 trace로 별도 관측한다.
+            raise OSError("Windows가 Spotify 창 최소화 요청을 수락하지 않았습니다.")
+    except Exception as error:
+        return {"attempted": True, "accepted": False, "error_type": type(error).__name__, "error": str(error)}
+    return {"attempted": True, "accepted": True}
+
+
+def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | None,
+                            scenario: str = "spotify-window-observe") -> dict:
+    if scenario not in SPOTIFY_WINDOW_SCENARIOS:
+        raise ValueError("지원하지 않는 Spotify 창 검수 시나리오입니다.")
     from src.core.media_center import MediaCenterRuntime, MediaOptions
     runtime = MediaCenterRuntime(spotify_launcher=lambda: False)
     started = runtime.start(MediaOptions(False, False, False))
-    trace, cleanup, errors, chrome = [], False, [], None
+    trace, cleanup, errors, chrome, request = [], False, [], None, None
     origin = time.monotonic()
     try:
         if started:
             _wait(lambda: runtime.snapshot.sessions or runtime.snapshot.error, 4)
-        for index in range(8):
+        count = 81 if scenario.endswith("-open") else 8 if scenario.endswith("-observe") else 41
+        for index in range(count):
             state = _spotify_window_state(source_appdata, source_local_appdata)
             trace.append({"at_ms": round((time.monotonic() - origin) * 1000, 2),
                           "utc": time.time(), **state,
                           "media": _media_snapshot_payload(runtime.snapshot)})
-            if index < 7:
+            if index == 0 and scenario != "spotify-window-observe":
+                action = scenario.removeprefix("spotify-window-")
+                request = {"action": action, "attempted": False, "accepted": None,
+                           "at_ms": round((time.monotonic() - origin) * 1000, 2), "utc": time.time()}
+                try:
+                    if not started or not runtime.running:
+                        raise ValueError("미디어 관측 worker가 준비되지 않아 명령을 보내지 않았습니다.")
+                    if action == "open":
+                        from src.core.spotify_app import launch_spotify
+                        request["attempted"] = True
+                        request["accepted"] = bool(launch_spotify())  # 고정 spotify: 한 번; Play 없음.
+                        if not request["accepted"]:
+                            raise OSError("Spotify URI 요청을 수락하지 않았습니다.")
+                    else:
+                        candidates = [window for window in state["windows"]
+                                      if window.get("visible") and not window.get("owner") and not window.get("gone")]
+                        if len(candidates) != 1:
+                            raise ValueError("유일한 Spotify 메인 창을 확인하지 못해 명령을 보내지 않았습니다.")
+                        request["target"] = candidates[0]
+                        request.update(_spotify_window_action(candidates[0], action, is_current=lambda: runtime.running))
+                        if request.get("error_type"):
+                            errors.append({"stage": "request", **request})
+                except Exception as error:
+                    request.update(error_type=type(error).__name__, error=str(error))
+                    errors.append({"stage": "request", **request})
+            if index < count - 1:
                 time.sleep(.125)
         candidates = [window for window in trace[-1]["windows"]
                       if window.get("visible") and not window.get("owner") and not window.get("gone")]
-        if len(candidates) == 1:
+        if len(candidates) == 1 and scenario in ("spotify-window-observe", "spotify-window-open"):
             chrome = _spotify_chrome_controls(candidates[0])
     except Exception as error:
         errors.append({"error_type": type(error).__name__, "error": str(error)})
     finally:
         cleanup = runtime.stop(timeout_seconds=2)
     return {"ok": bool(started and trace and cleanup and not errors), "supported": True,
-            "scenario": "spotify-window-observe", "trace": trace, "chrome": chrome,
+            "scenario": scenario, "trace": trace, "chrome": chrome, "request": request,
             "errors": errors, "cleanup_ok": cleanup, "writes": [],
-            "limits": ["ok는 읽기 진단 완료이며 최소화·트레이·재생 유지의 성공 판정이 아닙니다.",
-                       "Spotify 실행·창 조작·메뉴 클릭·재생 명령·설정 변경을 수행하지 않습니다."]}
+            "limits": ["ok는 관측 절차 완료이며 창 최소화·트레이·재생 유지의 성공 판정이 아닙니다.",
+                       "선택한 고정 창 명령 또는 URI 요청만 한 번 실행하며 Play·복원·재전송·강제 종료·설정 변경은 없습니다.",
+                       "WM_CLOSE의 트레이 유지 여부는 Spotify 설정과 후속 process·GSMTC 관측으로 구분합니다."]}
 
 
 def _isolated_environment(result_dir: Path) -> dict[str, str | None]:
@@ -1645,7 +1710,9 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
     sys.path.insert(0, str(repo))
     if scenario == "observe":
         return _observe()
-    if scenario == "spotify-window-observe":
+    if scenario in SPOTIFY_WINDOW_SCENARIOS:
+        if scenario != "spotify-window-observe":
+            return _spotify_window_observe(source_appdata, original_environment["LOCALAPPDATA"], scenario)
         return _spotify_window_observe(source_appdata, original_environment["LOCALAPPDATA"])
     if scenario == "preview":
         return _preview(source_appdata, result_dir)

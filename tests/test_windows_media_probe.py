@@ -117,6 +117,90 @@ def test_spotify_window_observe_records_native_changes_without_window_or_playbac
     json.dumps(result)
 
 
+@pytest.mark.parametrize("action", ["close", "minimize"])
+@pytest.mark.parametrize("condition", ["valid", "cancelled", "pid_reused", "window_changed", "hidden", "owned", "already_iconic", "native_error"])
+def test_spotify_window_action_verifies_identity_and_sends_at_most_one_request(monkeypatch, action, condition):
+    import ctypes
+    from src.utils import audio_control
+    calls = []
+    window = {"hwnd": 11, "pid": 41, "create_time": 123, "path": "C:/Spotify.exe"}
+    def native(*args):
+        calls.append(args)
+        if condition == "native_error":
+            raise OSError("native request failed")
+        return True
+    class Show:
+        def __call__(self, *args):
+            return native(*args)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: SimpleNamespace(ShowWindowAsync=Show()), raising=False)
+    monkeypatch.setattr(audio_control, "verify_identity", lambda process: condition != "pid_reused")
+    monkeypatch.setitem(sys.modules, "win32gui", SimpleNamespace(
+        IsWindowVisible=lambda hwnd: condition != "hidden", GetWindow=lambda *args: condition == "owned",
+        IsIconic=lambda hwnd: condition == "already_iconic", PostMessage=native))
+    monkeypatch.setitem(sys.modules, "win32process", SimpleNamespace(
+        GetWindowThreadProcessId=lambda hwnd: (1, 99 if condition == "window_changed" else 41)))
+    if condition == "native_error":
+        result = probe._spotify_window_action(window, action, is_current=lambda: True)
+        assert result == {"attempted": True, "accepted": False, "error_type": "OSError", "error": "native request failed"}
+        assert len(calls) == 1
+    elif condition in ("cancelled", "pid_reused", "window_changed", "hidden", "owned"):
+        with pytest.raises(ValueError, match="identity"):
+            probe._spotify_window_action(window, action, is_current=lambda: condition != "cancelled")
+        assert not calls
+    else:
+        result = probe._spotify_window_action(window, action, is_current=lambda: True)
+        if condition == "already_iconic" and action == "minimize":
+            assert result == {"attempted": False, "accepted": None, "already_minimized": True}
+            assert not calls
+        else:
+            assert result == {"attempted": True, "accepted": True}
+            assert calls == [(11, 0x0010, 0, 0)] if action == "close" else calls == [(11, 7)]
+
+
+@pytest.mark.parametrize("scenario, duration", [("spotify-window-open", 10), ("spotify-window-close", 5), ("spotify-window-minimize", 5)])
+def test_spotify_window_experiments_keep_warm_identity_and_trace_post_request_without_playback(tmp_path, monkeypatch, scenario, duration):
+    from src.core import media_center, spotify_app
+    from src.core.media_sessions import MediaSessionInfo
+    clock, launches, actions, chrome, options = [0.0], [], [], [], []
+    window = {"hwnd": 11, "pid": 41, "create_time": -100, "path": "C:/Spotify.exe", "visible": True, "owner": 0}
+    session = MediaSessionInfo("spotify", "Spotify.exe", status="paused", artwork=b"private image")
+    snapshot = media_center.MediaCenterSnapshot(sessions=(session,), running=True)
+    class Runtime:
+        running = True
+        def __init__(self, spotify_launcher):
+            assert not spotify_launcher()
+            self.snapshot = snapshot
+        def start(self, value):
+            options.append(value)
+            return True
+        def stop(self, **kwargs):
+            self.running = False
+            return True
+    monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
+    monkeypatch.setattr(spotify_app, "launch_spotify", lambda: launches.append("spotify:") or True)
+    monkeypatch.setattr(probe, "_wait", lambda predicate, seconds: predicate())
+    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(probe, "_spotify_window_state", lambda *_args: {
+        "processes": [{"pid": 41, "create_time": -100, "path": "C:/Spotify.exe"}],
+        "windows": [{**window, "iconic": clock[0] < .5}], "foreground_hwnd": 11})
+    monkeypatch.setattr(probe, "_spotify_window_action", lambda target, action, is_current: (
+        actions.append((target, action, is_current())) or {"attempted": True, "accepted": True}))
+    monkeypatch.setattr(probe, "_spotify_chrome_controls", lambda target: chrome.append(target) or {"controls": []})
+    result = probe._spotify_window_observe(tmp_path, None, scenario)
+    assert result["ok"] and result["cleanup_ok"] and not result["writes"]
+    assert result["request"]["accepted"] and result["request"]["attempted"]
+    assert len(result["trace"]) == duration * 8 + 1
+    assert result["trace"][-1]["at_ms"] == duration * 1000
+    assert all(row["media"]["sessions"][0]["status"] == "paused" for row in result["trace"])
+    assert all(not any((value.auto_bgm, value.background_mute, value.auto_focus)) for value in options)
+    if scenario.endswith("-open"):
+        assert launches == ["spotify:"] and not actions and len(chrome) == 1
+    else:
+        assert not launches and actions == [(window | {"iconic": True}, scenario.removeprefix("spotify-window-"), True)] and not chrome
+    json.dumps(result)
+
+
 def source_database(tmp_path):
     roaming = tmp_path / "production-roaming"
     dbpath = roaming / "HomeworkHelper/homework_helper_data/app_data.db"
