@@ -102,11 +102,15 @@ class Audio:
     def reconcile(self, foreground_pid, *, background_mute):
         self.threads.add(threading.get_ident())
         self.calls.append((foreground_pid, background_mute))
-        return tuple(GameAudioObservation(
-            target, True, 0.5, target.user_muted,
-            background_mute and target.pid != foreground_pid,
-            self.observed.get(target.pid, not target.user_muted),
-        ) for target in self.targets)
+        observations = []
+        for target in self.targets:
+            policy_muted = background_mute and target.pid != foreground_pid
+            muted = target.user_muted or policy_muted
+            observations.append(GameAudioObservation(
+                target, True, 0.5, muted, policy_muted,
+                self.observed.get(target.pid, not muted),
+            ))
+        return tuple(observations)
 
     def cleanup(self):
         self.threads.add(threading.get_ident())

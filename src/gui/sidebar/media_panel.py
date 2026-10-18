@@ -352,7 +352,6 @@ class MediaCenterPanel(QWidget):
         self._play_button.setIcon(self._icon("pause" if playing else "play"))
         play_label = "BGM 일시정지" if playing else "BGM 재생" if selected else "Spotify 열고 재생"
         self._play_button.setAccessibleName(play_label)
-        self._play_button.setToolTip(play_label)
         control = ready and self._on_command is not None
         known = selected is not None and selected.status in {"opened", "stopped", "paused", "playing"}
         # 명시적 Play는 runtime이 최신 상태를 확인하고 준비 대기까지 소유한다.
@@ -375,6 +374,8 @@ class MediaCenterPanel(QWidget):
             status = "연결 대기"
         else:
             status = {"playing": "재생 중", "paused": "일시정지", "stopped": "정지", "opened": "준비됨"}.get(selected.status, "상태 확인")
+        self._play_button.setToolTip(f"{play_label} · {status}")
+        self._play_button.setAccessibleDescription(f"{play_label} · {status}")
         self._spotify_button.setToolTip(f"Spotify 열기 · {status}")
         self._spotify_button.setAccessibleDescription(f"Spotify 창 열기 · 재생 상태 변경 없음 · {status}")
         self._auto_button.setToolTip(

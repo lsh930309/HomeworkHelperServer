@@ -308,6 +308,7 @@ class MediaCenterRuntime:
                 self._focus.cancel()
             if audio is not None:
                 try:
+                    audio.update_targets(self._inputs()[0])
                     self._cleanup_ok = audio.cleanup() is not False
                     if not self._cleanup_ok:
                         self._failure("일부 게임 음소거를 복원하지 못했습니다.")
@@ -342,10 +343,11 @@ class MediaCenterRuntime:
                                 if item.target.pid == foreground_pid), None)
                 audible = (current.audible if current.available else None) if current else False
                 # 비활성 게임의 자동 음소거도 확인돼야 전체가 조용하다고 판단할 수 있다.
-                if audible is False and options.background_mute and any(
-                    not item.available or item.audible is None for item in self._observations
-                ):
-                    audible = None
+                if options.background_mute:
+                    if any(item.available and item.audible is True for item in self._observations):
+                        audible = True
+                    elif any(not item.available or item.audible is None for item in self._observations):
+                        audible = None
                 self._game_audible = audible if known and effective else None
                 if options.auto_focus and not autofocus:
                     self._focus = self._focus_factory(started_at_wall=time.time(), native=self._native)
@@ -416,7 +418,7 @@ class MediaCenterRuntime:
             policy_commands = any(command.action not in {"open", "prepare", "volume", "mute"} for command in commands)
             if not policy_commands and automatic is not None and not self._stop.is_set():
                 if automatic == "pause" and self._selected is not None:
-                    await self._control(self._selected, "pause", generation)
+                    await self._control(self._selected, "pause", generation, automatic=True)
                 elif automatic == "play":
                     await self._play(automatic=True, generation=generation)
             # URI 실행·의도 변경 이전에 얻은 세션 관측으로 새 준비를 완료하지 않는다.
@@ -664,8 +666,10 @@ class MediaCenterRuntime:
     async def _control(self, session_id, action, generation=None, *, automatic=False):
         if self._stop.is_set() or (generation is not None and generation != self._inputs()[2]):
             return
-        if automatic and not self._automatic_allowed(generation):
-            return
+        if automatic:
+            allowed = self._automatic_allowed(generation) if action == "play" else self._inputs()[1].auto_bgm
+            if not allowed:
+                return
         if not any(item.session_id == session_id for item in self._sessions):
             self._failure("미디어 세션이 변경되어 이전 요청을 실행하지 않았습니다.")
             return

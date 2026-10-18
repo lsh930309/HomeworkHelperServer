@@ -254,6 +254,7 @@ def _spotify_window_startup(source_appdata: Path, source_local_appdata: str | No
     from src.core.media_center import MediaCenterRuntime, MediaOptions
     from src.core.media_sessions import WindowsMediaSessions, is_spotify_session
     from src.core.spotify_app import launch_spotify
+    from src.core.spotify_audio import SpotifyAudioController
     ready = threading.Event()
     observed, launches, events, trace, errors, first, visible = [], [], [], [], [], {}, {}
     origin = time.monotonic()
@@ -316,9 +317,11 @@ def _spotify_window_startup(source_appdata: Path, source_local_appdata: str | No
     def observe_comparison(started_after, *, expected=None):
         initial_minimize(started_after, is_current=lambda: runtime.running and time.monotonic() < deadline)
         return None  # 비교 action은 위에서 한 번만 적용하며 제품 stage에 창을 넘기지 않는다.
+    reader = lambda: _spotify_probe_processes(source_appdata, source_local_appdata)
     runtime = MediaCenterRuntime(backend_factory=ObservedSessions,
         spotify_launcher=lambda: launch(False), dj_launcher=lambda: launch(True),
-        spotify_process_reader=lambda: _spotify_probe_processes(source_appdata, source_local_appdata),
+        spotify_process_reader=reader,
+        spotify_audio_factory=lambda: SpotifyAudioController(process_reader=reader),
         # 과거 비교 시나리오는 자체 1회 action만 사용한다. 제품의 지연 닫기는 중복 적용하지 않는다.
         spotify_window_reader=observe_comparison,
         spotify_window_closer=lambda *_args, **_kwargs: False)
@@ -392,16 +395,16 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
     if scenario not in SPOTIFY_WINDOW_SCENARIOS:
         raise ValueError("지원하지 않는 Spotify 창 검수 시나리오입니다.")
     from src.core.media_center import MediaCenterRuntime, MediaOptions
+    from src.core.spotify_audio import SpotifyAudioController
+    reader = lambda: _spotify_probe_processes(source_appdata, source_local_appdata)
     opening = scenario == "spotify-window-open"
     native_open, command_requests, option_requests, forbidden_controls = [], [], [], []
     panel = app = None
     if opening:
         from PySide6.QtWidgets import QApplication
         from src.core.media_sessions import WindowsMediaSessions
-        from src.core.spotify_audio import SpotifyAudioController
         from src.core.spotify_app import launch_spotify
         app = QApplication.instance() or QApplication([])
-        reader = lambda: _spotify_probe_processes(source_appdata, source_local_appdata)
 
         def open_once():
             row = {"attempted": True, "accepted": False, "utc": time.time()}
@@ -434,7 +437,9 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
             spotify_audio_factory=lambda: ReadOnlySpotifyAudio(process_reader=reader),
         )
     else:
-        runtime = MediaCenterRuntime(spotify_launcher=lambda: False)
+        runtime = MediaCenterRuntime(spotify_launcher=lambda: False,
+            spotify_process_reader=reader,
+            spotify_audio_factory=lambda: SpotifyAudioController(process_reader=reader))
     started = runtime.start(MediaOptions(False, False, False))
     trace, cleanup, errors, chrome, request = [], False, [], None, None
     origin = time.monotonic()
@@ -618,13 +623,17 @@ def _versions() -> dict:
     return result
 
 
-def _observe() -> dict:
+def _observe(source_appdata: Path, source_local_appdata: str | None) -> dict:
     from src.core.media_center import MediaCenterRuntime, MediaOptions
     from src.core.game_focus import WindowsGameFocusNative
+    from src.core.spotify_audio import SpotifyAudioController
     from src.utils import audio_control
 
     first = threading.Event()
-    runtime = MediaCenterRuntime(on_change=lambda _snapshot: first.set())
+    reader = lambda: _spotify_probe_processes(source_appdata, source_local_appdata)
+    runtime = MediaCenterRuntime(on_change=lambda _snapshot: first.set(),
+        spotify_process_reader=reader,
+        spotify_audio_factory=lambda: SpotifyAudioController(process_reader=reader))
     started = runtime.start(MediaOptions(False, False, False))
     samples = []
     cleanup = True
@@ -1029,12 +1038,16 @@ def _focus(result_dir: Path) -> dict:
             "limits": ["Windows 전경 전환 거절은 요청 수락과 실제 전환 결과로 구분합니다."]}
 
 
-def _bgm() -> dict:
+def _bgm(source_appdata: Path, source_local_appdata: str | None) -> dict:
     from src.core.media_center import MediaCenterRuntime, MediaOptions
     from src.core.media_sessions import is_spotify_session
+    from src.core.spotify_audio import SpotifyAudioController
 
     first = threading.Event()
-    runtime = MediaCenterRuntime(on_change=lambda _snapshot: first.set(), spotify_launcher=lambda: False)
+    reader = lambda: _spotify_probe_processes(source_appdata, source_local_appdata)
+    runtime = MediaCenterRuntime(on_change=lambda _snapshot: first.set(), spotify_launcher=lambda: False,
+        spotify_process_reader=reader,
+        spotify_audio_factory=lambda: SpotifyAudioController(process_reader=reader))
     started = runtime.start(MediaOptions(False, False, False))
     steps, restored, cleanup, original = [], False, False, None
     result = {"ok": False, "supported": False, "scenario": "bgm"}
@@ -1082,11 +1095,12 @@ def _bgm() -> dict:
     return result
 
 
-def _prepare_spotify() -> dict:
+def _prepare_spotify(source_appdata: Path, source_local_appdata: str | None) -> dict:
     """고정 prepare 명령 한 번만 실행한다. 로그인 정보 조회·Play 요청은 없다."""
     from src.core.media_center import MediaCenterRuntime, MediaOptions
     from src.core.media_sessions import is_spotify_session
     from src.core.spotify_app import launch_spotify
+    from src.core.spotify_audio import SpotifyAudioController
 
     launches = []
     def launch_once():
@@ -1097,7 +1111,10 @@ def _prepare_spotify() -> dict:
         except Exception as error:
             launches.append({"uri_accepted": False, "type": type(error).__name__, "error": str(error)})
             raise
-    runtime = MediaCenterRuntime(spotify_launcher=launch_once)
+    reader = lambda: _spotify_probe_processes(source_appdata, source_local_appdata)
+    runtime = MediaCenterRuntime(spotify_launcher=launch_once,
+        spotify_process_reader=reader,
+        spotify_audio_factory=lambda: SpotifyAudioController(process_reader=reader))
     started = runtime.start(MediaOptions(False, False, False))
     queued, sessions, cleanup = False, (), False
     try:
@@ -1135,18 +1152,22 @@ def _prepare_spotify() -> dict:
     return result
 
 
-def _triggers(result_dir: Path) -> dict:
+def _triggers(result_dir: Path, source_appdata: Path, source_local_appdata: str | None) -> dict:
     """실제 Spotify·WASAPI 통합. foreground 입력만 명시적으로 합성한다."""
     import psutil
     from src.core.game_audio import GameAudioTarget
     from src.core.media_center import MediaCenterRuntime, MediaOptions
     from src.core.media_sessions import is_spotify_session
+    from src.core.spotify_audio import SpotifyAudioController
     from src.utils import audio_control
 
     deadline = time.monotonic() + 60  # fixture 준비·정상 정리 여유를 포함해 80초 안에 종료한다.
     foreground = [os.getpid() + 100000, 1]
+    reader = lambda: _spotify_probe_processes(source_appdata, source_local_appdata)
     runtime = MediaCenterRuntime(native_factory=lambda: SimpleNamespace(
-        foreground=lambda: tuple(foreground)), spotify_launcher=lambda: False)
+        foreground=lambda: tuple(foreground)), spotify_launcher=lambda: False,
+        spotify_process_reader=reader,
+        spotify_audio_factory=lambda: SpotifyAudioController(process_reader=reader))
     result = {"ok": False, "supported": False, "scenario": "triggers", "foreground_input": "synthetic",
               "limits": ["foreground만 합성 입력이며 Spotify/GSMTC/WASAPI는 실제 Windows 경로입니다.",
                          "실제 Firefox 재생·종료 감지는 이 시나리오에서 검수하지 않습니다."]}
@@ -1391,10 +1412,11 @@ def _close_firefox(browser, diagnostics=None) -> bool:
         return False
 
 
-def _firefox(result_dir: Path) -> dict:
+def _firefox(result_dir: Path, source_appdata: Path, source_local_appdata: str | None) -> dict:
     from src.core.game_focus import WindowsGameFocusNative
     from src.core.media_center import MediaCenterRuntime, MediaOptions
     from src.core.media_sessions import is_spotify_session
+    from src.core.spotify_audio import SpotifyAudioController
     executable = _firefox_path()
     result = {"ok": False, "supported": False, "scenario": "firefox",
               "limits": ["로컬 HTML/WAV와 새 전용 프로필만 사용합니다. 운영 Firefox 프로필·확장·원격 디버깅은 사용하지 않습니다.",
@@ -1406,7 +1428,10 @@ def _firefox(result_dir: Path) -> dict:
     trace = deque(maxlen=400)
     def on_change(snapshot):
         trace.append((time.monotonic(), snapshot))
-    runtime = MediaCenterRuntime(on_change=on_change, spotify_launcher=lambda: False)
+    reader = lambda: _spotify_probe_processes(source_appdata, source_local_appdata)
+    runtime = MediaCenterRuntime(on_change=on_change, spotify_launcher=lambda: False,
+        spotify_process_reader=reader,
+        spotify_audio_factory=lambda: SpotifyAudioController(process_reader=reader))
     native = WindowsGameFocusNative()
     original_foreground = native.foreground()
     original, browser, steps, errors = None, None, [], []
@@ -2025,7 +2050,7 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
     original_environment = _isolated_environment(result_dir)
     sys.path.insert(0, str(repo))
     if scenario == "observe":
-        return _observe()
+        return _observe(source_appdata, original_environment["LOCALAPPDATA"])
     if scenario in ("spotify-window-startup", "spotify-window-startup-close", "spotify-window-startup-delayed-close"):
         return _spotify_window_startup(source_appdata, original_environment["LOCALAPPDATA"],
                                        first_action="minimize" if scenario == "spotify-window-startup" else "close",
@@ -2041,18 +2066,18 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
     if scenario == "focus":
         return _focus(result_dir)
     if scenario == "prepare-spotify":
-        return _prepare_spotify()
+        return _prepare_spotify(source_appdata, original_environment["LOCALAPPDATA"])
     if scenario == "triggers":
-        return _triggers(result_dir)
+        return _triggers(result_dir, source_appdata, original_environment["LOCALAPPDATA"])
     if scenario == "firefox":
-        return _firefox(result_dir)
+        return _firefox(result_dir, source_appdata, original_environment["LOCALAPPDATA"])
     if scenario == "focus-compare":
         return _focus_compare(source_appdata, result_dir)
     if scenario == "focus-uia":
         return _focus_uia(source_appdata, result_dir)
     if scenario == "focus-lifecycle":
         return _focus_lifecycle(source_appdata, result_dir)
-    return _bgm()
+    return _bgm(source_appdata, original_environment["LOCALAPPDATA"])
 
 
 if __name__ == "__main__":

@@ -13,6 +13,133 @@ import pytest
 from tools import windows_media_probe as probe
 
 
+@pytest.fixture(autouse=True)
+def isolated_profile(tmp_path, monkeypatch):
+    for name, directory in (("APPDATA", "roaming"), ("LOCALAPPDATA", "local"),
+                            ("HH_TEST_APPDATA_DIR", "state"), ("XDG_CACHE_HOME", "cache")):
+        monkeypatch.setenv(name, str(tmp_path / "isolated" / directory))
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture
+def spotify_profile_runtime(tmp_path, monkeypatch):
+    """실제 runtime·프로세스 경로 판정·믹서를 쓰고 모든 OS I/O는 fake한다."""
+    import psutil
+    from src.core import game_focus, media_center, media_sessions, spotify_app
+    from src.utils import audio_control
+
+    source = tmp_path / "actual-roaming"
+    local = tmp_path / "actual-local"
+    program_files = tmp_path / "program-files"
+    monkeypatch.setenv("APPDATA", str(source))
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.setenv("ProgramFiles", str(program_files))
+    process_path, launches, controls, closed = [None], [], [], []
+    process = SimpleNamespace(
+        pid=41, info={"name": "Spotify.exe"}, create_time=lambda: 123,
+        exe=lambda: str(process_path[0]), is_running=lambda: True,
+    )
+    monkeypatch.setattr(spotify_app, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(psutil, "process_iter", lambda _fields: (process,) if process_path[0] else ())
+    monkeypatch.setitem(sys.modules, "src.core.process_monitor", SimpleNamespace(
+        _belongs_to_current_user_session=lambda _process: True))
+    monkeypatch.setattr(spotify_app, "launch_spotify", lambda **_kwargs: launches.append(True) or True)
+    monkeypatch.setattr(audio_control, "enumerate_sessions", lambda: (
+        SimpleNamespace(pid=41, endpoint_id="fake-endpoint", get_volume=lambda: .37,
+                        get_mute=lambda: False),))
+    monkeypatch.setattr(audio_control, "verify_identity", lambda _process: True)
+    monkeypatch.setattr(game_focus.WindowsGameFocusNative, "foreground", lambda _self: (99, 100))
+
+    class Sessions:
+        def __init__(self):
+            self.observations = 0
+        async def snapshot(self):
+            self.observations += 1
+            return (() if self.observations < 3 else (
+                media_sessions.MediaSessionInfo("spotify", "Spotify.exe", status="paused", can_play=True),))
+        async def control(self, session_id, action):
+            controls.append((session_id, action))
+            return True
+        def close(self):
+            closed.append(True)
+
+    class Runtime(media_center.MediaCenterRuntime):
+        POLL_SECONDS = .01
+        PREPARE_TIMEOUT_SECONDS = 1
+        def __init__(self, **kwargs):
+            super().__init__(
+                backend_factory=Sessions,
+                native_factory=lambda: SimpleNamespace(foreground=lambda: (99, 100)),
+                audio_factory=lambda: SimpleNamespace(update_targets=lambda _targets: None,
+                    reconcile=lambda *_args, **_kwargs: (), cleanup=lambda: True),
+                focus_factory=lambda **_kwargs: SimpleNamespace(cancel=lambda: None),
+                **kwargs,
+            )
+    monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
+    return SimpleNamespace(source=source, local=local, program_files=program_files,
+                           process_path=process_path, launches=launches, controls=controls, closed=closed)
+
+
+@pytest.mark.parametrize("install", ["roaming", "local", "store", "cold"])
+def test_prepare_dispatch_preserves_running_spotify_before_delayed_gsmtc(
+        tmp_path, spotify_profile_runtime, install):
+    profile = spotify_profile_runtime
+    profile.process_path[0] = {
+        "roaming": profile.source / "Spotify/Spotify.exe",
+        "local": profile.local / "Spotify/Spotify.exe",
+        "store": profile.program_files / "WindowsApps/SpotifyAB.SpotifyMusic_1.0__zpdnekdrzrea0/Spotify.exe",
+        "cold": None,
+    }[install]
+    result = probe.run(tmp_path, profile.source, tmp_path / "result", "prepare-spotify")
+    assert result["ok"] and result["session_observed"] and result["cleanup_ok"]
+    assert result["uri_requested"] is (install == "cold")
+    assert profile.launches == ([True] if install == "cold" else [])
+    assert not profile.controls and profile.closed == [True]
+    assert os.environ["APPDATA"] == str(tmp_path / "result/media-fixture/roaming")
+    assert os.environ["LOCALAPPDATA"] == str(tmp_path / "result/media-fixture/local")
+    assert os.environ["HH_TEST_APPDATA_DIR"] == str(tmp_path / "result/media-fixture/state")
+
+
+def test_observe_dispatch_reads_actual_per_user_spotify_mixer_under_isolation(
+        tmp_path, spotify_profile_runtime):
+    profile = spotify_profile_runtime
+    profile.process_path[0] = profile.source / "Spotify/Spotify.exe"
+    result = probe.run(tmp_path, profile.source, tmp_path / "result", "observe")
+    assert result["ok"] and result["cleanup_ok"]
+    assert result["samples"][-1]["spotify_audio"] == {"volume": 37, "muted": False, "available": True}
+    assert not profile.launches and not profile.controls and profile.closed == [True]
+    assert result["writes"] == []
+    assert os.environ["APPDATA"] == str(tmp_path / "result/media-fixture/roaming")
+    assert os.environ["LOCALAPPDATA"] == str(tmp_path / "result/media-fixture/local")
+
+
+@pytest.mark.parametrize("scenario", ["observe", "prepare-spotify", "bgm", "triggers", "firefox",
+                                     *probe.SPOTIFY_WINDOW_SCENARIOS])
+def test_every_media_runner_uses_source_profile_for_process_and_mixer_reads(
+        tmp_path, monkeypatch, spotify_profile_runtime, scenario):
+    from src.core import media_center
+    profile = spotify_profile_runtime
+    profile.process_path[0] = profile.local / "Spotify/Spotify.exe"
+    seen = []
+    class InspectedRuntime(Exception):
+        pass
+    def inspect_runtime(**kwargs):
+        process, = kwargs["spotify_process_reader"]()
+        assert process.pid == 41 and process.path == str(profile.process_path[0])
+        mixer = kwargs["spotify_audio_factory"]().snapshot()
+        assert mixer.available and mixer.volume == 37 and mixer.muted is False
+        seen.append(True)
+        raise InspectedRuntime
+    monkeypatch.setattr(media_center, "MediaCenterRuntime", inspect_runtime)
+    monkeypatch.setattr(probe, "_firefox_path", lambda: tmp_path / "Firefox/firefox.exe")
+    with pytest.raises(InspectedRuntime):
+        probe.run(tmp_path, profile.source, tmp_path / "result", scenario)
+    assert seen == [True] and not profile.launches and not profile.controls
+    assert os.environ["APPDATA"] == str(tmp_path / "result/media-fixture/roaming")
+    assert os.environ["LOCALAPPDATA"] == str(tmp_path / "result/media-fixture/local")
+    assert os.environ["HH_TEST_APPDATA_DIR"] == str(tmp_path / "result/media-fixture/state")
+
+
 def test_media_json_projection_keeps_timing_and_image_size_without_image_bytes():
     from src.core.media_center import MediaCenterSnapshot
     from src.core.media_sessions import MediaSessionInfo
@@ -93,7 +220,7 @@ def test_spotify_window_observe_records_native_changes_without_window_or_playbac
     snapshot = media_center.MediaCenterSnapshot(
         sessions=(MediaSessionInfo("spotify", "Spotify.exe", artwork=b"image", status="playing"),), running=True)
     class Runtime:
-        def __init__(self, spotify_launcher):
+        def __init__(self, spotify_launcher, **_kwargs):
             assert spotify_launcher() is False
             self.snapshot = snapshot
         def start(self, options):
@@ -511,7 +638,9 @@ def test_run_isolates_every_environment_before_native_or_gui_import(tmp_path, mo
     for name in ("APPDATA", "LOCALAPPDATA", "HH_TEST_APPDATA_DIR"):
         monkeypatch.setenv(name, "original-operational-profile")
     seen = []
-    def inspect():
+    def inspect(source_appdata, source_local_appdata):
+        assert source_appdata == tmp_path / "operational"
+        assert source_local_appdata == "original-operational-profile"
         seen.extend(Path(os.environ[name]) for name in
                     ("APPDATA", "LOCALAPPDATA", "HH_TEST_APPDATA_DIR"))
         assert all(path.is_relative_to(tmp_path / "result/media-fixture") for path in seen)
@@ -540,14 +669,14 @@ def test_unknown_scenario_does_not_create_fixture(tmp_path):
     assert not (tmp_path / "result").exists()
 
 
-def test_observation_preserves_native_stage_errors_and_always_cleans_up(monkeypatch):
+def test_observation_preserves_native_stage_errors_and_always_cleans_up(tmp_path, monkeypatch):
     from src.core import media_center, game_focus
     from src.utils import audio_control
     cleanup = []
     class Runtime:
         running = False
         snapshot = media_center.MediaCenterSnapshot(error="WinRT 준비 실패")
-        def __init__(self, on_change):
+        def __init__(self, on_change, **_kwargs):
             self.on_change = on_change
         def start(self, options):
             assert not any((options.auto_bgm, options.background_mute, options.auto_focus))
@@ -561,7 +690,7 @@ def test_observation_preserves_native_stage_errors_and_always_cleans_up(monkeypa
     monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
     monkeypatch.setattr(game_focus.WindowsGameFocusNative, "foreground", lambda _self: failed())
     monkeypatch.setattr(audio_control, "enumerate_sessions", failed)
-    result = probe._observe()
+    result = probe._observe(tmp_path, None)
     assert result["ok"] is False and result["cleanup_ok"] and cleanup == [True]
     assert result["samples"][0]["error"]
     assert {row["stage"] for row in result["native_errors"]} == {"foreground", "audio"}
@@ -681,7 +810,7 @@ def test_focus_distinguishes_request_from_native_result_and_restores_foreground(
 
 @pytest.mark.parametrize("status, actions", [("playing", ["pause", "play"]), ("paused", ["play", "pause"]),
                                             ("stopped", []), ("missing", []), ("multiple", [])])
-def test_bgm_only_controls_unambiguous_existing_session_and_restores_state(monkeypatch, status, actions):
+def test_bgm_only_controls_unambiguous_existing_session_and_restores_state(tmp_path, monkeypatch, status, actions):
     from src.core import media_center
     from src.core.media_sessions import MediaSessionInfo
     calls, cleanup = [], []
@@ -690,7 +819,7 @@ def test_bgm_only_controls_unambiguous_existing_session_and_restores_state(monke
     sessions = (() if status == "missing" else (initial, initial) if status == "multiple" else (initial,))
     class Runtime:
         running = True
-        def __init__(self, on_change, spotify_launcher):
+        def __init__(self, on_change, spotify_launcher, **_kwargs):
             self.on_change, self.launcher = on_change, spotify_launcher
             self.snapshot = media_center.MediaCenterSnapshot(sessions=sessions, bgm_session_id="spotify", running=True)
         def start(self, options):
@@ -709,7 +838,7 @@ def test_bgm_only_controls_unambiguous_existing_session_and_restores_state(monke
             return True
     monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
     monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
-    result = probe._bgm()
+    result = probe._bgm(tmp_path, None)
     json.dumps(result)
     assert result["ok"] is bool(actions) and result["supported"] is bool(actions)
     assert calls == actions and cleanup == [True]
@@ -724,7 +853,7 @@ def test_bgm_only_controls_unambiguous_existing_session_and_restores_state(monke
     ("warm-timeout", None, False),
 ])
 def test_explicit_spotify_prepare_observes_ready_session_without_reopening_warm_app(
-        monkeypatch, mode, uri_accepted, session_present):
+        tmp_path, monkeypatch, mode, uri_accepted, session_present):
     from src.core import media_center, media_sessions, spotify_app
     calls, cleanup, launches, waits, instances = [], [], [], [], []
     session = media_sessions.MediaSessionInfo("spotify", "Spotify.exe", status="paused")
@@ -733,7 +862,7 @@ def test_explicit_spotify_prepare_observes_ready_session_without_reopening_warm_
         return uri_accepted
     class Runtime:
         PREPARE_TIMEOUT_SECONDS = 60
-        def __init__(self, spotify_launcher):
+        def __init__(self, spotify_launcher, **_kwargs):
             self.launcher = spotify_launcher
             self.snapshot = media_center.MediaCenterSnapshot(
                 sessions=(session,) if mode == "warm-ready" else (), running=True)
@@ -760,7 +889,7 @@ def test_explicit_spotify_prepare_observes_ready_session_without_reopening_warm_
     monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
     monkeypatch.setattr(spotify_app, "launch_spotify", launch)
     monkeypatch.setattr(probe, "_wait", wait)
-    result = probe._prepare_spotify()
+    result = probe._prepare_spotify(tmp_path, None)
     json.dumps(result)
     assert result["ok"] is (session_present and (mode != "cold" or uri_accepted))
     assert result["uri_requested"] is (mode == "cold")
@@ -773,7 +902,7 @@ def test_explicit_spotify_prepare_observes_ready_session_without_reopening_warm_
         assert result["reason"]
 
 
-def test_spotify_prepare_does_not_hide_request_failure_when_a_session_is_present(monkeypatch):
+def test_spotify_prepare_does_not_hide_request_failure_when_a_session_is_present(tmp_path, monkeypatch):
     from src.core import media_center
     from src.core.media_sessions import MediaSessionInfo
     snapshot = media_center.MediaCenterSnapshot(
@@ -787,7 +916,7 @@ def test_spotify_prepare_does_not_hide_request_failure_when_a_session_is_present
     )
     monkeypatch.setattr(media_center, "MediaCenterRuntime", lambda **_kwargs: runtime)
     monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
-    result = probe._prepare_spotify()
+    result = probe._prepare_spotify(tmp_path, None)
     assert not result["ok"] and result["session_observed"]
     assert result["error"] == result["reason"] == "Spotify 준비 요청 실패"
     assert result["uri_requested"] is False and result["uri_accepted"] is None
@@ -919,7 +1048,7 @@ def test_triggers_integrate_state_edges_and_restore_without_operational_data(tmp
         def set_mute(self, value): self.muted = value
     session = Session()
     class Runtime:
-        def __init__(self, native_factory, spotify_launcher):
+        def __init__(self, native_factory, spotify_launcher, **_kwargs):
             self.native = native_factory()
             assert self.native.foreground()[0] != os.getpid() and spotify_launcher() is False
             self.snapshot = media_center.MediaCenterSnapshot(sessions=(initial, other) if other_playing else (initial,), running=True)
@@ -949,7 +1078,7 @@ def test_triggers_integrate_state_edges_and_restore_without_operational_data(tmp
     monkeypatch.setattr(audio_control, "enumerate_sessions", lambda: (session,))
     monkeypatch.setattr(audio_control, "verify_identity", lambda target: target.pid == 111)
     monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
-    result = probe._triggers(tmp_path)
+    result = probe._triggers(tmp_path, tmp_path, None)
     json.dumps(result)
     assert result["foreground_input"] == "synthetic" and cleaned == active == [True]
     if other_playing:
@@ -989,7 +1118,7 @@ def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, mo
     runtime_holder, launches, closes, commands, cleanup = [], [], [], [], []
     close_pending = []
     class Runtime:
-        def __init__(self, spotify_launcher, on_change):
+        def __init__(self, spotify_launcher, on_change, **_kwargs):
             assert spotify_launcher() is False
             self.on_change = on_change
             self.snapshot = media_center.MediaCenterSnapshot(sessions=(initial, other) if other_playing else (initial,), running=True)
@@ -1057,7 +1186,7 @@ def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, mo
     monkeypatch.setattr(probe, "_launch_firefox", launch)
     monkeypatch.setattr(probe, "_close_firefox", close)
     monkeypatch.setattr(probe, "_wait", wait)
-    result = probe._firefox(tmp_path)
+    result = probe._firefox(tmp_path, tmp_path, None)
     json.dumps(result)
     assert cleanup == [True]
     expected_pass = not other_playing and mode not in {"ambiguous", "changed-title", "failed-step"}

@@ -288,6 +288,33 @@ def test_media_hold_and_runtime_failure_are_observations_not_play_triggers(panel
     assert not commands
 
 
+@pytest.mark.parametrize("state,summary", [
+    ({"media_hold": True}, "다른 미디어 우선"),
+    ({"error": "격리된 미디어 상세 오류"}, "연결 확인"),
+])
+def test_play_hints_explain_observed_hold_or_error_and_clear_when_recovered(panel, state, summary):
+    view, options, commands, _state = panel
+    snapshot = observed(view, **state)
+    assert view._play_button.accessibleName() == "BGM 재생"
+    assert view._play_button.toolTip() == f"BGM 재생 · {summary}"
+    assert view._play_button.accessibleDescription() == f"BGM 재생 · {summary}"
+    assert view._play_button.isEnabled()
+    assert "상세 오류" not in view._play_button.toolTip()
+    assert view._spotify_button.toolTip() == f"Spotify 열기 · {summary}"
+    assert view._spotify_button.accessibleDescription() == f"Spotify 창 열기 · 재생 상태 변경 없음 · {summary}"
+    assert view._snapshot is snapshot and not hasattr(view, "_status_label")
+    assert not options and not commands
+
+    for status, label, summary in (("paused", "BGM 재생", "일시정지"),
+                                   ("playing", "BGM 일시정지", "재생 중")):
+        observed(view, status=status)
+        assert view._play_button.accessibleName() == label
+        assert view._play_button.toolTip() == f"{label} · {summary}"
+        assert view._play_button.accessibleDescription() == f"{label} · {summary}"
+        assert view._play_button.isEnabled()
+    assert not options and not commands
+
+
 def test_long_song_uses_bounded_single_line_slot_and_square_controls(panel, app):
     view, _options, _commands, _state = panel
     initial = MediaCenterSnapshot(sessions=(spotify(title="매우 긴 노래 제목 " * 15),),
