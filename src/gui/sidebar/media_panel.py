@@ -382,8 +382,8 @@ class MediaCenterPanel(QWidget):
             "다른 미디어 우선 · 멈춰도 자동 재개하지 않습니다. 재생 버튼으로 다시 시작하세요."
             if snapshot is not None and snapshot.media_hold else
             "BGM 자동 재생만 전환합니다. 게임 음소거·자동 포커스는 별도 옵션입니다.")
-        self._auto_button.setToolTip(self._auto_button.toolTip() + "\n우클릭: 미디어 옵션")
-        self._auto_button.setAccessibleDescription("왼쪽 클릭: BGM 자동 전환 · 우클릭 또는 메뉴 키: 미디어 옵션")
+        self._auto_button.setToolTip(self._auto_button.toolTip() + "\n끄면 BGM 일시정지 · 우클릭: 미디어 옵션")
+        self._auto_button.setAccessibleDescription("왼쪽 클릭: BGM 자동 전환 · 끄면 BGM 일시정지 · 우클릭 또는 메뉴 키: 미디어 옵션")
 
     def _update_artwork(self, selected) -> None:
         artwork = selected.artwork if selected else b""
@@ -488,6 +488,7 @@ class MediaCenterPanel(QWidget):
         if self._snapshot is None or self._on_options is None:
             self.update_snapshot(self._snapshot)
             return
+        turning_auto_off = field == "auto_bgm" and self._snapshot.options.auto_bgm and not checked
         proposed = replace(self._snapshot.options, **{field: checked})
         try:
             accepted = self._on_options(proposed)
@@ -495,15 +496,18 @@ class MediaCenterPanel(QWidget):
             logger.exception("미디어 옵션 변경 요청 실패: %s", field)
             accepted = False
         if accepted:
-            # configure의 옵션 writer가 동기 수락한 값만 표시한다. playback에는 손대지 않는다.
+            # configure의 옵션 writer가 동기 수락한 값만 표시한다.
             self.update_snapshot(replace(self._snapshot, options=proposed))
+            if turning_auto_off:
+                # 재생 중인지와 대상 선택은 worker의 최신 관측으로 판단한다.
+                self._command("pause_bgm_if_playing")
         else:
             logger.warning("미디어 옵션 변경 요청 거부: %s", field)
             self.update_snapshot(self._snapshot)
 
     def _command(self, action: str, session_id: str | None = None, *, value=None) -> bool:
         selected = self._selected()
-        target = (None if action in {"open", "prepare", "dj", "volume", "mute"} else session_id if session_id is not None
+        target = (None if action in {"open", "prepare", "dj", "volume", "mute", "pause_bgm_if_playing"} else session_id if session_id is not None
                   else selected.session_id if selected else None)
         if self._on_command is not None:
             try:

@@ -264,6 +264,101 @@ def test_bgm_left_click_only_toggles_auto_and_does_not_open_options(panel, app):
     assert view._auto_button.isChecked() and not view.options_open and not commands
 
 
+@pytest.mark.parametrize("sessions,selected", [
+    ((), None),
+    ((spotify(status="paused"),), "spotify-one"),
+    ((spotify(status="playing"),), "spotify-one"),
+    ((spotify("one"), spotify("two")), None),
+])
+def test_bgm_auto_off_requests_one_fresh_runtime_pause_after_option_acceptance(panel, app, sessions, selected):
+    view, options, commands, _state = panel
+    initial = MediaCenterSnapshot(sessions=sessions, bgm_session_id=selected, running=True,
+                                  options=MediaOptions(auto_bgm=True, background_mute=False, auto_focus=False))
+    view.update_snapshot(initial)
+    order = []
+    original_options, original_command = view._on_options, view._on_command
+    def on_options(value):
+        order.append("options")
+        return original_options(value)
+    def on_command(*args, **kwargs):
+        order.append("command")
+        return original_command(*args, **kwargs)
+    view._on_options, view._on_command = on_options, on_command
+    view.show()
+    app.processEvents()
+
+    QTest.mouseClick(view._auto_button, Qt.MouseButton.LeftButton)
+
+    assert options == [replace(initial.options, auto_bgm=False)]
+    assert commands == [("pause_bgm_if_playing", None)]
+    assert order == ["options", "command"]
+    assert not view._auto_button.isChecked() and not view.options_open
+    assert view._snapshot.sessions == initial.sessions
+    assert view._snapshot.bgm_session_id == initial.bgm_session_id
+    for _ in range(2):
+        view.update_snapshot(view._snapshot)
+        app.processEvents()
+    view._set_option("auto_bgm", False)  # 이미 OFF인 값의 재적용은 새 사용자 전환이 아니다.
+    assert commands == [("pause_bgm_if_playing", None)]
+
+
+@pytest.mark.parametrize("failure", ["rejected", "exception"])
+def test_bgm_auto_off_option_failure_keeps_on_without_pause_request(panel, failure):
+    view, options, commands, state = panel
+    initial = observed(view, status="playing", options=MediaOptions(auto_bgm=True))
+    if failure == "rejected":
+        state["accepted"] = False
+    else:
+        def broken(_options):
+            raise RuntimeError("격리된 옵션 변경 실패")
+        view._on_options = broken
+
+    view._auto_button.click()
+
+    assert commands == []
+    assert view._auto_button.isChecked() and view._snapshot is initial
+    if failure == "rejected":
+        assert options == [replace(initial.options, auto_bgm=False)]
+
+
+@pytest.mark.parametrize("failure", ["rejected", "exception"])
+def test_bgm_auto_off_command_failure_keeps_accepted_off_and_observed_playback(panel, app, caplog, failure):
+    view, options, commands, _state = panel
+    initial = observed(view, status="playing", options=MediaOptions(auto_bgm=True))
+    def failed_command(action, session_id=None, *, value=None):
+        commands.append((action, session_id))
+        if failure == "exception":
+            raise RuntimeError("격리된 일시정지 요청 실패")
+        return False
+    view._on_command = failed_command
+
+    view._auto_button.click()
+
+    assert options == [replace(initial.options, auto_bgm=False)]
+    assert commands == [("pause_bgm_if_playing", None)]
+    assert not view._auto_button.isChecked() and not view._snapshot.options.auto_bgm
+    assert view._snapshot.sessions == initial.sessions
+    assert "미디어 제어 요청" in caplog.text and "pause_bgm_if_playing" in caplog.text
+    for _ in range(2):
+        view.update_snapshot(view._snapshot)
+        app.processEvents()
+    assert len(commands) == 1
+
+
+@pytest.mark.parametrize("hold", [False, True])
+def test_bgm_auto_button_hints_explain_the_explicit_off_pause(panel, hold):
+    view, _options, commands, _state = panel
+    observed(view, media_hold=hold)
+    assert "끄면 BGM 일시정지" in view._auto_button.toolTip()
+    assert "끄면 BGM 일시정지" in view._auto_button.accessibleDescription()
+    assert "우클릭" in view._auto_button.toolTip()
+    if hold:
+        assert "다른 미디어 우선" in view._auto_button.toolTip()
+    else:
+        assert "게임 음소거·자동 포커스는 별도 옵션" in view._auto_button.toolTip()
+    assert not commands
+
+
 def test_option_callback_exception_restores_selection_and_command_exception_does_not_fake_playing(panel):
     view, _options, commands, _state = panel
     initial = observed(view, options=MediaOptions(auto_bgm=False))

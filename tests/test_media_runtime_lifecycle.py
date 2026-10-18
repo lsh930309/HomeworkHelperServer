@@ -39,9 +39,14 @@ class HeldSnapshotBackend(Backend):
     def release_snapshot(self):
         self.loop.call_soon_threadsafe(self.release.set)
 
+    def hold_next_snapshot(self):
+        self.entered.clear()
+        self.loop.call_soon_threadsafe(self.release.clear)
+
 
 @contextmanager
-def coordinated_runtime(*, sessions=(), targets=(), wasapi_sessions=(), options=MediaOptions(), foreground=(100, 1000)):
+def coordinated_runtime(*, sessions=(), targets=(), wasapi_sessions=(), options=MediaOptions(),
+                        foreground=(100, 1000), launches=None):
     """실제 worker/오디오 조정자와 fake OS 경계만 연결한다."""
     backend = HeldSnapshotBackend(sessions)
     wasapi = WasapiBackend(*wasapi_sessions)
@@ -50,7 +55,7 @@ def coordinated_runtime(*, sessions=(), targets=(), wasapi_sessions=(), options=
     published = threading.Event()
 
     def changed(snapshot):
-        if snapshot.sessions:
+        if backend.reads:
             published.set()
 
     def no_launch():
@@ -60,7 +65,9 @@ def coordinated_runtime(*, sessions=(), targets=(), wasapi_sessions=(), options=
         changed, backend_factory=lambda: backend,
         audio_factory=lambda: GameAudioCoordinator(wasapi),
         native_factory=lambda: native, focus_factory=Focus,
-        spotify_launcher=no_launch, dj_launcher=no_launch, spotify_opener=no_launch,
+        spotify_launcher=no_launch if launches is None else lambda: launches.append("normal") or True,
+        dj_launcher=no_launch if launches is None else lambda: launches.append("dj") or True,
+        spotify_opener=no_launch if launches is None else lambda: launches.append("open") or True,
         spotify_process_reader=lambda: (), spotify_audio_factory=SpotifyAudio,
         spotify_window_reader=lambda *_args, **_kwargs: None,
         spotify_window_closer=lambda *_args, **_kwargs: False,
@@ -164,6 +171,143 @@ def test_audible_background_game_pauses_bgm_despite_quiet_foreground_and_unknown
         backend.release_snapshot()
         assert published.wait(1)
         assert backend.commands == [("spotify", "pause")]
+
+
+@pytest.mark.parametrize("background_mute,actual_state,status,expected", [
+    pytest.param(True, "audible", "playing", [("spotify", "pause")], id="known-audible-pauses-without-foreground"),
+    pytest.param(True, "audible", "paused", [], id="known-audible-blocks-play-without-foreground"),
+    pytest.param(True, "quiet", "paused", [], id="quiet-does-not-prove-foreground-without-window"),
+    pytest.param(True, "unknown", "paused", [], id="unknown-does-not-prove-quiet-without-window"),
+    pytest.param(False, "audible", "playing", [], id="auto-mute-off-preserves-foreground-gate"),
+])
+def test_missing_foreground_preserves_known_audible_game_without_resuming_unknown_context(
+    background_mute, actual_state, status, expected,
+):
+    target = GameAudioTarget("game", 42, 123, "/game.exe", actual_state == "quiet", None)
+    game = WasapiSession(muted=actual_state == "quiet")
+    wasapi_sessions = () if actual_state == "unknown" else (game,)
+    with coordinated_runtime(sessions=(session(status=status),), targets=(target,),
+                             wasapi_sessions=wasapi_sessions,
+                             options=MediaOptions(True, background_mute, False),
+                             foreground=(None, None)) as (runtime, backend, _, published):
+        observation = runtime.snapshot.game_audio[0]
+        assert observation.audible is {"audible": True, "quiet": False, "unknown": None}[actual_state]
+        backend.release_snapshot()
+        assert published.wait(1)
+        assert backend.commands == expected
+
+
+@pytest.mark.parametrize("sessions,expected", [
+    pytest.param((session(status="playing"),), [("spotify", "pause")], id="playing-bgm-paused-once"),
+    pytest.param((session(),), [], id="already-paused-no-op"),
+    pytest.param((), [], id="absent-bgm-no-op-without-cold-start"),
+    pytest.param((session("firefox", "Firefox.exe", "playing"),), [], id="other-media-untouched"),
+])
+def test_explicit_auto_off_pause_uses_fresh_worker_bgm_state(sessions, expected):
+    with coordinated_runtime(sessions=sessions, options=MediaOptions(True, True, False)) as (runtime, backend, _, published):
+        assert runtime.configure(MediaOptions(False, True, False))
+        assert runtime.request("pause_bgm_if_playing")
+        backend.release_snapshot()
+        assert published.wait(1)
+        assert backend.commands == expected
+        assert not runtime.snapshot.error
+        assert runtime.snapshot.options.auto_bgm is False
+
+
+@pytest.mark.parametrize("before,after,expected", [
+    pytest.param("paused", "playing", [("spotify", "pause")], id="new-playing-state-pauses"),
+    pytest.param("playing", "paused", [], id="new-paused-state-no-op"),
+])
+def test_explicit_auto_off_pause_does_not_use_previously_published_bgm_status(before, after, expected):
+    with coordinated_runtime(sessions=(session(status=before),),
+                             options=MediaOptions(False, True, False)) as (runtime, backend, _, published):
+        backend.release_snapshot()
+        assert published.wait(1)
+        assert runtime.snapshot.sessions[0].status == before
+        backend.hold_next_snapshot()
+        assert runtime.request("pause_bgm_if_playing")
+        assert backend.entered.wait(1)
+        backend.sessions = (session(status=after),)
+        backend.release_snapshot()
+        wait_for(lambda: runtime.snapshot.sessions[0].status == after)
+        assert backend.commands == expected
+        assert not runtime.snapshot.error
+
+
+def test_explicit_auto_off_pause_cancels_pending_automatic_play_and_later_manual_play_still_works():
+    launches = []
+    with coordinated_runtime(options=MediaOptions(True, True, False), launches=launches) as (runtime, backend, _, published):
+        backend.release_snapshot()
+        assert published.wait(1)
+        assert runtime._pending is not None and runtime._pending.automatic
+        assert launches == ["dj"]
+        backend.hold_next_snapshot()
+        runtime._notify_worker()
+        assert backend.entered.wait(1)
+        assert runtime.configure(MediaOptions(False, True, False))
+        assert runtime.request("pause_bgm_if_playing")
+        backend.sessions = (session(),)
+        backend.release_snapshot()
+        wait_for(lambda: bool(runtime.snapshot.sessions))
+        assert runtime._pending is None and backend.commands == []
+        assert not runtime.snapshot.error and launches == ["dj"]
+        assert runtime.request("play")
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        assert launches == ["dj"]
+
+
+def test_reenabled_auto_bgm_blocks_an_older_explicit_off_pause_waiting_for_snapshot():
+    with coordinated_runtime(sessions=(session(status="playing"),),
+                             options=MediaOptions(True, True, False)) as (runtime, backend, _, published):
+        assert runtime.configure(MediaOptions(False, True, False))
+        assert runtime.request("pause_bgm_if_playing")
+        assert runtime.configure(MediaOptions(True, True, False))
+        backend.release_snapshot()
+        assert published.wait(1)
+        assert backend.commands == []
+        assert not runtime.snapshot.error
+        assert runtime.snapshot.options.auto_bgm is True
+
+
+def test_explicit_off_pause_without_playing_bgm_preserves_manual_preparation():
+    launches = []
+    with coordinated_runtime(options=MediaOptions(False, True, False), launches=launches) as (runtime, backend, _, published):
+        assert runtime.request("play")
+        backend.release_snapshot()
+        assert published.wait(1)
+        pending = runtime._pending
+        assert pending is not None and not pending.automatic
+        assert launches == ["dj"]
+        backend.hold_next_snapshot()
+        assert runtime.request("pause_bgm_if_playing")
+        assert backend.entered.wait(1)
+        backend.release_snapshot()
+        wait_for(lambda: backend.reads >= 2)
+        backend.hold_next_snapshot()
+        runtime._notify_worker()
+        assert backend.entered.wait(1)  # 직전 요청 처리가 끝난 다음 cycle이다.
+        assert runtime._pending is pending and not runtime.snapshot.error
+        assert not backend.commands and launches == ["dj"]
+        backend.sessions = (session(),)
+        backend.release_snapshot()
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+
+
+@pytest.mark.parametrize("status,actions,expected", [
+    pytest.param("playing", ("pause_bgm_if_playing", "play"),
+                 [("spotify", "pause"), ("spotify", "play")], id="pause-then-play"),
+    pytest.param("paused", ("play", "pause_bgm_if_playing"),
+                 [("spotify", "play"), ("spotify", "pause")], id="play-then-pause"),
+])
+def test_explicit_off_pause_and_manual_play_in_one_snapshot_keep_last_user_intent(status, actions, expected):
+    with coordinated_runtime(sessions=(session(status=status),),
+                             options=MediaOptions(False, True, False)) as (runtime, backend, _, published):
+        for action in actions:
+            assert runtime.request(action)
+        backend.release_snapshot()
+        assert published.wait(1)
+        assert backend.commands == expected
+        assert not runtime.snapshot.error
 
 
 def test_stop_before_worker_initialization_never_opens_native_resources():

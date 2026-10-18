@@ -359,6 +359,77 @@ def test_initial_trigger_plays_once_and_manual_pause_is_not_undone():
         assert backend.commands == [("spotify", "play"), ("spotify", "pause")]
 
 
+@pytest.mark.parametrize("session_id,value", [
+    pytest.param("spotify", None, id="no-bgm-id-input"),
+    pytest.param("firefox", None, id="no-other-media-id-input"),
+    pytest.param(None, True, id="no-boolean-input"),
+    pytest.param(None, 50, id="no-volume-input"),
+])
+def test_explicit_auto_off_pause_rejects_target_and_value_inputs(session_id, value):
+    with running(options=MediaOptions(False)) as (runtime, backend, *_):
+        generation = runtime._inputs()[2]
+        assert not runtime.request("pause_bgm_if_playing", session_id, value=value)
+        assert runtime._inputs()[2] == generation
+        assert not runtime._requests and backend.commands == []
+
+
+def test_explicit_auto_off_pause_only_controls_the_selected_spotify_session():
+    first, second = session("a", status="playing"), session("b", status="playing")
+    firefox = session("firefox", "Firefox.exe", "playing")
+    with running((first, second, firefox), options=MediaOptions(False)) as (runtime, backend, *_):
+        wait_for(lambda: "여러 개" in runtime.snapshot.error)
+        assert runtime.request("pause_bgm_if_playing")
+        wait_for(lambda: not runtime._requests)
+        assert backend.commands == []
+        assert runtime.snapshot.bgm_session_id is None
+        assert runtime.request("select", "b")
+        wait_for(lambda: runtime.snapshot.bgm_session_id == "b")
+        assert runtime.request("pause_bgm_if_playing")
+        wait_for(lambda: backend.commands == [("b", "pause")])
+        assert next(item for item in backend.sessions if item.session_id == "a").status == "playing"
+        assert next(item for item in backend.sessions if item.session_id == "firefox").status == "playing"
+
+
+def test_explicit_auto_off_pause_never_retargets_a_disappeared_selection():
+    with running((session(status="playing"),), options=MediaOptions(False)) as (runtime, backend, *_):
+        assert runtime.request("select", "spotify")
+        wait_for(lambda: runtime._explicit_selection == "spotify")
+        backend.sessions = (session("replacement", status="playing"),)
+        wait_for(lambda: runtime.snapshot.bgm_session_id is None and "종료" in runtime.snapshot.error)
+        assert runtime.request("pause_bgm_if_playing")
+        wait_for(lambda: not runtime._requests)
+        assert not backend.commands
+        assert backend.sessions[0].status == "playing"
+
+
+def test_explicit_auto_off_pause_is_one_shot_and_allows_later_manual_play():
+    with running((session(status="playing"),), options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request("pause_bgm_if_playing")
+        wait_for(lambda: backend.commands == [("spotify", "pause")])
+        wait_for(lambda: runtime.snapshot.sessions[0].status == "paused")
+        backend.sessions = (session(status="playing"),)
+        wait_for(lambda: runtime.snapshot.sessions[0].status == "playing")
+        assert backend.commands == [("spotify", "pause")]
+        backend.sessions = (session(),)
+        wait_for(lambda: runtime.snapshot.sessions[0].status == "paused")
+        assert runtime.request("play")
+        wait_for(lambda: backend.commands == [("spotify", "pause"), ("spotify", "play")])
+        assert not launches
+        assert runtime.stop()
+        assert not runtime.request("pause_bgm_if_playing")
+
+
+def test_explicit_auto_off_pause_rejection_is_not_retried():
+    with running((session(status="playing"),), options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        backend.accept = False
+        assert runtime.request("pause_bgm_if_playing")
+        wait_for(lambda: "수락하지" in runtime.snapshot.error)
+        reads = backend.reads
+        wait_for(lambda: backend.reads >= reads + 3)
+        assert backend.commands == [("spotify", "pause")]
+        assert not launches and backend.sessions[0].status == "playing"
+
+
 def test_focused_game_audible_edges_pause_and_resume_but_unknown_does_not_resume():
     target = GameAudioTarget("game", 42, 1, "/game.exe", False, 50)
     with running(targets=(target,)) as (runtime, backend, audio, native, *_):

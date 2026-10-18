@@ -161,7 +161,7 @@ class MediaCenterRuntime:
         return True
 
     def request(self, action: str, session_id: str | None = None, *, value=None) -> bool:
-        if action not in {"open", "prepare", "select", "play", "pause", "previous", "next", "dj", "volume", "mute"}:
+        if action not in {"open", "prepare", "select", "play", "pause", "pause_bgm_if_playing", "previous", "next", "dj", "volume", "mute"}:
             return False
         if action == "select" and not session_id:
             return False
@@ -171,7 +171,7 @@ class MediaCenterRuntime:
             return False
         if action not in {"volume", "mute"} and value is not None:
             return False
-        if action in {"open", "dj", "volume", "mute"} and session_id is not None:
+        if action in {"open", "dj", "volume", "mute", "pause_bgm_if_playing"} and session_id is not None:
             return False
         with self._lock:
             if self._stop.is_set() or self._thread is None or not self._thread.is_alive():
@@ -348,7 +348,10 @@ class MediaCenterRuntime:
                         audible = True
                     elif any(not item.available or item.audible is None for item in self._observations):
                         audible = None
-                self._game_audible = audible if known and effective else None
+                if options.background_mute and audible is True:
+                    self._game_audible = True
+                else:
+                    self._game_audible = audible if known and effective else None
                 if options.auto_focus and not autofocus:
                     self._focus = self._focus_factory(started_at_wall=time.time(), native=self._native)
                 autofocus = options.auto_focus
@@ -413,7 +416,7 @@ class MediaCenterRuntime:
                     break
                 if command.epoch == self._epoch:
                     await self._execute(command, valid, fresh=fresh)
-                    if command.action in {"play", "pause", "previous", "next", "dj"}:
+                    if command.action in {"play", "pause", "pause_bgm_if_playing", "previous", "next", "dj"}:
                         fresh = False
             policy_commands = any(command.action not in {"open", "prepare", "volume", "mute"} for command in commands)
             if not policy_commands and automatic is not None and not self._stop.is_set():
@@ -458,6 +461,28 @@ class MediaCenterRuntime:
             return
         if action == "prepare":
             self._prepare("prepare", automatic=False, generation=self._inputs()[2])
+            return
+        if action == "pause_bgm_if_playing":
+            if self._inputs()[1].auto_bgm:
+                return  # 재활성화된 뒤 이전 OFF 요청을 늦게 적용하지 않는다.
+            if not fresh:
+                try:
+                    self._sessions = tuple(await asyncio.wait_for(
+                        self._backend.snapshot(), self.IO_TIMEOUT_SECONDS))
+                    self._select_bgm()
+                    valid = True
+                except Exception as exc:
+                    self._failure(f"BGM 일시정지 전 상태 조회 실패: {exc}", "observation")
+                    return
+            if not valid:
+                self._failure("최신 미디어 상태를 확인하지 못해 BGM을 일시정지하지 않았습니다.")
+                return
+            if self._stop.is_set() or self._inputs()[1].auto_bgm:
+                return
+            selected = next((item for item in self._sessions if item.session_id == self._selected), None)
+            if selected is not None and selected.status == "playing":
+                self._pending = None
+                await self._control(selected.session_id, "pause")
             return
         if action in {"pause", "select", "previous", "next"}:
             cancelled = self._pending is not None
