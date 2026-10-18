@@ -204,6 +204,11 @@ class SidebarController:
         if self._sidebar is not None:
             self._sidebar.on_recording_state_changed(state)
 
+    def dispatch_media_state(self, snapshot) -> None:
+        """열려 있는 사이드바에만 미디어 투영을 전달하며 위젯을 새로 만들지 않는다."""
+        if self._sidebar is not None:
+            self._sidebar.update_media_state(snapshot)
+
     def notify_screenshot_captured(self, path: str) -> None:
         """사이드바에 새 스크린샷 캡처를 전달합니다."""
         if self._sidebar is not None:
@@ -300,6 +305,11 @@ class SidebarController:
         if self._sidebar is None:
             self._sidebar = SidebarWidget(
                 data_manager=self._data_manager,
+                on_audio_change=getattr(self._main_window, "_on_game_audio_preferences_changed", None),
+                audio_state=getattr(self._main_window, "_media_game_audio_state", None),
+                on_media_options=getattr(self._main_window, "configure_media_center", None),
+                on_media_command=getattr(self._main_window, "request_media_command", None),
+                media_state=getattr(self._main_window, "media_center_state", None),
                 auto_hide_ms=auto_hide_ms,
                 screen=screen,
                 stop_recording=self._on_stop_recording,

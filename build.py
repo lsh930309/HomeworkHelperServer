@@ -75,6 +75,11 @@ WINDOWS_REQUIRED_DISTRIBUTIONS = (
     "pycaw",
     "Windows-Toasts",
     "winrt-Windows.Gaming.Input",
+    "winrt-Windows.Media.Control",
+    "winrt-Windows.Foundation",
+    "winrt-Windows.Foundation.Collections",
+    "winrt-Windows.Media",
+    "winrt-Windows.Storage.Streams",
 )
 
 # 코드 서명

@@ -69,6 +69,10 @@ a = Analysis(
 
         # Audio (pycaw - Windows WASAPI)
         'pycaw', 'pycaw.pycaw',
+        'winrt.windows.media.control',
+        'winrt.runtime', 'winrt.system',
+        'winrt.windows.foundation', 'winrt.windows.foundation.collections',
+        'winrt.windows.media', 'winrt.windows.storage.streams',
         'comtypes', 'comtypes.client',
     ],
     hookspath=[],

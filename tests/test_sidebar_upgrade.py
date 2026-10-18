@@ -417,8 +417,8 @@ def test_native_acrylic_owns_tint_and_failure_keeps_same_fixed_background(sideba
 def test_section_dividers_reserve_equal_space_above_and_below_line(sidebar):
     view, _game, _settings, _writes = sidebar
     dividers = view.findChildren(SidebarDivider)
-    assert len(dividers) == 2
-    assert [divider.height() for divider in dividers] == [14,14]
+    assert len(dividers) == 3
+    assert [divider.height() for divider in dividers] == [14,14,14]
 
 
 def test_qt_empty_surfaces_leave_native_backdrop_visible(sidebar, app, monkeypatch):
@@ -433,3 +433,72 @@ def test_qt_empty_surfaces_leave_native_backdrop_visible(sidebar, app, monkeypat
     assert image.pixelColor(1, 1).alpha() == 0
     empty = view._main_scroll.viewport().mapTo(view, view._main_scroll.viewport().rect().center())
     assert image.pixelColor(empty).alpha() == 0
+
+
+def test_short_sidebar_fits_seven_games_two_timers_and_gallery_then_restores(sidebar, app, monkeypatch, tmp_path):
+    """실Windows760높이에서관측한7게임·2실행의overflow를같은사용흐름으로검증한다."""
+    from src.gui.main_window import MainWindow
+    view, _game, settings, writes = sidebar
+    names = ["명조: 위더링 웨이브", "몬길: STAR DIVE", "붕괴: 스타레일",
+             "붕괴: 스타레일(베타)", "소녀전선2: 망명", "승리의 여신: 니케", "젠레스 존 제로"]
+    games = [ManagedProcess(id=str(index), name=name, monitoring_path=f"/{index}.exe", launch_path=f"/{index}.exe")
+             for index, name in enumerate(names)]
+    view._data_manager.managed_processes = games
+    settings.screenshot_enabled = settings.recording_enabled = settings.obs_watch_output_dir = True
+    settings.screenshot_save_dir = str(tmp_path)
+    settings.sidebar_playtime_prefix = "오늘 플레이 시간"
+    view._recording_output_dir = str(tmp_path)
+    for index in range(8):
+        (tmp_path / f"image-{index}.png").write_bytes(b"fixture; decoding is disabled")
+    monkeypatch.setattr(view._thumb_pool, "start", lambda *_args: None)
+    monkeypatch.setattr(view._rec_thumb_pool, "start", lambda *_args: None)
+    active = {game.id: {"pid": 10 + index, "start_time_approx": module.time.time() - 600}
+              for index, game in enumerate(games) if index >= 5}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(
+        process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    view.refresh_content()
+    view.resize(280, 760)
+    view.show()
+    for _ in range(6):
+        app.processEvents()
+    assert view._compact_game_rows
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+    assert view._gallery.height() == view._gallery_cell_size()[1]
+    assert view._gallery.mapTo(view, QPoint(0, view._gallery.height())).y() <= view._close_btn.y()
+    for label, _started, prefix in view._playtime_labels.values():
+        assert not label.wordWrap() and prefix not in label.text()
+        assert prefix in label.toolTip() and label.text() in label.toolTip()
+        assert label.accessibleDescription() == label.toolTip()
+    for index in range(len(games)):
+        row = current_row(view, index)
+        label = row.findChild(QLabel, "gameName")
+        assert not label.wordWrap() and label.toolTip() == games[index].name
+        for control in row.findChildren(QPushButton) + row.findChildren(VolumeDial):
+            assert control.width() == control.height() == 32
+    # 폰트·DPI에 따른 내용 높이 차이는 실제 남는 여백 예산으로 흡수한다.
+    # 현재 내용에 행별 위아래 1px만 허용하는 높이를 만들고 갤러리 노출을 확인한다.
+    row_padding = sum(current_row(view, index).layout().contentsMargins().top()
+                      + current_row(view, index).layout().contentsMargins().bottom()
+                      for index in range(len(games)))
+    controls_height = view._media_section.sizeHint().height() - view._gallery.height()
+    content_height = view._top_section.height() - row_padding
+    required_viewport = content_height + len(games) * 2 + controls_height + view._gallery_cell_size()[1]
+    view.resize(280, view.height() - view._main_scroll.viewport().height() + required_viewport)
+    for _ in range(6):
+        app.processEvents()
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+    assert all(current_row(view, index).layout().contentsMargins().top() <= 1 for index in range(len(games)))
+    assert view._gallery.mapTo(view, QPoint(0, view._gallery.height())).y() <= view._close_btn.y()
+    view.resize(280, 1080)
+    for _ in range(6):
+        app.processEvents()
+    assert not view._compact_game_rows
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+    assert view._gallery.height() == 2 * view._gallery_cell_size()[1] + view._gallery_cell_size()[2]
+    for label, _started, prefix in view._playtime_labels.values():
+        assert label.wordWrap() and prefix in label.text()
+    view.resize(280, 760)
+    for _ in range(6):
+        app.processEvents()
+    assert view._compact_game_rows and view._main_scroll.verticalScrollBar().maximum() == 0
+    assert not writes

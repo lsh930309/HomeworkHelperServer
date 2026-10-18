@@ -194,7 +194,7 @@ def user_launch(payload: str):
         return
     result = shell.ShellExecuteEx(fMask=shellcon.SEE_MASK_NOCLOSEPROCESS | shellcon.SEE_MASK_FLAG_DDEWAIT |
                                  shellcon.SEE_MASK_FLAG_NO_UI,
-                                 lpVerb="open", lpFile=target, lpParameters=args,
+                                 lpVerb="open", lpFile=target, lpParameters=args or "",
                                  nShow=win32con.SW_SHOWNORMAL)
     handle = result.get("hProcess")
     if handle:

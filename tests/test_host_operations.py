@@ -19,6 +19,14 @@ from tools import windows_host_probe as probe
 from src.core.tailscale import TailscalePeer, TailscaleSnapshot
 
 
+@pytest.mark.parametrize("scenario", ["spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-startup", "spotify-window-startup-close", "spotify-window-startup-delayed-close"])
+def test_spotify_window_observation_is_a_fixed_media_scenario(scenario):
+    args = ops.parser().parse_args(["media-qa", "--host", "test.invalid", "--scenario", scenario])
+    assert args.scenario == scenario
+    session_source = (ops.ROOT / "tools/windows_session_probe.py").read_text(encoding="utf-8")
+    assert f'"{scenario}"' in session_source
+
+
 @pytest.fixture
 def published_repository(tmp_path, monkeypatch):
     repo, remote = tmp_path / "repo", tmp_path / "remote.git"
@@ -361,3 +369,47 @@ function Invoke-RestMethod {return @{ok=$true;db_ready=$true;database_access=@{m
     trace = json.loads(tail)
     assert trace["events"] == expected, result.stdout + result.stderr
     assert trace["failed"] == (failure not in {"none", "archive-ok"}), result.stdout + result.stderr
+
+
+def test_media_preview_pixels_are_saved_once_and_cannot_escape_report(tmp_path):
+    pixels = b"\x89PNG\r\n\x1a\nfixture"
+    item = {"name": "sidebar-preview.png", "base64": base64.b64encode(pixels).decode()}
+    payload = {"images": [item]}
+    ops.save_preview_images(payload, tmp_path)
+    assert (tmp_path / "sidebar-preview.png").read_bytes() == pixels
+    assert item == {"name": "sidebar-preview.png", "path": str(tmp_path / "sidebar-preview.png")}
+    for name in ("../outside.png", "..\\outside.png", "/outside.png", "outside.jpg"):
+        with pytest.raises(ValueError):
+            ops.save_preview_images({"images": [{"name": name, "base64": base64.b64encode(pixels).decode()}]}, tmp_path)
+
+
+def test_media_qa_uses_published_canonical_source_and_explicit_interactive_scenario(monkeypatch, tmp_path, capsys):
+    selected, scripts = [], []
+    monkeypatch.setattr(ops, "published_commit", lambda commit: selected.append(commit) or ("a" * 40, "media-center"))
+    monkeypatch.setattr(ops, "run_remote_powershell", lambda config, script, **kwargs: (
+        scripts.append(script) or subprocess.CompletedProcess([], 0, '{"scenario":"observe","ok":true}', '')))
+    assert ops.main(["media-qa", "--scenario", "observe", "--host", "test.invalid",
+                     "--report-root", str(tmp_path)]) == 0
+    assert selected == [None] and "-Scenario 'observe'" in scripts[0]
+    assert "'media-qa'" in scripts[0] and "Invoke-Session 'media-qa'" in scripts[0]
+    assert json.loads(capsys.readouterr().out)["result"]["scenario"] == "observe"
+
+
+def test_media_runtime_preparation_only_installs_declared_dependencies(monkeypatch, tmp_path, capsys):
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda args, **kw: calls.append((args, kw)))
+    assert probe.main(["prepare-runtime", "--repo", str(tmp_path),
+                       "--appdata", str(tmp_path / "roaming"), "--install", str(tmp_path / "installed")]) == 0
+    args, kwargs = calls[0]
+    assert args[1:] == ["-m", "pip", "install", "-r", "requirements.txt"]
+    assert kwargs["cwd"] == tmp_path and kwargs["check"] is True
+    assert kwargs["stderr"] == subprocess.STDOUT
+    assert "requirements_log" in json.loads(capsys.readouterr().out)
+
+
+def test_native_media_failure_is_not_ssh_success(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(ops, "published_commit", lambda _: ("a" * 40, "media-center"))
+    monkeypatch.setattr(ops, "run_remote_powershell", lambda *args, **kwargs:
+                        subprocess.CompletedProcess([], 0, '{"ok":false,"scenario":"bgm"}', ''))
+    assert ops.main(["media-qa", "--host", "test.invalid", "--report-root", str(tmp_path)]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False

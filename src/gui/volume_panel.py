@@ -119,10 +119,12 @@ def _system_icon(pixmap_enum) -> QIcon:
 class VolumePopoverPanel(QWidget):
     """실행 중인 게임의 볼륨을 조절하는 팝오버 패널."""
 
-    def __init__(self, data_manager, parent=None, on_hide=None):
+    def __init__(self, data_manager, parent=None, on_hide=None, on_audio_change=None, audio_state=None):
         """팝오버 패널을 초기화합니다."""
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self._on_hide_callback = on_hide
+        self._on_audio_change = on_audio_change
+        self._audio_state = audio_state
         self.setAutoFillBackground(True)
         self.setStyleSheet("""
             VolumePopoverPanel {
@@ -254,7 +256,13 @@ class VolumePopoverPanel(QWidget):
         initial_volume = getattr(process, 'default_volume', None)
         if initial_volume is None:
             initial_volume = 100
-        if is_running:
+        policy_active, observation = self._audio_state(process.id) if self._audio_state else (False, None)
+        if policy_active:
+            if observation is not None and observation.available and observation.volume is not None:
+                initial_volume = round(observation.volume * 100 / 5) * 5
+            if observation is not None and observation.policy_muted:
+                mute_btn.setToolTip("백그라운드 자동 음소거 · 클릭은 사용자 음소거 설정 변경")
+        elif is_running:
             try:
                 actual = audio_control.get_app_volume(pid)
                 if actual is not None:
@@ -264,7 +272,7 @@ class VolumePopoverPanel(QWidget):
         initial_volume = max(0, min(100, initial_volume))
 
         # 초기 음소거 상태: 실행 중이면 시스템 상태, 대기 중이면 저장된 기본값
-        if is_running:
+        if is_running and not policy_active:
             try:
                 initial_muted = audio_control.is_muted(pid) or False
             except Exception:
@@ -290,7 +298,8 @@ class VolumePopoverPanel(QWidget):
                 btn.setText("✕" if checked else "▶")
             p.default_muted = checked
             self._schedule_volume_save(p)
-            if pid_ref is not None:
+            handled = bool(self._on_audio_change and self._on_audio_change(p))
+            if pid_ref is not None and not handled:
                 try:
                     audio_control.set_mute(pid_ref, checked)
                 except Exception:
@@ -316,9 +325,10 @@ class VolumePopoverPanel(QWidget):
 
     def _on_volume_changed(self, value: int, process: ManagedProcess, pid: Optional[int]):
         """슬라이더 값 변경 시 실시간 볼륨 적용 및 DB 저장 예약."""
-        if pid is not None:
-            audio_control.set_app_volume(pid, value / 100.0)
         process.default_volume = value
+        handled = bool(self._on_audio_change and self._on_audio_change(process))
+        if pid is not None and not handled:
+            audio_control.set_app_volume(pid, value / 100.0)
         self._schedule_volume_save(process)
 
     def _schedule_volume_save(self, process: ManagedProcess):

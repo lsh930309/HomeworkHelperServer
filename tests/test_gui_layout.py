@@ -2191,6 +2191,7 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
     window = types.SimpleNamespace(
         _beholder_restore_runtime_suspended=False,
         _lifecycle_shutdown_event=threading.Event(),
+        _stop_media_center=lambda *_args: True,
         process_monitor=process_monitor,
         monitor_timer=monitor_timer,
         scheduler_timer=scheduler_timer,
@@ -2359,7 +2360,8 @@ def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, h
     assert view.width() == 280
     viewport = view._main_scroll.viewport()
     assert view._scroll_content.width() <= viewport.width()
-    rows = view.findChildren(VolumeDial)
+    rows = [view._games_list_layout.itemAt(index).widget().findChild(VolumeDial)
+            for index in range(view._games_list_layout.count())]
     assert len(rows) == 5
     for slider in rows:
         row = slider.parentWidget()
@@ -2468,7 +2470,7 @@ def _gallery_widgets(view):
 
 
 @pytest.mark.parametrize("height", [700, 1100])
-def test_sidebar_clock_and_bottom_group_stay_at_edges_with_three_row_cap(sidebar_gallery, height):
+def test_sidebar_clock_and_bottom_group_stay_at_edges_with_two_row_cap(sidebar_gallery, height):
     app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
     view.resize(280, height)
     for _ in range(4):
@@ -2481,10 +2483,12 @@ def test_sidebar_clock_and_bottom_group_stay_at_edges_with_three_row_cap(sidebar
     assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
     assert view._gallery.geometry().bottom() == view._media_section.height() - 1
     _width, cell_height, gap = view._gallery_cell_size()
-    rows = 2 if height == 700 else 3
+    rows = 1 if height == 700 else 2
     assert view._gallery.height() == rows * cell_height + (rows - 1) * gap
     assert len(_gallery_widgets(view)) == rows * 3
-    assert view._scroll_layout.itemAt(1).spacerItem().geometry().height() > 0
+    if height == 1100:
+        assert view._scroll_layout.itemAt(1).spacerItem().geometry().height() > 0
+    assert not view._main_scroll.verticalScrollBar().isVisible()
     assert view._main_scroll.verticalScrollBar().maximum() == 0
 
 
@@ -2508,7 +2512,7 @@ def test_sidebar_extreme_height_scrolls_middle_only_and_recovers_bottom_alignmen
         app.processEvents()
     assert bar.maximum() == 0 and bar.value() == 0
     assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
-    assert len(_gallery_widgets(view)) == 9
+    assert len(_gallery_widgets(view)) == 6
 
 
 def test_sidebar_running_indicator_follows_game_identity_after_name_and_session_changes(sidebar_layout, monkeypatch):
@@ -2565,9 +2569,20 @@ def test_sidebar_balanced_layout_with_full_game_names_fits_controls_and_bottom_g
         assert dial.geometry().right() < row.width()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
     app.processEvents()
-    assert len(_gallery_widgets(view)) == 6
+    assert len(_gallery_widgets(view)) == 3
     assert view._main_scroll.verticalScrollBar().maximum() == 0
     assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
+    # 작은 높이에서는 미디어 조작을 보존하고 갤러리를 1행으로 압축한다.
+    # 같은 7개 게임으로 공간을 넓히면 최대 2행으로 복귀해야 한다.
+    view.resize(280, 1080)
+    for _ in range(4):
+        app.processEvents()
+    assert len(_gallery_widgets(view)) == 6
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+    view.resize(280, 800)
+    for _ in range(4):
+        app.processEvents()
+    assert len(_gallery_widgets(view)) == 3
 
 
 def test_sidebar_content_replace_hides_old_rows_before_deferred_delete(sidebar_gallery, monkeypatch):
@@ -2642,7 +2657,7 @@ def test_sidebar_shared_gallery_height_reduces_previews_before_scrolling(sidebar
     fixed_height = (view.height() - view._gallery.height()
                     - view._scroll_layout.itemAt(1).spacerItem().geometry().height())
     cell_width, cell_height, gap = view._gallery_cell_size()
-    for rows in [3, 2, 1, 3]:
+    for rows in [2, 1, 2]:
         view.resize(view.width(), fixed_height + rows * cell_height + (rows - 1) * gap)
         for _ in range(3):
             app.processEvents()
@@ -2678,7 +2693,7 @@ def test_sidebar_shared_gallery_switch_keeps_actions_and_rejects_late_results(si
     view.set_on_reconnect_recording(lambda: called.append("reconnect"))
     view._gallery_tabs.setCurrentIndex(1)
     app.processEvents()
-    assert not view._thumb_buttons and len(view._rec_thumb_buttons) == 8
+    assert not view._thumb_buttons and len(view._rec_thumb_buttons) == 5
     assert all(str(recordings) in path for path in view._rec_thumb_buttons)
     view._apply_thumbnail_result(old_request, str(screenshots / "image-11.png"), image)
     assert not view._thumb_cache
@@ -2712,7 +2727,7 @@ def test_sidebar_shared_gallery_refresh_follows_selected_source_and_path(sidebar
         app.processEvents()
     assert view._thumb_request_id > request
     assert next(iter(view._thumb_buttons)) == str(new_image)
-    assert _gallery_widgets(view)[-1].text() == "+5"
+    assert _gallery_widgets(view)[-1].text() == "+8"
     view._gallery_tabs.setCurrentIndex(1)
     app.processEvents()
     request = view._rec_thumb_request_id
@@ -2733,7 +2748,7 @@ def test_sidebar_shared_gallery_refresh_follows_selected_source_and_path(sidebar
     view.refresh_content()
     app.processEvents()
     assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == "recording"
-    assert len(view._rec_thumb_buttons) == 8
+    assert len(view._rec_thumb_buttons) == 5
 
 
 def test_sidebar_shared_gallery_resize_reuses_cells_and_same_source_results(sidebar_gallery):
@@ -2753,7 +2768,7 @@ def test_sidebar_shared_gallery_resize_reuses_cells_and_same_source_results(side
     assert view._thumb_request_id == old_request
     assert view._thumb_buttons[path].pixmap().size() == QSize(width, height)
     assert not any(task._path == path for task in tasks)
-    omitted_path = str(screenshots / "image-04.png")
+    omitted_path = str(screenshots / "image-07.png")
     view._apply_thumbnail_result(old_request, omitted_path, image)
     assert view._thumb_buttons[omitted_path].isHidden()
     # A same-name file updated on disk must be decoded again.
@@ -2777,7 +2792,7 @@ def test_sidebar_resize_never_reads_files_or_restarts_thumbnail_work(sidebar_gal
         app.processEvents()
     assert view._thumb_buttons == cells
     assert view._thumb_request_id == request and not tasks
-    assert _gallery_widgets(view)[-1].text() == "+4"
+    assert _gallery_widgets(view)[-1].text() == "+7"
 
 
 def test_sidebar_opening_ignores_outside_cursor_until_animation_finishes(sidebar_gallery, monkeypatch):
@@ -2833,13 +2848,13 @@ def test_sidebar_shared_gallery_delete_updates_folder_count_without_changing_sou
     cache = view._thumb_cache if kind == "screenshot" else view._rec_thumb_cache
     refresh = view._refresh_screenshot_thumbnails if kind == "screenshot" else view._refresh_recording_thumbnails
     path = next(iter(buttons))
-    assert _gallery_widgets(view)[-1].text() == "+4"
+    assert _gallery_widgets(view)[-1].text() == "+7"
     monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
     monkeypatch.setitem(sys.modules, "winshell", SimpleNamespace(delete_file=lambda path, **_kwargs: Path(path).unlink()))
     view._delete_gallery_file(path, cache=cache, refresh=refresh)
     app.processEvents()
     assert path not in buttons and not Path(path).exists()
-    assert _gallery_widgets(view)[-1].text() == "+3"
+    assert _gallery_widgets(view)[-1].text() == "+6"
     assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == kind
 
 

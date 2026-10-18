@@ -7,7 +7,7 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import (
     Qt, QObject, QPropertyAnimation, QEasingCurve, QSize,
-    QEvent, QRect, QTimer, QRunnable, QThreadPool, Signal, Slot,
+    QEvent, QRect, QTimer, QRunnable, QThreadPool, QSignalBlocker, Signal, Slot,
 )
 from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -22,6 +22,7 @@ from src.core.launch_target import resolve_launch_args
 from src.utils import audio_control
 from src.utils.windows import get_visible_taskbar_work_area, focus_managed_process_window
 from src.gui.sidebar.controls import SidebarClockFace, SidebarDivider, VolumeDial
+from src.gui.sidebar.media_panel import MediaCenterPanel
 from src.gui.sidebar.win32_effects import ACRYLIC_TINT
 from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
@@ -38,7 +39,7 @@ _DEFAULT_AUTO_HIDE_MS = 3000
 
 # 갤러리 셀은 가용 너비에서 계산한다. 디코딩 해상도는 배치 치수와 독립이다.
 _THUMB_COLS = 3
-_THUMB_MAX_ROWS = 3
+_THUMB_MAX_ROWS = 2
 
 # 고화질 썸네일 로드 크기 (hover 확대 시 선명도 확보)
 _THUMB_HIRES_W = 152
@@ -421,6 +422,11 @@ class SidebarWidget(QWidget):
         get_recording_elapsed: Optional[Callable[[], int]] = None,
         on_hidden: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
+        on_audio_change: Optional[Callable[[ManagedProcess], bool]] = None,
+        audio_state: Optional[Callable] = None,
+        on_media_options: Optional[Callable] = None,
+        on_media_command: Optional[Callable] = None,
+        media_state: Optional[Callable] = None,
     ):
         super().__init__(
             parent,
@@ -435,6 +441,12 @@ class SidebarWidget(QWidget):
         self._reconnect_recording = reconnect_recording
         self._get_recording_elapsed = get_recording_elapsed
         self._on_hidden = on_hidden
+        self._on_audio_change = on_audio_change
+        self._audio_state = audio_state
+        self._compact_game_rows = False
+        self._on_media_options = on_media_options
+        self._on_media_command = on_media_command
+        self._media_state = media_state
         self._start_recording_callback: Optional[Callable[[], None]] = None
         self._rec_state = "obs_offline"
         self._rec_elapsed_sec = 0
@@ -597,6 +609,12 @@ class SidebarWidget(QWidget):
         media_layout.setContentsMargins(0, gap, 0, 0)
         media_layout.setSpacing(gap)
         media_layout.addWidget(self._section_divider())
+        self._media_center_panel = MediaCenterPanel(
+            self.width(), on_options=self._on_media_options,
+            on_command=self._on_media_command, parent=self._media_section,
+        )
+        media_layout.addWidget(self._media_center_panel)
+        media_layout.addWidget(self._section_divider())
 
         # 스크린샷 섹션
         self._screenshot_section = self._build_screenshot_section()
@@ -619,7 +637,7 @@ class SidebarWidget(QWidget):
         self._gallery_layout = QGridLayout(self._gallery)
         self._gallery_layout.setContentsMargins(0, 0, 0, 0)
         self._gallery_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        # 현재 3행의 최소 크기가 다음 높이 감소를 막지 않게 한다.
+        # 현재 행의 최소 크기가 다음 높이 감소를 막지 않게 한다.
         self._gallery_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         self._gallery.setFixedHeight(0)
         self._gallery.installEventFilter(self)
@@ -665,6 +683,36 @@ class SidebarWidget(QWidget):
         self._refresh_screenshot_section()
         self._refresh_recording_section()
         self._refresh_gallery()
+        if self._media_state is not None:
+            self.update_media_state(self._media_state())
+
+    def update_media_state(self, snapshot) -> None:
+        """관측을 투영할 뿐 시작·설정 변경·오디오 native 조회를 수행하지 않는다."""
+        self._media_center_panel.update_snapshot(snapshot)
+        if snapshot is None or not self.isVisible():
+            return
+        observations = {item.target.process_id: item for item in snapshot.game_audio}
+        processes = {process.id: process for process in self._data_manager.managed_processes}
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            process_id = row.property("processId")
+            process = processes.get(process_id)
+            dial = row.findChild(VolumeDial)
+            observation = observations.get(process_id)
+            if process is None or dial is None:
+                continue
+            with QSignalBlocker(dial):
+                # 자신의 휠 입력을 worker의 이전 관측값으로 되감지 않는다.
+                pending = self._volume_save_timers.get(process_id)
+                if (observation is not None and observation.available
+                        and observation.volume is not None
+                        and not (pending is not None and pending.isActive())):
+                    dial.setValue(round(observation.volume * 100 / 5) * 5)
+                dial.setChecked(process.default_muted)
+            dial._describe_value()
+            dial.setToolTip("백그라운드 자동 음소거 · 클릭은 사용자 음소거 설정 변경"
+                            if observation is not None and observation.policy_muted
+                            else "휠로 5% 조절 · 클릭으로 음소거")
 
     def slide_in(self) -> None:
         """사이드바를 화면 우측에서 슬라이드인합니다."""
@@ -701,6 +749,7 @@ class SidebarWidget(QWidget):
             return
 
         self._auto_hide_timer.stop()
+        self._media_center_panel.close_options()
         self._playtime_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
@@ -717,6 +766,7 @@ class SidebarWidget(QWidget):
 
     def cleanup(self, deadline_ms: int = 2000) -> bool:
         """타이머와 애니메이션을 정리합니다."""
+        self._media_center_panel.close_options()
         self._gallery.removeEventFilter(self)
         self._main_scroll.viewport().removeEventFilter(self)
         self._scroll_content.removeEventFilter(self)
@@ -769,15 +819,21 @@ class SidebarWidget(QWidget):
     def _fit_gallery_height(self) -> None:
         """필수 내용 뒤의 가용 높이만 사용하며, 여유 공간은 상·하단 사이에 둔다."""
         height = 0
+        viewport = self._main_scroll.viewport()
+        width = viewport.width()
+        _, cell_height, gap = self._gallery_cell_size(width)
+        media_controls_height = (self._media_section.sizeHint().height()
+                                 - self._gallery.minimumHeight())
+        gallery_minimum = cell_height if not self._gallery.isHidden() else 0
+        # 현재 압축된 높이를 기준으로 판단하면 정상/압축 레이아웃이 왕복한다.
+        # 원래 전체 문구의 높이로 판단하고 표시만 축약한다.
+        self._set_compact_game_rows(
+            self._normal_top_height(width) + media_controls_height + gallery_minimum > viewport.height())
+        self._fit_compact_row_padding(width, viewport.height() - media_controls_height - gallery_minimum)
         if not self._gallery.isHidden() and self._gallery_layout.count():
-            viewport = self._main_scroll.viewport()
-            width = viewport.width()
-            _, cell_height, gap = self._gallery_cell_size(width)
             top_layout = self._top_section.layout()
             top_height = (top_layout.totalHeightForWidth(width) if top_layout.hasHeightForWidth()
                           else top_layout.totalSizeHint().height())
-            media_controls_height = (self._media_section.sizeHint().height()
-                                     - self._gallery.minimumHeight())
             available = viewport.height() - top_height - media_controls_height
             available_rows = max(1, (available + gap) // (cell_height + gap))
             cell_count = len(self._thumb_buttons) + len(self._rec_thumb_buttons) + 1
@@ -785,6 +841,98 @@ class SidebarWidget(QWidget):
             height = rows * cell_height + (rows - 1) * gap
         if self._gallery.minimumHeight() != height:
             self._gallery.setFixedHeight(height)
+
+    def _fit_compact_row_padding(self, width: int, available_height: int) -> None:
+        """폰트별 실제 높이 뒤에 남는 세로 예산만 게임 행 여백으로 나눈다."""
+        if not self._compact_game_rows:
+            return
+        rows = [self._games_list_layout.itemAt(index).widget()
+                for index in range(self._games_list_layout.count())
+                if self._games_list_layout.itemAt(index).widget().property("processId") is not None]
+        if not rows:
+            return
+        top = self._top_section.layout()
+        current_height = (top.totalHeightForWidth(width) if top.hasHeightForWidth()
+                          else top.totalSizeHint().height())
+        used_padding = sum(row.layout().contentsMargins().top() + row.layout().contentsMargins().bottom()
+                           for row in rows)
+        content_height = current_height - used_padding
+        normal_padding = round(self.width() * 0.007)
+        padding = max(0, min(normal_padding, (available_height - content_height) // (len(rows) * 2)))
+        for row in rows:
+            layout = row.layout()
+            margins = layout.contentsMargins()
+            if margins.top() != padding or margins.bottom() != padding:
+                layout.setContentsMargins(margins.left(), padding, margins.right(), padding)
+
+    def _normal_top_height(self, width: int) -> int:
+        """창 높이와 무관하게, 원래 문구·행 여백에 필요한 높이를 계산한다."""
+        normal_padding = round(self.width() * 0.015)
+        row_heights = []
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            name = row.findChild(QLabel, "gameName")
+            if name is None:
+                row_heights.append(row.sizeHint().height())
+                continue
+            row.ensurePolished()
+            layout = row.layout()
+            text_width = width - normal_padding * 2 - layout.spacing() * (layout.count() - 1)
+            controls_height = 0
+            for item_index in range(layout.count()):
+                item = layout.itemAt(item_index)
+                widget = item.widget()
+                if widget is not None:
+                    text_width -= item.sizeHint().width()
+                    controls_height = max(controls_height, item.sizeHint().height())
+            text_layout = layout.itemAt(1).layout()
+            text_height = 0
+            for label_index in range(text_layout.count()):
+                label = text_layout.itemAt(label_index).widget()
+                full_text = label.toolTip() or label.text()
+                text_height += label.fontMetrics().boundingRect(
+                    QRect(0, 0, max(1, text_width), 100000),
+                    int(Qt.TextFlag.TextWordWrap), full_text).height()
+            text_height += text_layout.spacing() * (text_layout.count() - 1)
+            row_heights.append(max(controls_height, text_height) + normal_padding * 2)
+        games_height = sum(row_heights) + self._games_list_layout.spacing() * max(0, len(row_heights) - 1)
+        top = self._top_section.layout()
+        margins = top.contentsMargins()
+        return (games_height + top.itemAt(0).sizeHint().height()
+                + top.itemAt(1).layout().sizeHint().height()
+                + top.spacing() * (top.count() - 1) + margins.top() + margins.bottom())
+
+    def _set_compact_game_rows(self, compact: bool, *, force: bool = False) -> None:
+        if self._compact_game_rows == compact and not force:
+            return
+        self._compact_game_rows = compact
+        processes = {process.id: process for process in self._data_manager.managed_processes}
+        padding = round(self.width() * (0.007 if compact else 0.015))
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            process = processes.get(row.property("processId"))
+            if process is None:
+                continue
+            layout = row.layout()
+            layout.setContentsMargins(padding, padding, padding, padding)
+            name = row.findChild(QLabel, "gameName")
+            name.setWordWrap(not compact)
+            name.setToolTip(process.name)
+            name.setAccessibleDescription(process.name)
+            # 가로 공간은 기존 버튼 정사각형과 순서를 보존한 뒤 남는 이름 칸이다.
+            text_width = self._main_scroll.viewport().width() - padding * 2 - layout.spacing() * (layout.count() - 1)
+            for item_index in range(layout.count()):
+                item = layout.itemAt(item_index)
+                widget = item.widget()
+                if widget is not None:
+                    text_width -= item.sizeHint().width()
+            name.setText(name.fontMetrics().elidedText(process.name, Qt.TextElideMode.ElideRight,
+                                                     max(1, text_width)) if compact else process.name)
+            entry = self._playtime_labels.get(process.id)
+            if entry is not None:
+                label, started, prefix = entry
+                label.setWordWrap(not compact)
+                self._update_playtime_label(label, started, prefix)
 
     # ------------------------------------------------------------------
     # 내부 메서드 — 레이아웃
@@ -810,6 +958,7 @@ class SidebarWidget(QWidget):
             label = QLabel("등록된 게임 없음")
             label.setProperty("hhRole", "sidebarSecondary")
             self._games_list_layout.addWidget(label)
+        self._set_compact_game_rows(self._compact_game_rows, force=True)
 
     def _make_game_row(self, process: ManagedProcess, runtime: Optional[dict]) -> QFrame:
         row = QFrame()
@@ -836,6 +985,8 @@ class SidebarWidget(QWidget):
         name.setObjectName("gameName")
         name.setProperty("hhRole", "sidebarGameName")
         name.setWordWrap(True)
+        name.setToolTip(process.name)
+        name.setAccessibleDescription(process.name)
         name.setMinimumWidth(1)
         name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         text.addWidget(name)
@@ -953,17 +1104,17 @@ class SidebarWidget(QWidget):
 
     def _update_playtime_label(self, label: QLabel, start_ts: float, prefix: str = "오늘 플레이 시간") -> None:
         """경과 시간을 계산해 레이블 텍스트를 갱신합니다."""
-        if not start_ts:
-            label.setText(f"{prefix}: 0분")
-            return
-        elapsed = int(time.time() - start_ts)
+        elapsed = int(time.time() - start_ts) if start_ts else 0
         h = elapsed // 3600
         m = (elapsed % 3600) // 60
         if h > 0:
             elapsed_text = f"{h}시간 {m:02d}분"
         else:
             elapsed_text = f"{m}분"
-        label.setText(f"{prefix}: {elapsed_text}")
+        full_text = f"{prefix}: {elapsed_text}"
+        label.setToolTip(full_text)
+        label.setAccessibleDescription(full_text)
+        label.setText(elapsed_text if self._compact_game_rows else full_text)
 
     def _refresh_playtime(self) -> None:
         """1초 타이머마다 모든 실행 중 게임의 플레이타임 레이블을 갱신합니다."""
@@ -1000,7 +1151,13 @@ class SidebarWidget(QWidget):
         dial.setAccessibleName(f"{process.name} 음량")
         value = process.default_volume if process.default_volume is not None else 100
         muted = process.default_muted
-        if pid is not None:
+        policy_active, observation = self._audio_state(process.id) if self._audio_state else (False, None)
+        if policy_active:
+            if observation is not None and observation.available and observation.volume is not None:
+                value = round(observation.volume * 100 / 5) * 5
+            if observation is not None and observation.policy_muted:
+                dial.setToolTip("백그라운드 자동 음소거 · 클릭은 사용자 음소거 설정 변경")
+        elif pid is not None:
             try:
                 actual = audio_control.get_app_volume(pid)
                 actual_muted = audio_control.is_muted(pid)
@@ -1018,16 +1175,18 @@ class SidebarWidget(QWidget):
         return dial
 
     def _set_game_volume(self, value: int, process: ManagedProcess, pid: Optional[int]) -> None:
-        if pid is not None:
-            audio_control.set_app_volume(pid, value / 100.0)
         process.default_volume = value
+        handled = bool(self._on_audio_change and self._on_audio_change(process))
+        if pid is not None and not handled:
+            audio_control.set_app_volume(pid, value / 100.0)
         self._schedule_volume_save(process)
         self._reset_auto_hide()
 
     def _set_game_muted(self, muted: bool, process: ManagedProcess, pid: Optional[int]) -> None:
-        if pid is not None:
-            audio_control.set_mute(pid, muted)
         process.default_muted = muted
+        handled = bool(self._on_audio_change and self._on_audio_change(process))
+        if pid is not None and not handled:
+            audio_control.set_mute(pid, muted)
         self._schedule_volume_save(process)
         self._reset_auto_hide()
 
@@ -1129,6 +1288,9 @@ class SidebarWidget(QWidget):
                 self.setGeometry(geo)
         cursor_pos = QCursor.pos()
         inside = self.rect().contains(self.mapFromGlobal(cursor_pos))
+        if self._media_center_panel.options_open:
+            self._auto_hide_timer.stop()
+            return
 
         # 자동 숨김 타이머 관리
         if inside:
@@ -1262,9 +1424,11 @@ class SidebarWidget(QWidget):
             painter.drawArc(QRectF(2, 3, 12, 12), 135 * 16, 270 * 16)
             painter.drawLine(8, 1, 8, 8)
         elif kind == "focus":
-            painter.drawLine(3, 13, 13, 3)
-            painter.drawLine(5, 3, 13, 3)
-            painter.drawLine(13, 3, 13, 11)
+            for x, y, dx, dy in ((2, 2, 4, 4), (14, 2, -4, 4),
+                                  (2, 14, 4, -4), (14, 14, -4, -4)):
+                painter.drawLine(x, y, x + dx, y)
+                painter.drawLine(x, y, x, y + dy)
+            painter.drawEllipse(QRectF(5.5, 5.5, 5, 5))
         elif kind == "close":
             painter.drawLine(6, 3, 11, 8)
             painter.drawLine(11, 8, 6, 13)
@@ -1407,7 +1571,7 @@ class SidebarWidget(QWidget):
         return cell_width, max(1, round(cell_width * 0.75)), gap
 
     def _refresh_gallery(self, _index: int = -1) -> None:
-        """콘텐츠 진입점에서만 파일을 읽고 최대 8개 미리보기를 준비한다."""
+        """콘텐츠 진입점에서만 파일을 읽고 최대 5개 미리보기를 준비한다."""
         if not hasattr(self, "_thumb_pool"):
             return  # UI 구성 중에는 디코딩 작업을 등록하지 않는다.
         self._thumb_request_id += 1

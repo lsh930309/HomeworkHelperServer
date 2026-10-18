@@ -619,6 +619,152 @@ def test_user_stop_cli_preserves_failure_exit_code_without_loading_app(error, co
     assert json.loads(capsys.readouterr().out)["accepted"] is False
 
 
+@pytest.fixture
+def user_launch_native(monkeypatch):
+    """Match pywin32's string boundary without creating a process or opening a URI."""
+    calls = SimpleNamespace(shell=[], processes=[], closed=[], handle=42, startup=object())
+
+    def shell_execute(**kwargs):
+        if not isinstance(kwargs["lpParameters"], str):
+            raise TypeError("None is not a valid string in this context")
+        calls.shell.append(kwargs)
+        return {"hProcess": calls.handle}
+
+    def create_process(*args):
+        calls.processes.append(args)
+        return "process-handle", "thread-handle", 100, 101
+
+    monkeypatch.setitem(sys.modules, "win32api", SimpleNamespace(CloseHandle=calls.closed.append))
+    monkeypatch.setitem(sys.modules, "win32con", SimpleNamespace(SW_SHOWNORMAL=1))
+    monkeypatch.setitem(sys.modules, "win32process", SimpleNamespace(
+        CreateProcess=create_process, STARTUPINFO=lambda: calls.startup,
+    ))
+    shell_module = SimpleNamespace(
+        shell=SimpleNamespace(ShellExecuteEx=shell_execute),
+        shellcon=SimpleNamespace(SEE_MASK_NOCLOSEPROCESS=0x40, SEE_MASK_FLAG_DDEWAIT=0x100,
+                                 SEE_MASK_FLAG_NO_UI=0x400),
+    )
+    monkeypatch.setitem(sys.modules, "win32com", SimpleNamespace(shell=shell_module))
+    monkeypatch.setitem(sys.modules, "win32com.shell", shell_module)
+    return calls
+
+
+def _user_launch_payload(data):
+    import base64
+    return base64.urlsafe_b64encode(json.dumps(data).encode("utf-8")).decode("ascii")
+
+
+@pytest.mark.parametrize("target", ["C:/Games/launcher.lnk", "C:/Games/launcher.url", "fixture://launch/game"])
+@pytest.mark.parametrize("args", [None, ""])
+def test_user_launch_cli_opens_shell_targets_without_extra_arguments(target, args, user_launch_native):
+    import homework_helper_service as entry
+
+    assert entry.main(["--user-launch", _user_launch_payload({"target": target, "args": args})]) == 0
+    assert user_launch_native.shell == [{
+        "fMask": 0x40 | 0x100 | 0x400, "lpVerb": "open", "lpFile": target,
+        "lpParameters": "", "nShow": 1,
+    }]
+    assert user_launch_native.closed == [42]
+    assert user_launch_native.processes == []
+
+
+@pytest.mark.parametrize("target", ["C:/Games/launcher.lnk", "C:/Games/launcher.url", "fixture://launch/game"])
+def test_user_launch_cli_preserves_explicit_shell_arguments(target, user_launch_native):
+    import homework_helper_service as entry
+
+    args = '--profile "검증 공백" --flag'
+    assert entry.main(["--user-launch", _user_launch_payload({"target": target, "args": args})]) == 0
+    assert user_launch_native.shell[0]["lpParameters"] == args
+    assert user_launch_native.closed == [42] and user_launch_native.processes == []
+
+
+def test_user_launch_cli_allows_shell_activation_without_process_handle(user_launch_native):
+    import homework_helper_service as entry
+
+    user_launch_native.handle = None
+    assert entry.main(["--user-launch", _user_launch_payload({"target": "fixture://launch", "args": None})]) == 0
+    assert len(user_launch_native.shell) == 1
+    assert user_launch_native.closed == [] and user_launch_native.processes == []
+
+
+@pytest.mark.parametrize("data", [[], {}, {"target": "game.lnk"},
+                                  {"target": "game.lnk", "args": None, "extra": True},
+                                  {"target": "", "args": None}, {"target": None, "args": None},
+                                  {"target": "game.lnk", "args": ["--flag"]},
+                                  {"target": "game.lnk", "args": False}])
+def test_user_launch_cli_rejects_invalid_payload_before_native_effects(data, user_launch_native, capsys):
+    import homework_helper_service as entry
+
+    assert entry.main(["--user-launch", _user_launch_payload(data)]) == 1
+    assert json.loads(capsys.readouterr().out)["accepted"] is False
+    assert user_launch_native.shell == user_launch_native.processes == user_launch_native.closed == []
+
+
+@pytest.mark.parametrize("args", [None, '--profile "검증 공백" --flag'])
+def test_user_launch_cli_preserves_create_process_arguments(args, user_launch_native):
+    import subprocess
+    import homework_helper_service as entry
+
+    target = "C:/Games/game.exe"
+    assert entry.main(["--user-launch", _user_launch_payload({"target": target, "args": args})]) == 0
+    expected = subprocess.list2cmdline([target]) + (" " + args if args else "")
+    assert user_launch_native.processes == [(
+        target, expected, None, None, False, 0, None, str(Path(target).parent), user_launch_native.startup,
+    )]
+    assert user_launch_native.closed == ["thread-handle", "process-handle"]
+    assert user_launch_native.shell == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Requires the actual Windows Shell and pywin32")
+def test_windows_user_launch_shortcut_preserves_embedded_arguments_and_working_directory(tmp_path):
+    """Only a self-exiting pythonw fixture runs; no app DB, settings or game is opened."""
+    import subprocess
+    import time
+    import homework_helper_service as entry
+
+    pythoncom = pytest.importorskip("pythoncom")
+    from win32com.shell import shell
+    import psutil
+
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    assert pythonw.is_file(), "Windows test Python must provide its matching pythonw.exe"
+    working = tmp_path / "launch fixture"
+    working.mkdir()
+    output = working / "result.json"
+    script = working / "capture.pyw"
+    script.write_text(
+        "import json, os, pathlib, sys\n"
+        "output = pathlib.Path(sys.argv[1])\n"
+        "temporary = output.with_suffix('.tmp')\n"
+        "temporary.write_text(json.dumps({'args': sys.argv[2:], 'cwd': os.getcwd(), 'pid': os.getpid()}), encoding='utf-8')\n"
+        "temporary.replace(output)\n",
+        encoding="utf-8",
+    )
+    shortcut = working / "launcher.lnk"
+    pythoncom.CoInitialize()
+    try:
+        link = pythoncom.CoCreateInstance(shell.CLSID_ShellLink, None, pythoncom.CLSCTX_INPROC_SERVER,
+                                          shell.IID_IShellLink)
+        link.SetPath(str(pythonw))
+        link.SetArguments(subprocess.list2cmdline([str(script), str(output), "--profile", "검증 공백"]))
+        link.SetWorkingDirectory(str(working))
+        link.QueryInterface(pythoncom.IID_IPersistFile).Save(str(shortcut), 0)
+        assert entry.main(["--user-launch", _user_launch_payload({"target": str(shortcut), "args": None})]) == 0
+        deadline = time.monotonic() + 10
+        while not output.is_file() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert output.is_file(), "The shortcut's self-exiting fixture did not produce its result"
+        observed = json.loads(output.read_text(encoding="utf-8"))
+        assert observed["args"] == ["--profile", "검증 공백"]
+        assert Path(observed["cwd"]) == working
+        try:
+            psutil.Process(observed["pid"]).wait(timeout=5)
+        except psutil.NoSuchProcess:
+            pass
+    finally:
+        pythoncom.CoUninitialize()
+
+
 def test_client_rejects_failed_or_malformed_response_and_does_not_retry():
     requests = []
     def transport(request):
