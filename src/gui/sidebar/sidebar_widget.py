@@ -1365,9 +1365,10 @@ class SidebarWidget(QWidget):
     def _set_frame_background(self) -> None:
         red, green, blue, alpha = ACRYLIC_TINT
         if self._blur_applied:
-            alpha = 0  # native tint 위에 두 번째 어두운 막을 그리지 않는다.
+            alpha = 1  # 완전히 투명한 픽셀에서 Windows가 아래 창으로 입력을 넘기지 않도록 한다.
+        background = QColor(red, green, blue, alpha).name(QColor.NameFormat.HexArgb)
         self._frame.setStyleSheet(
-            f"QFrame#SidebarFrame {{ background-color: rgba({red},{green},{blue},{alpha});"
+            f"QFrame#SidebarFrame {{ background-color: {background};"
             " border: none; border-radius: 0px; }"
         )
 

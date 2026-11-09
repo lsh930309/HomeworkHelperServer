@@ -535,22 +535,23 @@ def test_game_body_width_and_right_controls_stay_aligned_when_game_stops(sidebar
     assert states[1] == states[0]
 
 
-def test_native_acrylic_owns_tint_and_failure_keeps_same_fixed_background(sidebar, monkeypatch):
+def test_native_acrylic_owns_tint_while_qt_keeps_input_surface_and_failure_background(sidebar, monkeypatch):
     from src.gui.sidebar import win32_effects
     view, _game, settings, _writes = sidebar
     settings.sidebar_opacity = 0.1
     settings.sidebar_effect = "none"
     calls = []
     monkeypatch.setattr(win32_effects, "apply_blur_effect", lambda hwnd: calls.append(hwnd) or True)
+    view.resize(280, 900)
+    view.show()
     view._try_apply_blur()
     view.apply_visual_settings()
     assert len(calls) == 1 and view._blur_applied
-    assert "rgba(8,12,19,0)" in view._frame.styleSheet()
     assert view.windowOpacity() == 1.0
     monkeypatch.setattr(win32_effects, "apply_blur_effect", lambda _hwnd: False)
     view._try_apply_blur()
     assert not view._blur_applied
-    assert "rgba(8,12,19,153)" in view._frame.styleSheet()
+    assert view.grab().toImage().pixelColor(1, 1).alpha() == 153
 
 
 def test_section_dividers_reserve_equal_space_above_and_below_line(sidebar):
@@ -560,7 +561,7 @@ def test_section_dividers_reserve_equal_space_above_and_below_line(sidebar):
     assert [divider.height() for divider in dividers] == [14,14,14]
 
 
-def test_qt_empty_surfaces_leave_native_backdrop_visible(sidebar, app, monkeypatch):
+def test_open_acrylic_sidebar_empty_surfaces_render_a_nonzero_input_alpha(sidebar, app, monkeypatch):
     from src.gui.sidebar import win32_effects
     view, _game, _settings, _writes = sidebar
     monkeypatch.setattr(win32_effects, "apply_blur_effect", lambda _hwnd: True)
@@ -569,9 +570,9 @@ def test_qt_empty_surfaces_leave_native_backdrop_visible(sidebar, app, monkeypat
     view._try_apply_blur()
     app.processEvents()
     image = view.grab().toImage()
-    assert image.pixelColor(1, 1).alpha() == 0
+    assert image.pixelColor(1, 1).alpha() == 1
     empty = view._main_scroll.viewport().mapTo(view, view._main_scroll.viewport().rect().center())
-    assert image.pixelColor(empty).alpha() == 0
+    assert image.pixelColor(empty).alpha() == 1
 
 
 def test_short_sidebar_fits_seven_games_two_gauges_and_gallery_then_restores(sidebar, app, monkeypatch, tmp_path):
