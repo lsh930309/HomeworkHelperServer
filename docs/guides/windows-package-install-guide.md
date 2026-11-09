@@ -52,6 +52,12 @@ GUI/API 종료를 확인한다. 실패·시간 초과·파일 잠금이면 중�
 ## 3. Setup 적용
 
 Setup이 정상 종료·서비스 전환·기본 설치 위치 적용을 소유한다. 앱/서비스 파일을 수동 교체하지 않는다.
+Windows에서 직접 업데이트할 때는 앞의 준비와 정상 종료를 마친 뒤 해당 릴리스의 Setup EXE를 열고
+관리자 승인을 한다. 기본 설치 경로에 적용하고, 완료 화면의 앱 실행 선택을 해제한 뒤 4단계에서
+앱을 시작한다. 재부팅 안내가 나오면 즉시 재부팅하지 않고 사유·사용 상태·보호 시간을 확인해 별도
+승인 범위에서 판단한다.
+Windows 터미널에서 Setup을 직접 실행할 때는 `/LOG="<로그 경로>"`로 쓰기 가능한 로그 파일을 지정한다.
+로그를 지정하지 않고 실패했다면 오류 창의 메시지와 당시 설치 파일·서비스·앱 상태를 보존한다.
 공용 install은 `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /HostUser=lsh93`와 설치 로그 경로로
 준비된 Setup을 실행하고 실제 종료 코드를 확인한다. Start-Process 호출 성공을 설치 성공으로 보지 않는다.
 
@@ -60,23 +66,48 @@ release ID가 설치 버전의 근거다. 지원하지 않는 --version 옵션�
 
 ## 4. 일반 사용자 앱 시작과 확인
 
-서비스가 Running/LocalSystem이고 지정 사용자 SID·로그인 세션이 같은지 확인한다. 설치 직후 앱을
-일반 권한으로 한 번 실행한다. 현재 로그온에서 닫힌 앱을 서비스가 다시 여는 정책을 추가하지 않는다.
-SSH의 직접 Start-Process로 GUI를 잘못된 세션/상승 권한에서 실행하지 않는다.
+서비스가 Running/LocalSystem이고 지정 사용자 SID·로그인 세션이 같은지 확인한다. 설치된 앱이 그
+세션에서 일반 권한으로 정상 동작 중이면 유지한다. 앱이 없으면 지정 사용자의 Windows 데스크톱에서
+시작 메뉴의 HomeworkHelper를 일반 권한으로 한 번 실행한다. 관리자 권한으로 실행할 대상은 Setup이다.
 
-한 번 실행하는 InteractiveToken 작업의 앱 RunLevel은 0, ExecutionTimeLimit은 PT0S,
-AllowHardTerminate는 false다. 트리거를 만들지 않고 실행 후 등록을 제거한다. 앱을 종료하는 동작이 아니다.
+원격 자동화에서는 [공용 설치 스크립트](../../tools/windows_host_operations.ps1)의 내부 `Start-UserApp`과
+같은 InteractiveToken 경계를 사용한다. 일회성 작업의 앱 RunLevel은 0, ExecutionTimeLimit은 PT0S,
+AllowHardTerminate는 false다. 트리거를 만들지 않고 실행 후 등록을 제거한다. SSH의 직접 Start-Process로
+GUI를 시작하거나 현재 로그온에서 닫힌 앱을 서비스가 다시 여는 정책을 추가하지 않는다.
 OBS 시작은 기존 제품 트리거가 소유하며 운영 도구가 별도 OBS 자동 시작 작업을 추가하지 않는다.
 
-앱/API SID·세션·elevated=false, DB/API 정상 준비, OBS 실행과 연결, 감시 시작 점검·주기 로그를
-구분하여 확인한다. 안전한 사용자 설정과 스크린샷·녹화 경로를 대조한다. OBS 프로필·인코더를 복원하지 않는다.
-실제 화면·녹화·다음 로그온 성공을 로그/API 결과로 확대하지 않는다.
+앱·서비스 설치 파일의 서명과 Portable 일치로 릴리스 ID를 확인하고, 실제 프로세스의 경로와 시작
+시각으로 교체한 설치 파일이 실행 중인지 확인한다. 앱/API는 지정 사용자 SID·세션과 `elevated=false`,
+권한 서비스는 Running/LocalSystem이어야 한다. API `ping`과 `health`, `db_ready=true`와 DB 접근 모드
+`normal`을 확인하고 안전한 사용자 설정과 스크린샷·녹화 경로를 설치 전과 대조한다. OBS 실행·연결과
+감시 로그는 별도로 확인한다.
+OBS 프로필·인코더를 복원하지 않는다. 실제 화면·녹화·다음 로그온은 사용자가 별도로 확인한다.
 
 ## 실패와 보고
 
-준비·백업·정상 종료 실패는 적용 전에 중단한다. Setup 실패는 종료 코드와 설치 로그, 서비스·파일
-상태를 확인한다. 파일 서명/payload 불일치에서는 앱 시작 전에 중단한다. 권한·OBS·서비스 오류를
-DB 손상으로 표시하지 않으며 UTF-8 디코딩 오류도 치환하지 않는다. 재시도·강제 종료는 자동 선택하지 않는다.
+준비·백업·정상 종료 실패는 적용 전에 중단한다. Setup이 실패하면 종료 코드·설치 로그와
+[공용 도구의 `inspect`](operations-guide.md#읽기-전용-운영-상태-수집)로 현재 설치 파일·서비스·앱·API를
+확인한다. 파일 교체 뒤 후처리가 실패했다면 아래 조건을 모두 충족할 때만 새 설치본의 운영을 복구한다.
 
-실제 release ID, 백업·설치 결과, 서비스/앱/OBS 권한과 API/로그 확인 범위, 미검증 사용자 항목을
-대화에서 직접 보고한다. 자세한 오류 보고 형식은 AGENTS.md를 따른다.
+1. 설치를 시도한 정확한 릴리스의 Portable ZIP이 CRC 검사를 통과하고, 그 안의 고유한 앱·서비스 EXE의
+   SHA-256이 현재 설치된 두 EXE와 각각 일치한다. 두 설치 파일의 Authenticode 상태는 모두 `Valid`다.
+   Portable 비교는 [기존 payload 검사](../../tools/windows_host_probe.py)를 사용한다.
+2. [제품의 `validate_protected_install`](../../src/host_service/windows_backend.py) 검사가 통과한다.
+   서비스 EXE뿐 아니라 `_internal`을 포함한 설치 트리와 상위 경로의 ACL·재분석 지점도 검사한다.
+3. 기존 `HomeworkHelperPrivilege`의 `ImagePath`가 기본 위치의 서비스 EXE를 가리키고,
+   실행 계정은 `LocalSystem`, 시작 유형은 자동이다. `read_owner_sid`로 읽은 설치 사용자 SID와 지정
+   사용자가 일치하고 그 사용자의 로그인 세션은 하나다. 진행 중인 게임·OBS 출력과 프로세스 상태도 확인한다.
+
+불일치·중복·미확인 항목이 있거나 사용 중인 게임·OBS 출력이 있으면 중단한다. 서비스가 `Stopped`이면
+관리자 PowerShell에서 `Start-Service -Name HomeworkHelperPrivilege`를 한 번 실행한다. Running과 실제
+PID를 확인한 뒤 서비스 EXE의 `--control status`에서 사용자와 단일 세션을 다시 확인한다. 서비스가 이미
+실행 중이면 유지하고, 앱 실행 및 검증은 [4단계](#4-일반-사용자-앱-시작과-확인)를 따른다.
+
+이 경로에서 서비스를 다시 등록하거나 설치 파일을 수동 교체하지 않는다. Setup을 자동 재시도하거나
+프로세스를 강제 종료하지 않는다. 보관 릴리스로 복귀할 때도 기존 공용 설치의 정상 API/DB 사전 검사를
+따른다. 권한·OBS·서비스 오류를 DB 손상으로 표시하지 않으며 UTF-8 디코딩 오류도 치환하지 않는다.
+
+Setup 종료와 후처리의 성공 여부, 확인된 릴리스 ID와 실행 중인 서비스·앱의 운영 복구 여부를 각각 기록한다.
+파일 교체 뒤 운영을 복구한 경우에도 Setup 실패와 남은 후처리 확인 항목을 남긴다. 예전 자동 시작 예약 작업·
+Startup 바로가기·Run 값은 존재 여부를 확인한다. 백업·API/DB·설정·OBS·로그 확인 결과와 사용자 실화면 검수
+여부를 구분해 대화에서 직접 보고한다. 자세한 오류 보고 형식은 AGENTS.md를 따른다.
