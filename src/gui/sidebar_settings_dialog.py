@@ -124,10 +124,6 @@ class SidebarSettingsDialog(QDialog):
         self._clock_enabled_cb.setChecked(self._settings.sidebar_clock_enabled)
         section_form.addRow("현재 시간 표시", self._clock_enabled_cb)
 
-        self._playtime_enabled_cb = QCheckBox()
-        self._playtime_enabled_cb.setChecked(self._settings.sidebar_playtime_enabled)
-        section_form.addRow("플레이타임 표시", self._playtime_enabled_cb)
-
         self._vol_enabled_cb = QCheckBox()
         self._vol_enabled_cb.setChecked(self._settings.sidebar_volume_section_enabled)
         section_form.addRow("게임별 음량 조절 표시", self._vol_enabled_cb)
@@ -142,14 +138,6 @@ class SidebarSettingsDialog(QDialog):
 
         left_col.addWidget(clock_group)
 
-        # ── 플레이타임 설정 ──
-        pt_group = QGroupBox("플레이타임 섹션")
-        pt_form = QFormLayout(pt_group)
-
-        self._playtime_prefix_edit = QLineEdit(self._settings.sidebar_playtime_prefix)
-        pt_form.addRow("접두어 텍스트", self._playtime_prefix_edit)
-
-        left_col.addWidget(pt_group)
         left_col.addStretch()
 
         # ════════════════ 오른쪽 컬럼 ════════════════
@@ -358,8 +346,6 @@ class SidebarSettingsDialog(QDialog):
         gs.sidebar_trigger_y_end = max(y_start, y_end)
         gs.sidebar_handle_auto_hide = self._handle_auto_hide_cb.isChecked()
         gs.sidebar_clock_enabled = self._clock_enabled_cb.isChecked()
-        gs.sidebar_playtime_enabled = self._playtime_enabled_cb.isChecked()
-        gs.sidebar_playtime_prefix = self._playtime_prefix_edit.text().strip()
         gs.sidebar_volume_section_enabled = self._vol_enabled_cb.isChecked()
         gs.screenshot_enabled = self._ss_enabled_cb.isChecked()
         gs.screenshot_save_dir = self._ss_save_dir_edit.text().strip()

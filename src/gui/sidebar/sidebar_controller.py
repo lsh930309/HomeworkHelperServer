@@ -199,6 +199,10 @@ class SidebarController:
         if self._sidebar is not None and self._get_recording_output_dir:
             self._sidebar.set_recording_output_dir(self._get_recording_output_dir())
 
+    def refresh_game_rows(self) -> None:
+        if self._sidebar is not None:
+            self._sidebar.refresh_game_rows()
+
     def dispatch_recording_state(self, state: str) -> None:
         """사이드바에 녹화 상태를 전달합니다."""
         if self._sidebar is not None:

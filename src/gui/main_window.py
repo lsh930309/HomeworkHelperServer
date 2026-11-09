@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QMenuBar, QCheckBox,
-    QLabel, QProgressBar, QSlider, QToolButton, QDialog, QLineEdit,
+    QLabel, QSlider, QToolButton, QDialog, QLineEdit,
 )
 from PySide6.QtCore import (
     Qt, QTimer, Signal, Slot, QUrl, QEvent, QThread, QSettings, QPoint, QSize,
@@ -83,6 +83,8 @@ from src.gui.widgets_style import (
     CapsuleProgressBar,
     apply_modern_widgets_style,
     apply_widgets_palette,
+    calculate_game_progress,
+    progress_bar_format,
     tint_icon,
     widgets_theme_tokens,
 )
@@ -148,8 +150,6 @@ class MainWindow(QMainWindow):
     _gamepad_countdown_sig = Signal()         # 게임패드 롱프레스 → 메인 스레드 릴레이
     _media_center_sig = Signal(object)
 
-    _PROGRESS_BAR_SCALE = 10
-    _PROGRESS_BAR_MAX = 100 * _PROGRESS_BAR_SCALE
     _UI_REFRESH_INTERVAL_MS = 1000
     _WEB_BUTTON_REFRESH_INTERVAL_TICKS = 60
     _MIN_WINDOW_WIDTH = 320
@@ -1537,6 +1537,9 @@ class MainWindow(QMainWindow):
         if changed:
             self._record_status_event("프로세스 상태 변경 감지됨.", 2000)
             self.update_process_statuses_only()
+            controller = getattr(self, "_sidebar_controller", None)
+            if controller is not None:
+                controller.refresh_game_rows()
         self._check_and_toggle_game_mode()
 
         self._publish_media_targets()
@@ -1738,7 +1741,7 @@ class MainWindow(QMainWindow):
             name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
             self.process_table.setItem(row, self.COL_NAME, name_item)
 
-            percentage, time_str = self._calculate_progress_percentage(p, now_dt)
+            percentage, time_str = calculate_game_progress(p, now_dt)
             progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
             self.process_table.setCellWidget(row, self.COL_LAST_PLAYED, progress_widget)
 
@@ -2864,73 +2867,6 @@ class MainWindow(QMainWindow):
 
     # ─────────────────────────────
 
-    def _calculate_progress_percentage(self, process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:
-        """마지막 실행 시각을 기준으로 다음 접속까지의 진행률을 계산합니다.
-
-        호요버스 게임의 경우 스태미나 기반으로 계산합니다.
-        """
-        # 범용 외부 리소스 추적이 활성화된 경우 리소스 기반 계산
-        if getattr(process, 'resource_tracking_enabled', False) and getattr(process, 'resource_provider', None):
-            resource_percentage = process.get_resource_percentage() if hasattr(process, 'get_resource_percentage') else getattr(process, 'resource_percent', None)
-            if resource_percentage is not None:
-                label = getattr(process, 'resource_label', None) or "리소스"
-                result = f"RESOURCE:{getattr(process, 'resource_key', '')}:{label}:{float(resource_percentage):.1f}%"
-                return float(resource_percentage), result
-
-        # 스태미나 자동 추적이 활성화된 경우 스태미나 기반 계산
-        stamina_tracking_enabled = getattr(process, 'stamina_tracking_enabled', False)
-        hoyolab_game_id = getattr(process, 'hoyolab_game_id', None)
-
-        if stamina_tracking_enabled and hoyolab_game_id:
-            stamina_info = process.get_predicted_stamina()
-            if stamina_info:
-                predicted, max_stamina = stamina_info
-                percentage = (predicted / max_stamina) * 100 if max_stamina > 0 else 0
-                # 특수 포맷: "STAMINA:game_id:current/max" (아이콘 표시용)
-                result = f"STAMINA:{hoyolab_game_id}:{predicted}/{max_stamina}"
-                return percentage, result
-
-        # 기존 시간 기반 계산
-        if not process.last_played_timestamp or not process.user_cycle_hours:
-            return 0.0, "기록 없음"
-
-        try:
-            last_played_dt = datetime.datetime.fromtimestamp(process.last_played_timestamp)
-            cycle_hours = process.user_cycle_hours
-
-            # 경과 시간 계산 (시간 단위)
-            elapsed_hours = (current_dt - last_played_dt).total_seconds() / 3600
-
-            # 진행률 계산 (0.0 ~ 1.0)
-            progress = min(elapsed_hours / cycle_hours, 1.0)
-
-            # 백분율로 변환
-            percentage = progress * 100
-
-            # 남은 시간 계산
-            remaining_hours = max(cycle_hours - elapsed_hours, 0)
-
-            if remaining_hours >= 24:
-                remaining_days = int(remaining_hours // 24)
-                remaining_hours_remainder = remaining_hours % 24
-                if remaining_hours_remainder > 0:
-                    time_str = f"{remaining_days}일 {int(remaining_hours_remainder)}시간"
-                else:
-                    time_str = f"{remaining_days}일"
-            elif remaining_hours >= 1:
-                time_str = f"{int(remaining_hours)}시간"
-            else:
-                remaining_minutes = int(remaining_hours * 60)
-                time_str = f"{remaining_minutes}분"
-
-            return percentage, time_str
-
-
-        except Exception as e:
-            logger.error(f"진행률 계산 중 오류: {e}")
-            return 0.0, "계산 오류"
-
-
     def _create_progress_bar_widget(self, process, percentage: float, time_str: str) -> QWidget:
         """우측 값 행과 셀 전체 폭의 얇은 트랙을 가진 진행률 위젯을 생성합니다."""
         container = QWidget()
@@ -2948,7 +2884,7 @@ class MainWindow(QMainWindow):
         value_layout.addStretch(1)
 
         expects_bar = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
-        display_text = self._get_progress_bar_format(percentage, time_str) if expects_bar else time_str
+        display_text = progress_bar_format(percentage, time_str) if expects_bar else time_str
         text_label = QLabel(display_text, value_row)
         text_label.setObjectName("progressText")
         text_label.setProperty("hhRole", "muted")
@@ -2957,7 +2893,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(value_row)
 
         if expects_bar:
-            layout.addWidget(self._create_styled_progress_bar(percentage, display_text))
+            progress_bar = CapsuleProgressBar(container)
+            progress_bar.set_progress(percentage, display_text)
+            layout.addWidget(progress_bar)
 
         return container
 
@@ -2981,42 +2919,6 @@ class MainWindow(QMainWindow):
 
         return resolve_preset_icon_path(icon_path, icon_type)
 
-    def _create_styled_progress_bar(self, percentage: float, format_text: str) -> QProgressBar:
-        """공통 테마가 그리는 얇은 QProgressBar를 생성합니다."""
-        progress_bar = CapsuleProgressBar()
-        progress_bar.setValue(self._progress_bar_value(percentage))
-        progress_bar.setMaximum(self._PROGRESS_BAR_MAX)
-        progress_bar.setMinimum(0)
-
-        progress_bar.setTextVisible(False)
-        progress_bar.setFormat(format_text)
-        progress_bar.setProperty("color_bucket", self._progress_color_bucket(percentage))
-        self._apply_progress_bar_style(progress_bar, percentage)
-
-        return progress_bar
-
-    def _progress_bar_value(self, percentage: float) -> int:
-        """진행률 백분율을 ProgressBar 내부 값으로 변환합니다."""
-        clamped = max(0.0, min(percentage, 100.0))
-        return round(clamped * self._PROGRESS_BAR_SCALE)
-
-    def _progress_color_bucket(self, percentage: float) -> int:
-        """진행률에 따른 색상 구간을 반환합니다."""
-        if percentage >= 100:
-            return 3
-        if percentage >= 80:
-            return 2
-        if percentage >= 50:
-            return 1
-        return 0
-
-    def _apply_progress_bar_style(self, progress_bar: QProgressBar, percentage: float) -> None:
-        """진행률 구간을 공통 QSS가 소비하는 semantic 속성으로 적용합니다."""
-        bucket = ("low", "medium", "high", "full")[self._progress_color_bucket(percentage)]
-        progress_bar.setProperty("hhBucket", bucket)
-        progress_bar.style().unpolish(progress_bar)
-        progress_bar.style().polish(progress_bar)
-
     def _refresh_progress_bars(self):
         """표의 진행률 셀을 값이 바뀐 경우에만 갱신합니다."""
         start_time = time.time()
@@ -3035,8 +2937,8 @@ class MainWindow(QMainWindow):
             current_widget = self.process_table.cellWidget(row, self.COL_LAST_PLAYED)
             if not current_widget:
                 continue
-            percentage, time_str = self._calculate_progress_percentage(process, now_dt)
-            progress_bar = current_widget.findChild(QProgressBar)
+            percentage, time_str = calculate_game_progress(process, now_dt)
+            progress_bar = current_widget.findChild(CapsuleProgressBar)
             expects_progress_widget = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
             if expects_progress_widget != (progress_bar is not None):
                 replacement = self._create_progress_bar_widget(process, percentage, time_str)
@@ -3044,28 +2946,14 @@ class MainWindow(QMainWindow):
                 updated_count += 1
                 continue
 
-            new_format = self._get_progress_bar_format(percentage, time_str) if expects_progress_widget else time_str
+            new_format = progress_bar_format(percentage, time_str) if expects_progress_widget else time_str
             text_label = current_widget.findChild(QLabel, "progressText")
             if text_label is not None and text_label.text() != new_format:
                 text_label.setText(new_format)
                 updated_count += 1
 
-            if progress_bar:
-                new_value = self._progress_bar_value(percentage)
-                new_bucket = self._progress_color_bucket(percentage)
-
-                if progress_bar.value() != new_value:
-                    progress_bar.setValue(new_value)
-                    updated_count += 1
-
-                if progress_bar.format() != new_format:
-                    progress_bar.setFormat(new_format)
-                    updated_count += 1
-
-                if progress_bar.property("color_bucket") != new_bucket:
-                    progress_bar.setProperty("color_bucket", new_bucket)
-                    self._apply_progress_bar_style(progress_bar, percentage)
-                    updated_count += 1
+            if progress_bar is not None and progress_bar.set_progress(percentage, new_format):
+                updated_count += 1
 
         if updated_count > 0:
             self.process_table.viewport().update()
@@ -3075,34 +2963,6 @@ class MainWindow(QMainWindow):
         execution_time = (time.time() - start_time) * 1000
         if execution_time > 100:
             logger.warning(f"_refresh_progress_bars 실행 시간 초과: {execution_time:.1f}ms (업데이트: {updated_count}개)")
-
-    def _get_progress_bar_format(self, percentage: float, time_str: str) -> str:
-        """ProgressBar 표시 문자열을 반환합니다."""
-        if time_str.startswith("RESOURCE:"):
-            try:
-                parts = time_str.split(":", 3)
-                if len(parts) >= 4:
-                    return parts[3]
-            except (AttributeError, IndexError, TypeError, ValueError) as exc:
-                logger.debug(
-                    "ProgressBar 리소스 포맷 파싱 실패: time_str=%r, percentage=%.1f, error=%s",
-                    time_str,
-                    percentage,
-                    exc,
-                )
-        if time_str.startswith("STAMINA:"):
-            try:
-                parts = time_str.split(":")
-                if len(parts) >= 3:
-                    return parts[2]
-            except (AttributeError, IndexError, TypeError, ValueError) as exc:
-                logger.debug(
-                    "ProgressBar 포맷 파싱 실패: time_str=%r, percentage=%.1f, error=%s",
-                    time_str,
-                    percentage,
-                    exc,
-                )
-        return f"{percentage:.1f}%"
 
     def _on_launcher_restart_request(self, launcher_name: str) -> bool:
         """

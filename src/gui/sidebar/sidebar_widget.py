@@ -2,20 +2,23 @@
 import logging
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+import psutil
 from PySide6.QtCore import (
     Qt, QObject, QPropertyAnimation, QEasingCurve, QSize,
     QEvent, QRect, QTimer, QRunnable, QThreadPool, QSignalBlocker, Signal, Slot,
 )
 from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QApplication, QBoxLayout, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QLayout, QPushButton, QScrollArea, QSizePolicy, QStyle, QTabBar, QVBoxLayout, QWidget,
 )
 
 from src.data.data_models import ManagedProcess
+from src.core.game_focus import WindowsGameFocusNative
 from src.core.process_monitor import terminate_managed_process
 from src.core.launcher import Launcher
 from src.core.launch_target import resolve_launch_args
@@ -26,7 +29,10 @@ from src.gui.sidebar.media_panel import MediaCenterPanel
 from src.gui.sidebar.win32_effects import ACRYLIC_TINT
 from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
-from src.gui.widgets_style import GameIconLabel, apply_sidebar_widgets_style
+from src.gui.widgets_style import (
+    CapsuleProgressBar, GameIconLabel, apply_sidebar_widgets_style,
+    calculate_game_progress, progress_bar_format,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -405,6 +411,34 @@ class _HoverThumbCell(QLabel):
         super().mousePressEvent(event)
 
 
+class _GameNameLabel(QLabel):
+    def set_compact(self, compact: bool) -> None:
+        self.setWordWrap(not compact)
+        self._update_text()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not self.wordWrap():
+            self._update_text()
+
+    def _update_text(self) -> None:
+        title = self.toolTip()
+        if not self.wordWrap():
+            title = self.fontMetrics().elidedText(title.replace("\r", " ").replace("\n", " "),
+                Qt.TextElideMode.ElideRight, self.contentsRect().width())
+        self.setText(title)
+
+
+class _GameRowSurface(QPushButton):
+    """이름과 게이지를 포함하는 게임 창 전환 영역."""
+
+    def sizeHint(self) -> QSize:
+        return self.layout().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        return self.layout().minimumSize()
+
+
 class SidebarWidget(QWidget):
     """게임 오버레이 사이드바 위젯.
 
@@ -452,8 +486,6 @@ class SidebarWidget(QWidget):
         self._rec_elapsed_sec = 0
         self._recording_output_dir: str = ""
 
-        # {process_id: (QLabel, start_timestamp)} — 플레이타임 레이블 트래킹
-        self._playtime_labels: dict = {}
         self._thumb_buttons: dict[str, _HoverThumbCell] = {}
         self._thumb_request_id = 0
         self._thumb_cache: dict[str, tuple[float, "QPixmap"]] = {}  # path → (mtime, pixmap)
@@ -493,10 +525,10 @@ class SidebarWidget(QWidget):
         self._auto_hide_timer.setSingleShot(True)
         self._auto_hide_timer.timeout.connect(self.slide_out)
 
-        # 플레이 시간 갱신 타이머 (1초)
-        self._playtime_timer = QTimer(self)
-        self._playtime_timer.setInterval(1000)
-        self._playtime_timer.timeout.connect(self._refresh_playtime)
+        # 표시 중에만 게임 자원과 현재 창을 갱신한다.
+        self._game_rows_timer = QTimer(self)
+        self._game_rows_timer.setInterval(1000)
+        self._game_rows_timer.timeout.connect(self._refresh_game_row_displays)
 
         # 실제 시각의 0.5초 경계에 맞춰 기존 시계 타이머를 다시 예약한다.
         self._clock_timer = QTimer(self)
@@ -686,6 +718,11 @@ class SidebarWidget(QWidget):
         if self._media_state is not None:
             self.update_media_state(self._media_state())
 
+    def refresh_game_rows(self) -> None:
+        """열려 있는 목록을 감시가 확인한 실행 변경에 맞춰 갱신한다."""
+        if self.isVisible():
+            self._refresh_games()
+
     def update_media_state(self, snapshot) -> None:
         """관측을 투영할 뿐 시작·설정 변경·오디오 native 조회를 수행하지 않는다."""
         self._media_center_panel.update_snapshot(snapshot)
@@ -735,7 +772,7 @@ class SidebarWidget(QWidget):
 
         self._is_shown = True
         self.refresh_content()
-        self._playtime_timer.start()
+        self._game_rows_timer.start()
         self._clock_timer.start()
         self._cursor_poll_timer.start()
         self._rec_timer.start()
@@ -750,7 +787,7 @@ class SidebarWidget(QWidget):
 
         self._auto_hide_timer.stop()
         self._media_center_panel.close_options()
-        self._playtime_timer.stop()
+        self._game_rows_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
         self._rec_timer.stop()
@@ -776,7 +813,7 @@ class SidebarWidget(QWidget):
                 timer.timeout.emit()
         self._volume_save_timers.clear()
         self._auto_hide_timer.stop()
-        self._playtime_timer.stop()
+        self._game_rows_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
         self._rec_timer.stop()
@@ -826,7 +863,7 @@ class SidebarWidget(QWidget):
                                  - self._gallery.minimumHeight())
         gallery_minimum = cell_height if not self._gallery.isHidden() else 0
         # 현재 압축된 높이를 기준으로 판단하면 정상/압축 레이아웃이 왕복한다.
-        # 원래 전체 문구의 높이로 판단하고 표시만 축약한다.
+        # 행의 여백을 압축하기 전 높이로 비교한다.
         self._set_compact_game_rows(
             self._normal_top_height(width) + media_controls_height + gallery_minimum > viewport.height())
         self._fit_compact_row_padding(width, viewport.height() - media_controls_height - gallery_minimum)
@@ -866,73 +903,61 @@ class SidebarWidget(QWidget):
                 layout.setContentsMargins(margins.left(), padding, margins.right(), padding)
 
     def _normal_top_height(self, width: int) -> int:
-        """창 높이와 무관하게, 원래 문구·행 여백에 필요한 높이를 계산한다."""
-        normal_padding = round(self.width() * 0.015)
-        row_heights = []
+        """정상 모드의 전체 게임명과 세로 여백에 필요한 높이."""
+        padding = round(self.width() * 0.015)
+        rows_height = 0
         for index in range(self._games_list_layout.count()):
             row = self._games_list_layout.itemAt(index).widget()
-            name = row.findChild(QLabel, "gameName")
+            name = row.findChild(_GameNameLabel)
             if name is None:
-                row_heights.append(row.sizeHint().height())
+                rows_height += row.sizeHint().height()
                 continue
-            row.ensurePolished()
-            layout = row.layout()
-            text_width = width - normal_padding * 2 - layout.spacing() * (layout.count() - 1)
-            controls_height = 0
-            for item_index in range(layout.count()):
-                item = layout.itemAt(item_index)
-                widget = item.widget()
-                if widget is not None:
-                    text_width -= item.sizeHint().width()
-                    controls_height = max(controls_height, item.sizeHint().height())
-            text_layout = layout.itemAt(1).layout()
-            text_height = 0
-            for label_index in range(text_layout.count()):
-                label = text_layout.itemAt(label_index).widget()
-                full_text = label.toolTip() or label.text()
-                text_height += label.fontMetrics().boundingRect(
-                    QRect(0, 0, max(1, text_width), 100000),
-                    int(Qt.TextFlag.TextWordWrap), full_text).height()
-            text_height += text_layout.spacing() * (text_layout.count() - 1)
-            row_heights.append(max(controls_height, text_height) + normal_padding * 2)
-        games_height = sum(row_heights) + self._games_list_layout.spacing() * max(0, len(row_heights) - 1)
-        top = self._top_section.layout()
-        margins = top.contentsMargins()
-        return (games_height + top.itemAt(0).sizeHint().height()
-                + top.itemAt(1).layout().sizeHint().height()
-                + top.spacing() * (top.count() - 1) + margins.top() + margins.bottom())
+            row_layout = row.layout()
+            surface_layout = row_layout.itemAt(0).widget().layout()
+            controls = [item for item in (row_layout.itemAt(1), row_layout.itemAt(2)) if not item.isEmpty()]
+            controls_width = sum(item.sizeHint().width() + row_layout.spacing() for item in controls)
+            icon = surface_layout.itemAt(0).widget()
+            text = surface_layout.itemAt(1).layout()
+            heading = text.itemAt(0).layout()
+            state = heading.itemAt(1).widget()
+            gauge = text.itemAt(1).widget().layout()
+            margins = surface_layout.contentsMargins()
+            name_width = (width - padding * 2 - controls_width - margins.left() - margins.right()
+                          - icon.width() - surface_layout.spacing() - state.width() - heading.spacing())
+            name.ensurePolished()
+            name_height = name.fontMetrics().boundingRect(QRect(0, 0, max(1, name_width), 100000),
+                int(Qt.TextFlag.TextWordWrap), name.toolTip()).height()
+            text_height = (max(name_height, state.sizeHint().height())
+                           + gauge.itemAt(0).sizeHint().height() + gauge.itemAt(1).widget().height()
+                           + gauge.spacing() + text.spacing())
+            surface_height = max(icon.height(), text_height) + margins.top() + margins.bottom()
+            controls_height = max((item.sizeHint().height() for item in controls), default=0)
+            rows_height += max(surface_height, controls_height) + padding * 2
+        rows_height += self._games_list_layout.spacing() * max(0, self._games_list_layout.count() - 1)
+        return self._top_section.layout().sizeHint().height() - self._games_list_layout.sizeHint().height() + rows_height
 
     def _set_compact_game_rows(self, compact: bool, *, force: bool = False) -> None:
         if self._compact_game_rows == compact and not force:
             return
         self._compact_game_rows = compact
-        processes = {process.id: process for process in self._data_manager.managed_processes}
-        padding = round(self.width() * (0.007 if compact else 0.015))
+        padding = round(self.width() * 0.015)
+        vertical = round(self.width() * 0.007) if compact else padding
         for index in range(self._games_list_layout.count()):
             row = self._games_list_layout.itemAt(index).widget()
-            process = processes.get(row.property("processId"))
-            if process is None:
-                continue
-            layout = row.layout()
-            layout.setContentsMargins(padding, padding, padding, padding)
-            name = row.findChild(QLabel, "gameName")
-            name.setWordWrap(not compact)
-            name.setToolTip(process.name)
-            name.setAccessibleDescription(process.name)
-            # 가로 공간은 기존 버튼 정사각형과 순서를 보존한 뒤 남는 이름 칸이다.
-            text_width = self._main_scroll.viewport().width() - padding * 2 - layout.spacing() * (layout.count() - 1)
-            for item_index in range(layout.count()):
-                item = layout.itemAt(item_index)
-                widget = item.widget()
-                if widget is not None:
-                    text_width -= item.sizeHint().width()
-            name.setText(name.fontMetrics().elidedText(process.name, Qt.TextElideMode.ElideRight,
-                                                     max(1, text_width)) if compact else process.name)
-            entry = self._playtime_labels.get(process.id)
-            if entry is not None:
-                label, started, prefix = entry
-                label.setWordWrap(not compact)
-                self._update_playtime_label(label, started, prefix)
+            if row.layout() is not None:
+                row.layout().setContentsMargins(padding, vertical, padding, vertical)
+                name = row.findChild(_GameNameLabel)
+                name.ensurePolished()
+                name.setMinimumHeight(name.fontMetrics().height())
+                name.set_compact(compact)
+                gauge = row.findChild(QLabel, "gameProgressValue")
+                gauge.ensurePolished()
+                gauge.setFixedHeight(gauge.fontMetrics().lineSpacing())
+                value_width = round(self.width() * 0.2)
+                gauge.setMinimumWidth(value_width if compact else 0)
+                gauge.setMaximumWidth(value_width if compact else self.width())
+                row.findChild(QWidget, "gameProgress").layout().setDirection(
+                    QBoxLayout.Direction.RightToLeft if compact else QBoxLayout.Direction.TopToBottom)
 
     # ------------------------------------------------------------------
     # 내부 메서드 — 레이아웃
@@ -941,7 +966,6 @@ class SidebarWidget(QWidget):
     def _refresh_games(self) -> None:
         """기존 등록 목록과 한 번의 감시 스냅샷으로 게임·음량 행을 만든다."""
         from src.gui.main_window import MainWindow
-        self._playtime_labels.clear()
         while self._games_list_layout.count():
             item = self._games_list_layout.takeAt(0)
             if item.widget():
@@ -958,82 +982,123 @@ class SidebarWidget(QWidget):
             label = QLabel("등록된 게임 없음")
             label.setProperty("hhRole", "sidebarSecondary")
             self._games_list_layout.addWidget(label)
+        self._refresh_game_row_displays(active)
         self._set_compact_game_rows(self._compact_game_rows, force=True)
 
     def _make_game_row(self, process: ManagedProcess, runtime: Optional[dict]) -> QFrame:
+        running = runtime is not None
+        pid = runtime.get("pid") if running else None
+        created = float(runtime.get("start_time_approx") or 0.0) if running else 0.0
+        can_switch = bool(pid and created > 0)
+        padding = round(self.width() * 0.015)
+        action_size = round(self.width() * 0.114)
+
         row = QFrame()
         row.setProperty("hhRole", "sidebarGameRow")
-        row.setProperty("hhRunning", runtime is not None)
+        row.setProperty("hhRunning", running)
+        row.setProperty("hhFocused", False)
         row.setProperty("processId", process.id)
         row.setProperty("monitoringPath", process.monitoring_path)
+        row.setProperty("gamePid", pid)
+        row.setProperty("gameStartTime", created)
         layout = QHBoxLayout(row)
-        padding = round(self.width() * 0.015)
         layout.setContentsMargins(padding, padding, padding, padding)
-        layout.setSpacing(round(self.width() * 0.015))
+        layout.setSpacing(padding)
+
+        surface = _GameRowSurface()
+        surface.setObjectName("gameRowSurface")
+        surface.setProperty("hhRole", "sidebarGameSurface")
+        surface.setProperty("hhRunning", running)
+        surface.setProperty("hhFocused", False)
+        surface.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        surface.setFocusPolicy(Qt.FocusPolicy.StrongFocus if can_switch else Qt.FocusPolicy.NoFocus)
+        surface.setEnabled(can_switch)
+        surface.setAccessibleName(f"{process.name} 창 바로가기" if can_switch else process.name)
+        if can_switch:
+            surface.setCursor(Qt.CursorShape.PointingHandCursor)
+            surface.clicked.connect(
+                lambda _=False, key=process.id, path=process.monitoring_path, target=pid, stamp=created:
+                self._focus_process(key, path, target, stamp))
+        surface_layout = QHBoxLayout(surface)
+        inset = round(self.width() * 0.007)
+        surface_layout.setContentsMargins(inset, inset, padding, inset)
+        surface_layout.setSpacing(padding)
+        layout.addWidget(surface, 1)
+
         icon_size = round(self.width() * 0.107)
         icon = GameIconLabel(icon_size)
         icon.setText(process.name[:1] or "?")
         icon.setObjectName("gameIcon")
         icon.setFixedSize(icon_size, icon_size)
-        icon.setProperty("hhRunning", runtime is not None)
-        layout.addWidget(icon)
+        icon.setProperty("hhRunning", running)
+        surface_layout.addWidget(icon)
         self._load_icon_async(process)
 
         text = QVBoxLayout()
-        text.setSpacing(round(self.width() * 0.007))
-        name = QLabel(process.name)
+        text.setSpacing(inset)
+        heading = QHBoxLayout()
+        heading.setSpacing(padding)
+        name = _GameNameLabel(process.name)
         name.setObjectName("gameName")
         name.setProperty("hhRole", "sidebarGameName")
-        name.setWordWrap(True)
+        name.setTextFormat(Qt.TextFormat.PlainText)
         name.setToolTip(process.name)
         name.setAccessibleDescription(process.name)
-        name.setMinimumWidth(1)
         name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        text.addWidget(name)
-        pid = runtime.get("pid") if runtime else None
-        created = float(runtime.get("start_time_approx") or 0.0) if runtime else 0.0
-        if runtime is not None and getattr(self._data_manager.global_settings, 'sidebar_playtime_enabled', True):
-            elapsed = QLabel()
-            elapsed.setProperty("hhRole", "sidebarSecondary")
-            elapsed.setWordWrap(True)
-            elapsed.setMinimumWidth(1)
-            elapsed.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-            text.addWidget(elapsed)
-            prefix = getattr(self._data_manager.global_settings, 'sidebar_playtime_prefix', '오늘 플레이 시간')
-            self._playtime_labels[process.id] = (elapsed, created, prefix)
-            self._update_playtime_label(elapsed, created, prefix)
-        layout.addLayout(text, 1)
+        heading.addWidget(name, 1)
+        state = QLabel("실행 중" if running else "꺼짐")
+        state.setObjectName("gameRunState")
+        state.setProperty("hhRole", "sidebarRunState")
+        state.setProperty("hhRunning", running)
+        state.setProperty("hhFocused", False)
+        state.setFixedWidth(round(self.width() * 0.15))
+        state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        heading.addWidget(state)
+        text.addLayout(heading)
 
-        action_size = round(self.width() * 0.114)
-        focus = QPushButton()
-        focus.setObjectName("focusGame")
-        focus.setProperty("hhRole", "sidebarIconAction")
-        focus.setFixedSize(action_size, action_size)
-        focus.setIcon(self._action_icon("focus"))
-        focus.setIconSize(QSize(round(self.width() * 0.046), round(self.width() * 0.046)))
-        focus.setAccessibleName(f"{process.name} 창 바로가기")
-        focus.setToolTip("창 바로가기")
-        focus.setEnabled(pid is not None and created > 0)
-        focus.clicked.connect(lambda _=False, key=process.id, path=process.monitoring_path, target=pid, stamp=created: self._focus_process(key, path, target, stamp))
-        if runtime is not None:
-            layout.addWidget(focus)
-        else:
-            focus.hide()
+        progress = QWidget()
+        progress.setObjectName("gameProgress")
+        gauge_layout = QBoxLayout(QBoxLayout.Direction.TopToBottom, progress)
+        gauge_layout.setContentsMargins(0, 0, 0, 0)
+        gauge_layout.setSpacing(inset)
+        value = QLabel()
+        value.setObjectName("gameProgressValue")
+        value.setProperty("hhRole", "sidebarProgressValue")
+        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        gauge_layout.addWidget(value)
+        track = QWidget()
+        track.setFixedHeight(6)
+        track_layout = QHBoxLayout(track)
+        track_layout.setContentsMargins(0, 0, 0, 0)
+        bar = CapsuleProgressBar()
+        bar.setObjectName("gameProgressBar")
+        bar.setAccessibleName(f"{process.name} 진행률")
+        bar.hide()
+        track_layout.addWidget(bar)
+        gauge_layout.addWidget(track, 1)
+        text.addWidget(progress)
+        surface_layout.addLayout(text, 1)
+        for child in (icon, name, state, progress):
+            child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         action = QPushButton()
         action.setObjectName("gameAction")
         action.setProperty("hhRole", "sidebarIconAction")
-        action.setProperty("hhDanger", runtime is not None)
+        action.setProperty("hhDanger", running)
         action.setFixedSize(action_size, action_size)
-        action.setIcon(self._action_icon("stop" if runtime is not None else "launch"))
-        action.setIconSize(focus.iconSize())
-        action.setAccessibleName(f"{process.name} {'종료' if runtime is not None else '실행'}")
-        action.setToolTip("게임 종료" if runtime is not None else "게임 실행")
-        if runtime is not None:
-            action.setEnabled(pid is not None and created > 0)
-            action.clicked.connect(lambda _=False, key=process.id, path=process.monitoring_path, target=pid, stamp=created: self._kill_process(key, path, target, stamp))
+        action.setIcon(self._action_icon("stop" if running else "launch"))
+        action.setIconSize(QSize(round(self.width() * 0.046), round(self.width() * 0.046)))
+        action.setAccessibleName(f"{process.name} {'종료' if running else '실행'}")
+        action.setToolTip("게임 종료" if running else "게임 실행")
+        if running:
+            action.setEnabled(can_switch)
+            action.clicked.connect(
+                lambda _=False, key=process.id, path=process.monitoring_path, target=pid, stamp=created:
+                self._kill_process(key, path, target, stamp))
         else:
-            action.clicked.connect(lambda _=False, key=process.id, path=process.monitoring_path: self._launch_process(key, path))
+            action.clicked.connect(
+                lambda _=False, key=process.id, path=process.monitoring_path: self._launch_process(key, path))
         layout.addWidget(action)
         dial = self._make_volume_dial(process, pid)
         layout.addWidget(dial)
@@ -1098,33 +1163,66 @@ class SidebarWidget(QWidget):
         # existing process monitor removes the game when it actually disappears.
         self._reset_auto_hide()
 
-    # ------------------------------------------------------------------
-    # 내부 메서드 — 플레이타임
-    # ------------------------------------------------------------------
+    def _foreground_game_identity(self, active: dict) -> Optional[tuple[int, float]]:
+        if not active:
+            return None
+        try:
+            pid, hwnd = WindowsGameFocusNative().foreground()
+            if hwnd and pid and any(entry.get("pid") == pid for entry in active.values()):
+                return pid, psutil.Process(pid).create_time()
+        except Exception:
+            logger.debug("사이드바 전경 게임 관측 실패", exc_info=True)
+        return None
 
-    def _update_playtime_label(self, label: QLabel, start_ts: float, prefix: str = "오늘 플레이 시간") -> None:
-        """경과 시간을 계산해 레이블 텍스트를 갱신합니다."""
-        elapsed = int(time.time() - start_ts) if start_ts else 0
-        h = elapsed // 3600
-        m = (elapsed % 3600) // 60
-        if h > 0:
-            elapsed_text = f"{h}시간 {m:02d}분"
-        else:
-            elapsed_text = f"{m}분"
-        full_text = f"{prefix}: {elapsed_text}"
-        label.setToolTip(full_text)
-        label.setAccessibleDescription(full_text)
-        label.setText(elapsed_text if self._compact_game_rows else full_text)
+    def _refresh_game_row_displays(self, active: Optional[dict] = None) -> None:
+        """표시 중인 행은 유지하고 기존 진행률과 실제 전경 창만 투영한다."""
+        if active is None:
+            from src.gui.main_window import MainWindow
+            window = MainWindow.INSTANCE
+            active = dict(window.process_monitor.active_monitored_processes) if window else {}
+        foreground = self._foreground_game_identity(active)
+        processes = {process.id: process for process in self._data_manager.managed_processes}
+        now = datetime.now()
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            process = processes.get(row.property("processId"))
+            if process is None or process.monitoring_path != row.property("monitoringPath"):
+                continue
+            running = row.property("hhRunning")
+            runtime = active.get(process.id)
+            focused = bool(
+                foreground and runtime and foreground[0] == row.property("gamePid") == runtime.get("pid")
+                and abs(foreground[1] - row.property("gameStartTime")) <= 0.001
+                and row.property("gameStartTime") == float(runtime.get("start_time_approx") or 0.0)
+            )
+            surface = row.findChild(QPushButton, "gameRowSurface")
+            state = row.findChild(QLabel, "gameRunState")
+            if row.property("hhFocused") != focused:
+                state.setText("현재 창" if focused else "실행 중" if running else "꺼짐")
+                for widget in (row, surface, state):
+                    widget.setProperty("hhFocused", focused)
+                    widget.style().unpolish(widget)
+                    widget.style().polish(widget)
+                    widget.update()
 
-    def _refresh_playtime(self) -> None:
-        """1초 타이머마다 모든 실행 중 게임의 플레이타임 레이블을 갱신합니다."""
-        for entry in self._playtime_labels.values():
-            label, start_ts, prefix = entry
-            self._update_playtime_label(label, start_ts, prefix)
+            percentage, raw_text = calculate_game_progress(process, now)
+            show_bar = raw_text not in ("기록 없음", "계산 오류")
+            display = progress_bar_format(percentage, raw_text) if show_bar else raw_text
+            value = row.findChild(QLabel, "gameProgressValue")
+            bar = row.findChild(CapsuleProgressBar, "gameProgressBar")
+            if value.text() != display:
+                value.setText(display)
+            if show_bar:
+                bar.set_progress(percentage, display)
+            if bar.isHidden() == show_bar:
+                bar.setVisible(show_bar)
+            description = f"{process.name} · {state.text()} · {display}"
+            if surface.accessibleDescription() != description:
+                surface.setAccessibleDescription(description)
+                surface.setToolTip(description)
 
     def _update_clock(self) -> None:
-        import datetime
-        now = datetime.datetime.now()
+        now = datetime.now()
         self._clock_face.set_time(now)
         weekday = ("월", "화", "수", "목", "금", "토", "일")[now.weekday()]
         self._clock_date_label.setText(f"{now.month}월 {now.day}일 {weekday}요일")
@@ -1423,12 +1521,6 @@ class SidebarWidget(QWidget):
         elif kind == "stop":
             painter.drawArc(QRectF(2, 3, 12, 12), 135 * 16, 270 * 16)
             painter.drawLine(8, 1, 8, 8)
-        elif kind == "focus":
-            for x, y, dx, dy in ((2, 2, 4, 4), (14, 2, -4, 4),
-                                  (2, 14, 4, -4), (14, 14, -4, -4)):
-                painter.drawLine(x, y, x + dx, y)
-                painter.drawLine(x, y, x, y + dy)
-            painter.drawEllipse(QRectF(5.5, 5.5, 5, 5))
         elif kind == "close":
             painter.drawLine(6, 3, 11, 8)
             painter.drawLine(11, 8, 6, 13)

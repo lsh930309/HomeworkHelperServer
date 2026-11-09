@@ -5,9 +5,84 @@ Runtime state remains owned by the existing GUI/controllers.
 """
 from __future__ import annotations
 
+import datetime
+import logging
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QProgressBar, QWidget
+
+if TYPE_CHECKING:
+    from src.data.data_models import ManagedProcess
+
+logger = logging.getLogger(__name__)
+
+
+def calculate_game_progress(process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:
+    """Windows 게임 게이지에 표시할 백분율과 값의 원천을 계산합니다."""
+    now = current_dt.timestamp()
+    resource_percentage = process.get_resource_percentage(now=now)
+    if resource_percentage is not None:
+        label = process.resource_label or "리소스"
+        return resource_percentage, f"RESOURCE:{process.resource_key}:{label}:{resource_percentage:.1f}%"
+
+    if process.stamina_tracking_enabled and process.hoyolab_game_id:
+        stamina_info = process.get_predicted_stamina(now=now)
+        if stamina_info:
+            predicted, max_stamina = stamina_info
+            percentage = predicted / max_stamina * 100 if max_stamina > 0 else 0.0
+            return percentage, f"STAMINA:{process.hoyolab_game_id}:{predicted}/{max_stamina}"
+
+    if not process.last_played_timestamp or not process.user_cycle_hours:
+        return 0.0, "기록 없음"
+
+    try:
+        last_played_dt = datetime.datetime.fromtimestamp(process.last_played_timestamp)
+        cycle_hours = process.user_cycle_hours
+        elapsed_hours = (current_dt - last_played_dt).total_seconds() / 3600
+        percentage = min(elapsed_hours / cycle_hours, 1.0) * 100
+        remaining_hours = max(cycle_hours - elapsed_hours, 0)
+
+        if remaining_hours >= 24:
+            remaining_days = int(remaining_hours // 24)
+            remaining_hours_remainder = remaining_hours % 24
+            if remaining_hours_remainder > 0:
+                time_str = f"{remaining_days}일 {int(remaining_hours_remainder)}시간"
+            else:
+                time_str = f"{remaining_days}일"
+        elif remaining_hours >= 1:
+            time_str = f"{int(remaining_hours)}시간"
+        else:
+            time_str = f"{int(remaining_hours * 60)}분"
+        return percentage, time_str
+    except Exception as exc:
+        logger.error("진행률 계산 중 오류: %s", exc)
+        return 0.0, "계산 오류"
+
+
+def progress_bar_format(percentage: float, display_text: str) -> str:
+    """게이지 옆에 표시할 짧은 값을 반환합니다."""
+    if display_text.startswith("RESOURCE:"):
+        parts = display_text.split(":", 3)
+        if len(parts) == 4:
+            return parts[3]
+    if display_text.startswith("STAMINA:"):
+        parts = display_text.split(":")
+        if len(parts) >= 3:
+            return parts[2]
+    return f"{percentage:.1f}%"
+
+
+def progress_color_bucket(percentage: float) -> str:
+    """채워진 정도에 따라 공용 게이지 색을 선택합니다."""
+    if percentage >= 100:
+        return "full"
+    if percentage >= 80:
+        return "high"
+    if percentage >= 50:
+        return "medium"
+    return "low"
 
 
 class GameIconLabel(QLabel):
@@ -90,12 +165,34 @@ def widgets_theme_tokens(dark: bool) -> dict[str, str]:
 class CapsuleProgressBar(QProgressBar):
     """극소 진행률도 원형 끝을 유지하는 6px 캡슐 진행률 표시입니다."""
 
+    _PERCENTAGE_SCALE = 10
     _BUCKET_COLORS = {
         "low": "success",
         "medium": "warning",
         "high": "#e67e22",
         "full": "danger",
     }
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setRange(0, 100 * self._PERCENTAGE_SCALE)
+        self.setTextVisible(False)
+
+    def set_progress(self, percentage: float, format_text: str) -> bool:
+        """값·표시 문자열·색을 갱신하고 화면 변경 여부를 반환합니다."""
+        value = round(max(0.0, min(percentage, 100.0)) * self._PERCENTAGE_SCALE)
+        bucket = progress_color_bucket(percentage)
+        value_changed = self.value() != value
+        format_changed = self.format() != format_text
+        bucket_changed = self.property("hhBucket") != bucket
+        if value_changed:
+            self.setValue(value)
+        if format_changed:
+            self.setFormat(format_text)
+        if bucket_changed:
+            self.setProperty("hhBucket", bucket)
+            self.update()
+        return value_changed or format_changed or bucket_changed
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         del event
@@ -279,14 +376,22 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
     button_padding = round(widget.width() * 0.03)
     action_content = round(widget.width() * 0.114) - 2  # 공통 외곽 크기에서 테두리 양쪽 1px을 제외
     tab_gap = round(widget.width() * 0.012)
+    row_radius = round(widget.width() * 0.02)
+    running_text = "#a8caff" if dark else "#164f8c"
+    focused_text = "#8ce3d1" if dark else "#11675a"
     widget.setStyleSheet(
         f"""
         QWidget {{ color: {t['text']}; }}
         QLabel[hhRole="sidebarSecondary"] {{ color: {t['muted']}; font-size: 11px; }}
         QLabel[hhRole="sidebarGameName"] {{ color: {t['text']}; font-size: {round(widget.width() * 0.043)}px; }}
+        QLabel[hhRole="sidebarRunState"] {{ color: {t['muted']}; font-size: 10px; }}
+        QLabel[hhRole="sidebarRunState"][hhRunning="true"] {{ color: {running_text}; }}
+        QLabel[hhRole="sidebarRunState"][hhFocused="true"] {{ color: {focused_text}; }}
+        QLabel[hhRole="sidebarProgressValue"] {{ color: {t['muted']}; font-size: 11px; }}
         QLabel[hhRole="sidebarSectionTitle"] {{ font-size: 12px; font-weight: 500; }}
-        QFrame[hhRole="sidebarGameRow"] {{ background: transparent; border: none; border-radius: {round(widget.width() * 0.02)}px; }}
+        QFrame[hhRole="sidebarGameRow"] {{ background: transparent; border: none; border-radius: {row_radius}px; }}
         QFrame[hhRole="sidebarGameRow"][hhRunning="true"] {{ background: rgba(42,101,174,77); }}
+        QFrame[hhRole="sidebarGameRow"][hhFocused="true"] {{ background: rgba(28,116,103,99); }}
         QPushButton {{ min-height: {button_height}px; font-size: 12px; border: 1px solid transparent;
             border-radius: 5px; padding: 0px {button_padding}px; background: {t['surface_raised']}; }}
         QPushButton:hover, QPushButton:focus {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
@@ -301,6 +406,14 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
         QPushButton[hhRole="sidebarIconAction"] {{ min-width: {action_content}px; max-width: {action_content}px;
             min-height: {action_content}px; max-height: {action_content}px; padding: 0px; }}
         QPushButton[hhRole="sidebarIconAction"][hhDanger="true"] {{ color: {t['danger']}; background: {t['danger_soft']}; }}
+        QPushButton[hhRole="sidebarGameSurface"] {{ min-height: 0px; padding: 1px;
+            background: transparent; border-radius: {row_radius}px; border: none; }}
+        QPushButton[hhRole="sidebarGameSurface"][hhRunning="true"]:hover {{ background: rgba(42,101,174,62); }}
+        QPushButton[hhRole="sidebarGameSurface"][hhRunning="true"]:focus {{ background: rgba(42,101,174,115); }}
+        QPushButton[hhRole="sidebarGameSurface"][hhRunning="true"]:pressed {{ background: rgba(42,101,174,155); }}
+        QPushButton[hhRole="sidebarGameSurface"][hhFocused="true"]:hover {{ background: rgba(28,116,103,74); }}
+        QPushButton[hhRole="sidebarGameSurface"][hhFocused="true"]:focus {{ background: rgba(28,116,103,130); }}
+        QPushButton[hhRole="sidebarGameSurface"][hhFocused="true"]:pressed {{ background: rgba(28,116,103,175); }}
         QTabBar::tab {{ color: {t['muted']}; background: {t['surface_raised']};
             border: none; border-radius: 5px; padding: 0.5em; margin-right: {tab_gap}px; }}
         QTabBar::tab:last {{ margin-right: 0px; }}

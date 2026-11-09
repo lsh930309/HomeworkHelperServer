@@ -1078,6 +1078,17 @@ def test_progress_cell_uses_full_width_bar_and_only_real_resource_icon(monkeypat
         assert resource_icon.geometry().left() == with_icon.contentsRect().left()
         assert progress_text.geometry().right() == with_icon.contentsRect().right()
         assert resource_icon.geometry().right() < progress_text.geometry().left()
+
+        process.resource_tracking_enabled = True
+        process.resource_provider = "fixture"
+        process.resource_key = "energy"
+        for percent in (0.0, 83.4):
+            process.resource_percent = percent
+            window._refresh_progress_bars()
+            cell = window.process_table.cellWidget(0, window.COL_LAST_PLAYED)
+            gauge = cell.findChild(QProgressBar)
+            assert 100 * gauge.value() / gauge.maximum() == pytest.approx(percent)
+            assert cell.findChild(QLabel, "progressText").text() == f"{percent:.1f}%"
     finally:
         if without_icon is not None:
             without_icon.close()
@@ -2300,18 +2311,16 @@ def test_sidebar_unified_games_follow_main_name_order_and_keep_action_targets(si
     original = [game.to_dict() for game in games]
     active_before = {key: dict(value) for key, value in active.items()}
     view._refresh_games()
-    active_order = ["a", "b", "m", "z"]
-    assert list(view._playtime_labels) == active_order
     unified_order = ["a", "b", "idle", "m", "z"]
     assert [view._games_list_layout.itemAt(i).widget().property("processId") for i in range(len(games))] == unified_order
     for index, game_id in enumerate(unified_order):
         row = view._games_list_layout.itemAt(index).widget()
         game = next(game for game in games if game.id == game_id)
         assert row.findChild(QLabel, "gameName").text() == game.name
+        assert row.property("hhRunning") is (game_id in active)
         if game_id in active:
             row.findChild(QPushButton, "gameAction").click()
             assert stopped[-1] == (game_id, game.monitoring_path, active[game_id]["pid"], active[game_id]["start_time_approx"])
-            assert view._playtime_labels[game_id][1] == active[game_id]["start_time_approx"]
     sound_order = ["a", "b", "idle", "m", "z"]
     for index, game_id in enumerate(sound_order):
         row = view._games_list_layout.itemAt(index).widget()
@@ -2333,17 +2342,22 @@ def test_sidebar_name_edit_and_running_set_refresh_reapply_sort_without_reorderi
     monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
     ids = [game.id for game in games]
     view.refresh_content()
-    assert list(view._playtime_labels) == ["4", "3", "0", "1", "2"]
+
+    def rows():
+        return [view._games_list_layout.itemAt(index).widget() for index in range(len(games))]
+
+    assert [row.property("processId") for row in rows()] == ["4", "3", "0", "1", "2"]
+    assert all(row.property("hhRunning") for row in rows())
     games[2].name = "Alpha"
     active.pop("4")
     view.refresh_content()
-    assert list(view._playtime_labels) == ["2", "3", "0", "1"]
-    assert [next(label.text() for label in view._games_list_layout.itemAt(index).widget().findChildren(QLabel) if label.wordWrap())
-            for index in range(len(games))] == ["Alpha", "W" * 80, "긴 이름의 게임 등록 항목 이름", "명조: 위더링 웨이브", "붕괴: 스타레일(베타)"]
+    assert [row.property("processId") for row in rows() if row.property("hhRunning")] == ["2", "3", "0", "1"]
+    assert [row.findChild(QLabel, "gameName").text() for row in rows()] == [
+        "Alpha", "W" * 80, "긴 이름의 게임 등록 항목 이름", "명조: 위더링 웨이브", "붕괴: 스타레일(베타)"]
     assert [game.id for game in games] == ids
     active.clear()
     view._refresh_games()
-    assert not view._playtime_labels
+    assert not any(row.property("hhRunning") for row in rows())
     assert view._games_list_layout.count() == len(games)
     view._data_manager.managed_processes = []
     view._refresh_games()
@@ -2367,7 +2381,11 @@ def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, h
         row = slider.parentWidget()
         name = row.findChild(QLabel, "gameName")
         assert name.width() > 0
-        assert name.height() >= name.heightForWidth(name.width())
+        if height == 1400:
+            assert name.wordWrap() and name.text() == name.toolTip()
+            assert name.height() >= name.heightForWidth(name.width())
+        else:
+            assert not name.wordWrap()
         for widget in row.findChildren(QPushButton) + row.findChildren(QLabel) + [slider]:
             if widget.isVisible():
                 right = widget.mapTo(view._scroll_content, QPoint(widget.width(), 0)).x()
@@ -2412,13 +2430,15 @@ def test_sidebar_height_change_preserves_hidden_scroll_and_wheel_access(sidebar_
 
 
 def test_sidebar_active_game_and_gallery_buttons_share_visible_width(sidebar_layout):
+    import time
     app, view, _module = sidebar_layout
     view._data_manager.global_settings.screenshot_enabled = True
     view._data_manager.global_settings.recording_enabled = True
-    view._data_manager.global_settings.sidebar_playtime_prefix = "W" * 80
     process = view._data_manager.managed_processes[-1]
+    process.last_played_timestamp = time.time() - 12 * 3600
     row = view._make_game_row(process, {"pid": 42, "start_time_approx": 123.0})
     view._games_list_layout.addWidget(row)
+    view._refresh_game_row_displays()
     view._refresh_screenshot_section()
     view._refresh_recording_section()
     view.resize(280, 500)
@@ -2426,9 +2446,11 @@ def test_sidebar_active_game_and_gallery_buttons_share_visible_width(sidebar_lay
     app.processEvents()
     viewport = view._main_scroll.viewport()
     assert view._scroll_content.width() <= viewport.width()
-    for button in view._scroll_content.findChildren(QPushButton):
-        if button.isVisible():
-            assert button.mapTo(view._scroll_content, QPoint(button.width(), 0)).x() <= viewport.width()
+    gauge = row.findChild(QProgressBar, "gameProgressBar")
+    assert gauge.isVisible()
+    for control in view._scroll_content.findChildren(QPushButton) + [gauge]:
+        if control.isVisible():
+            assert control.mapTo(view._scroll_content, QPoint(control.width(), 0)).x() <= viewport.width()
 
 
 @pytest.fixture
@@ -2536,7 +2558,7 @@ def test_sidebar_running_indicator_follows_game_identity_after_name_and_session_
             icon = row.findChild(QLabel, "gameIcon")
             name = row.findChild(QLabel, "gameName")
             assert name.text() == game.name
-            assert icon.geometry().right() < name.geometry().left()
+            assert icon.mapTo(row, icon.rect().topRight()).x() < name.mapTo(row, name.rect().topLeft()).x()
             assert row.property("hhRunning") is (game.id == running_id)
             assert icon.property("hhRunning") is (game.id == running_id)
 
@@ -2582,7 +2604,10 @@ def test_sidebar_balanced_layout_with_full_game_names_fits_controls_and_bottom_g
     view.resize(280, 800)
     for _ in range(4):
         app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+    app.processEvents()
     assert len(_gallery_widgets(view)) == 3
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
 
 
 def test_sidebar_content_replace_hides_old_rows_before_deferred_delete(sidebar_gallery, monkeypatch):

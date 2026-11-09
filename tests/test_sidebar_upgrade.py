@@ -8,13 +8,14 @@ from types import MethodType, SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QThread, QThreadPool, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, QThread, QThreadPool, Qt
 from PySide6.QtGui import QImage, QWheelEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
 from src.data.data_models import GlobalSettings, ManagedProcess
 from src.gui.sidebar.controls import SidebarClockFace, SidebarDivider, VolumeDial
-from src.gui.widgets_style import GameIconLabel
+from src.gui.widgets_style import CapsuleProgressBar, GameIconLabel
 from src.gui.sidebar import sidebar_widget as module
 
 
@@ -53,6 +54,12 @@ def wheel(app, dial, delta):
 
 def current_row(view, index=0):
     return view._games_list_layout.itemAt(index).widget()
+
+
+def click_part(row, part):
+    point = part.mapTo(row, part.rect().center())
+    hit = row.childAt(point) or row
+    QTest.mouseClick(hit, Qt.MouseButton.LeftButton, pos=hit.mapFrom(row, point))
 
 
 def test_stop_icon_has_both_sides_of_the_power_ring(sidebar):
@@ -220,50 +227,178 @@ def test_volume_and_mute_use_existing_runtime_and_debounced_writer(sidebar, app,
     assert dial.value() == 50 and dial.isChecked()
 
 
-def test_unified_rows_keep_conditional_focus_and_fixed_action_volume_columns(sidebar, app, monkeypatch):
+def test_unified_rows_distinguish_current_window_running_and_stopped(sidebar, app, monkeypatch):
+    from src.core.game_focus import WindowsGameFocusNative
     from src.gui.main_window import MainWindow
     view, game, _settings, _writes = sidebar
+    other = ManagedProcess(id="other", name="다른 게임", monitoring_path="/other.exe", launch_path="/other.exe")
     idle = ManagedProcess(id="idle", name="대기 게임", monitoring_path="/idle.exe", launch_path="/idle.exe")
-    view._data_manager.managed_processes.append(idle)
-    active = {game.id: {"pid": 42, "start_time_approx": 123.0}}
+    view._data_manager.managed_processes.extend((other, idle))
+    active = {game.id: {"pid": 42, "start_time_approx": 123.0},
+              other.id: {"pid": 43, "start_time_approx": 124.0}}
     monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    foreground = (42, 1)
+    monkeypatch.setattr(WindowsGameFocusNative, "foreground", lambda self: foreground)
+    created_by_pid = {42: 123.0, 43: 124.0}
+    monkeypatch.setattr(module.psutil, "Process", lambda pid: SimpleNamespace(create_time=lambda: created_by_pid[pid]))
     view.refresh_content()
     view.resize(280, 1040)
     view.show()
     app.processEvents()
+    rows = {current_row(view, i).property("processId"): current_row(view, i) for i in range(3)}
     positions = []
-    for i in range(2):
-        row = view._games_list_layout.itemAt(i).widget()
-        focus = row.findChild(QPushButton, "focusGame")
+    for game_id, row in rows.items():
+        surface = row.findChild(QPushButton, "gameRowSurface")
         action = row.findChild(QPushButton, "gameAction")
         dial = row.findChild(VolumeDial)
-        running = row.property("processId") == game.id
-        assert row.property("hhRunning") is running
-        assert (focus is not None) is running
+        assert row.findChild(QPushButton, "focusGame") is None
+        assert surface.isEnabled() is (game_id in active)
+        assert (surface.cursor().shape() == Qt.CursorShape.PointingHandCursor) is (game_id in active)
         assert action.geometry().right() < dial.geometry().left()
-        if focus:
-            assert focus.geometry().right() < action.geometry().left()
+        assert surface.geometry().right() < action.geometry().left()
         positions.append((action.x(), dial.x()))
-    assert positions[0] == positions[1]
-    old_dial = current_row(view).findChild(VolumeDial)
+    assert positions.count(positions[0]) == len(rows)
+
+    game_backgrounds = []
+    for pid, hwnd, focused in [(42, 1, game.id), (43, 2, other.id), (99, 3, None), (42, 4, None)]:
+        foreground = (pid, hwnd)
+        if hwnd == 4:
+            created_by_pid[pid] += 1.0  # PID was reused before the next monitor scan.
+        view._refresh_game_row_displays()
+        assert [current_row(view, i) for i in range(3)] == list(rows.values())
+        for game_id, row in rows.items():
+            running = game_id in active
+            assert row.property("hhRunning") is running
+            assert row.property("hhFocused") is (game_id == focused)
+            status = "현재 창" if game_id == focused else "실행 중" if running else "꺼짐"
+            assert row.findChild(QLabel, "gameRunState").text() == status
+        game_row = rows[game.id]
+        game_backgrounds.append(game_row.grab().toImage().pixelColor(2, game_row.height() // 2))
+    assert game_backgrounds[0] != game_backgrounds[1] == game_backgrounds[2] == game_backgrounds[3]
+
+    old_dial = rows[game.id].findChild(VolumeDial)
     wheel(app, old_dial, -120)
     view.refresh_content()
     assert not old_dial._reveal_timer.isActive()
 
 
-def test_focus_success_closes_sidebar_but_denial_and_removed_registration_do_not(sidebar, monkeypatch):
+def test_game_row_click_transfers_focus_only_from_the_running_body(sidebar, app, monkeypatch):
+    from src.gui.main_window import MainWindow
     view, game, _settings, _writes = sidebar
+    idle = ManagedProcess(id="idle", name="대기 게임", monitoring_path="/idle.exe", launch_path="/idle.exe")
+    view._data_manager.managed_processes.append(idle)
+    game.last_played_timestamp = module.time.time() - 3600
+    active = {game.id: {"pid": 42, "start_time_approx": 123.0}}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
     called = []
+    controls = []
     monkeypatch.setattr(view, "slide_out", lambda: called.append("hidden"))
-    monkeypatch.setattr(module, "focus_managed_process_window", lambda *args: False)
-    view._focus_process(game.id, game.monitoring_path, 42, 123.0)
+    monkeypatch.setattr(view, "_kill_process", lambda *args: controls.append(("stop", *args)))
+    monkeypatch.setattr(view, "_launch_process", lambda *args: controls.append(("launch", *args)))
+    monkeypatch.setattr(view, "_set_game_muted", lambda muted, process, pid: controls.append(("mute", muted, process.id, pid)))
+    accepted = False
+    monkeypatch.setattr(module, "focus_managed_process_window", lambda *args: called.append(args) or accepted)
+    view.refresh_content()
+    view.resize(280, 900)
+    view.show()
+    app.processEvents()
+    running_row, idle_row = current_row(view), current_row(view, 1)
+
+    click_part(running_row, running_row.findChild(QPushButton, "gameAction"))
+    click_part(running_row, running_row.findChild(VolumeDial))
+    click_part(idle_row, idle_row.findChild(QPushButton, "gameAction"))
+    click_part(idle_row, idle_row.findChild(QLabel, "gameName"))
+    assert controls == [("stop", game.id, game.monitoring_path, 42, 123.0),
+                        ("mute", True, game.id, 42), ("launch", idle.id, idle.monitoring_path)]
     assert not called
-    monkeypatch.setattr(module, "focus_managed_process_window", lambda *args: called.append(args) or True)
-    view._focus_process(game.id, game.monitoring_path, 42, 123.0)
-    assert called == [(42, 123.0, game.monitoring_path), "hidden"]
-    view._data_manager.managed_processes.clear()
-    view._focus_process(game.id, game.monitoring_path, 42, 123.0)
-    assert len(called) == 2
+
+    identity = (42, 123.0, game.monitoring_path)
+    click_part(running_row, running_row.findChild(QLabel, "gameName"))
+    assert called == [identity]
+    accepted = True
+    click_part(running_row, running_row.findChild(CapsuleProgressBar, "gameProgressBar"))
+    assert called == [identity, identity, "hidden"]
+    view._data_manager.managed_processes.remove(game)
+    click_part(running_row, running_row.findChild(QLabel, "gameName"))
+    assert called == [identity, identity, "hidden"]
+
+
+def test_stopped_game_displays_zero_and_later_resource_updates_on_the_same_row(sidebar, app):
+    view, game, _settings, writes = sidebar
+    game.resource_tracking_enabled = True
+    game.resource_provider = "fixture"
+    game.resource_key = "energy"
+    view.refresh_content()
+    view.resize(280, 900)
+    view.show()
+    app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+    app.processEvents()
+    row = current_row(view)
+    geometry = row.geometry()
+    assert row.findChild(QLabel, "gameRunState").text() == "꺼짐"
+
+    for percent, bucket in [(None, None), (0.0, "low"), (83.4, "high"), (None, None)]:
+        view._data_manager.managed_processes[0] = ManagedProcess.from_dict({**game.to_dict(), "resource_percent": percent})
+        view._refresh_game_row_displays()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+        app.processEvents()
+        assert current_row(view) is row
+        assert row.geometry() == geometry, f"resource_percent={percent}"
+        gauge = row.findChild(CapsuleProgressBar, "gameProgressBar")
+        label = row.findChild(QLabel, "gameProgressValue")
+        assert bool(gauge and gauge.isVisible()) is (percent is not None)
+        assert label.isVisible() and not label.wordWrap()
+        assert label.text() == ("기록 없음" if percent is None else f"{percent:.1f}%")
+        if percent is not None:
+            assert 100 * gauge.value() / gauge.maximum() == pytest.approx(percent)
+            assert gauge.property("hhBucket") == bucket
+    assert not writes
+
+
+def test_open_sidebar_tracks_another_game_start_pid_replacement_and_stop(sidebar, app, monkeypatch):
+    from src.core.process_monitor import DetectedRuntimeProcess, ProcessScanSnapshot
+    from src.gui.main_window import MainWindow
+    from src.gui.sidebar.sidebar_controller import SidebarController
+
+    view, game, _settings, _writes = sidebar
+    other = ManagedProcess(id="other", name="다른 게임", monitoring_path="/other.exe", launch_path="/other.exe")
+    view._data_manager.managed_processes.append(other)
+    controller = SidebarController(view._data_manager)
+    controller._sidebar = view
+    active = {game.id: {"pid": 42, "start_time_approx": 123.0}}
+    window = SimpleNamespace(
+        data_manager=view._data_manager,
+        process_monitor=SimpleNamespace(active_monitored_processes=active),
+        _app_instance_id="sidebar-fixture", _sidebar_controller=controller,
+        _record_status_event=lambda *_args: None, update_process_statuses_only=lambda: None,
+        _check_and_toggle_game_mode=lambda: None, _publish_media_targets=lambda: None,
+        _media_startup_pending=False, _persist_lifecycle_command=lambda *_args: None,
+        _work_coordinator=SimpleNamespace(submit_lifecycle=lambda *_args: None),
+    )
+    monkeypatch.setattr(MainWindow, "INSTANCE", window)
+    focus_calls = []
+    monkeypatch.setattr(module, "focus_managed_process_window", lambda *args: focus_calls.append(args) or False)
+    view.slide_in()
+    view._anim.setCurrentTime(view._anim.duration())
+    app.processEvents()
+    assert view.isVisible()
+
+    detected_game = DetectedRuntimeProcess(game.id, 42, game.monitoring_path, 123.0)
+    for runtime in [(43, 124.0), (44, 125.0), None]:
+        observed = (detected_game,)
+        if runtime:
+            pid, created = runtime
+            observed += (DetectedRuntimeProcess(other.id, pid, other.monitoring_path, created),)
+        MainWindow._apply_process_scan_snapshot(window, ProcessScanSnapshot(observed, 126.0))
+        app.processEvents()
+        assert view.isVisible() and current_row(view).property("hhRunning")
+        row = current_row(view, 1)
+        assert row.property("processId") == other.id
+        assert row.findChild(QPushButton, "gameRowSurface").isEnabled() is (runtime is not None)
+        assert row.findChild(QPushButton, "gameAction").toolTip() == ("게임 종료" if runtime else "게임 실행")
+        click_part(row, row.findChild(QLabel, "gameName"))
+    assert focus_calls == [(43, 124.0, other.monitoring_path), (44, 125.0, other.monitoring_path)]
 
 
 def test_launch_captures_shared_target_args_and_permission_without_optimistic_monitor_update(sidebar, monkeypatch, app):
@@ -332,12 +467,17 @@ def test_fixed_visual_policy_ignores_legacy_opacity_and_preserves_saved_columns(
     settings.sidebar_opacity = 0.2
     settings.sidebar_clock_format = "legacy format"
     settings.sidebar_effect = "mica"
+    settings.sidebar_playtime_enabled = False
+    settings.sidebar_playtime_prefix = "기존 접두어"
     view.apply_visual_settings()
     assert view.windowOpacity() == 1.0
     dialog = SidebarSettingsDialog(settings)
     updated = dialog.get_updated_settings()
     assert not hasattr(dialog, "_opacity_spin") and not hasattr(dialog, "_clock_format_edit")
     assert (updated.sidebar_opacity, updated.sidebar_clock_format, updated.sidebar_effect) == (0.2, "legacy format", "mica")
+    assert not any("플레이 시간" in label.text() for label in dialog.findChildren(QLabel))
+    assert not hasattr(dialog, "_playtime_enabled_cb") and not hasattr(dialog, "_playtime_prefix_edit")
+    assert not updated.sidebar_playtime_enabled and updated.sidebar_playtime_prefix == "기존 접두어"
     dialog.close()
 
 
@@ -366,8 +506,7 @@ def test_styled_row_keeps_action_and_volume_outer_sizes_square(sidebar, app, mon
     view.show()
     app.processEvents()
     row = current_row(view)
-    controls = row.findChildren(QPushButton) + row.findChildren(VolumeDial)
-    assert controls
+    controls = [row.findChild(QPushButton, "gameAction"), row.findChild(VolumeDial)]
     for control in controls:
         # 실제 stylesheet polish가 setFixedSize의 최소 크기를 덮어쓸 수 있다.
         assert control.width() == control.height() == 32
@@ -377,7 +516,7 @@ def test_styled_row_keeps_action_and_volume_outer_sizes_square(sidebar, app, mon
     assert row.findChild(QLabel, "gameName").font().pixelSize() == 12
 
 
-def test_idle_name_uses_focus_space_without_moving_right_controls(sidebar, app, monkeypatch):
+def test_game_body_width_and_right_controls_stay_aligned_when_game_stops(sidebar, app, monkeypatch):
     from src.gui.main_window import MainWindow
     view, game, _settings, _writes = sidebar
     active = {game.id: {"pid":42, "start_time_approx":123.0}}
@@ -391,9 +530,9 @@ def test_idle_name_uses_focus_space_without_moving_right_controls(sidebar, app, 
         view.refresh_content()
         app.processEvents()
         row = current_row(view)
-        states.append((row.findChild(QLabel,"gameName").width(), row.findChild(QPushButton,"gameAction").x(), row.findChild(VolumeDial).x()))
-    assert states[1][0] > states[0][0]
-    assert states[1][1:] == states[0][1:]
+        states.append((row.findChild(QPushButton, "gameRowSurface").width(),
+                       row.findChild(QPushButton, "gameAction").x(), row.findChild(VolumeDial).x()))
+    assert states[1] == states[0]
 
 
 def test_native_acrylic_owns_tint_and_failure_keeps_same_fixed_background(sidebar, monkeypatch):
@@ -435,18 +574,19 @@ def test_qt_empty_surfaces_leave_native_backdrop_visible(sidebar, app, monkeypat
     assert image.pixelColor(empty).alpha() == 0
 
 
-def test_short_sidebar_fits_seven_games_two_timers_and_gallery_then_restores(sidebar, app, monkeypatch, tmp_path):
-    """실Windows760높이에서관측한7게임·2실행의overflow를같은사용흐름으로검증한다."""
+def test_short_sidebar_fits_seven_games_two_gauges_and_gallery_then_restores(sidebar, app, monkeypatch, tmp_path):
+    """Windows 760 높이에서 관측된 7게임·2실행 레이아웃을 게이지와 함께 확인한다."""
     from src.gui.main_window import MainWindow
     view, _game, settings, writes = sidebar
     names = ["명조: 위더링 웨이브", "몬길: STAR DIVE", "붕괴: 스타레일",
              "붕괴: 스타레일(베타)", "소녀전선2: 망명", "승리의 여신: 니케", "젠레스 존 제로"]
     games = [ManagedProcess(id=str(index), name=name, monitoring_path=f"/{index}.exe", launch_path=f"/{index}.exe")
              for index, name in enumerate(names)]
+    for game in games[-2:]:
+        game.last_played_timestamp = module.time.time() - 3600
     view._data_manager.managed_processes = games
     settings.screenshot_enabled = settings.recording_enabled = settings.obs_watch_output_dir = True
     settings.screenshot_save_dir = str(tmp_path)
-    settings.sidebar_playtime_prefix = "오늘 플레이 시간"
     view._recording_output_dir = str(tmp_path)
     for index in range(8):
         (tmp_path / f"image-{index}.png").write_bytes(b"fixture; decoding is disabled")
@@ -465,15 +605,12 @@ def test_short_sidebar_fits_seven_games_two_timers_and_gallery_then_restores(sid
     assert view._main_scroll.verticalScrollBar().maximum() == 0
     assert view._gallery.height() == view._gallery_cell_size()[1]
     assert view._gallery.mapTo(view, QPoint(0, view._gallery.height())).y() <= view._close_btn.y()
-    for label, _started, prefix in view._playtime_labels.values():
-        assert not label.wordWrap() and prefix not in label.text()
-        assert prefix in label.toolTip() and label.text() in label.toolTip()
-        assert label.accessibleDescription() == label.toolTip()
+    assert sum(gauge.isVisible() for gauge in view.findChildren(CapsuleProgressBar)) == 2
     for index in range(len(games)):
         row = current_row(view, index)
         label = row.findChild(QLabel, "gameName")
         assert not label.wordWrap() and label.toolTip() == games[index].name
-        for control in row.findChildren(QPushButton) + row.findChildren(VolumeDial):
+        for control in (row.findChild(QPushButton, "gameAction"), row.findChild(VolumeDial)):
             assert control.width() == control.height() == 32
     # 폰트·DPI에 따른 내용 높이 차이는 실제 남는 여백 예산으로 흡수한다.
     # 현재 내용에 행별 위아래 1px만 허용하는 높이를 만들고 갤러리 노출을 확인한다.
@@ -495,8 +632,7 @@ def test_short_sidebar_fits_seven_games_two_timers_and_gallery_then_restores(sid
     assert not view._compact_game_rows
     assert view._main_scroll.verticalScrollBar().maximum() == 0
     assert view._gallery.height() == 2 * view._gallery_cell_size()[1] + view._gallery_cell_size()[2]
-    for label, _started, prefix in view._playtime_labels.values():
-        assert label.wordWrap() and prefix in label.text()
+    assert sum(gauge.isVisible() for gauge in view.findChildren(CapsuleProgressBar)) == 2
     view.resize(280, 760)
     for _ in range(6):
         app.processEvents()
