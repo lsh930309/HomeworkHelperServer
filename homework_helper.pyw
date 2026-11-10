@@ -782,6 +782,7 @@ def run_server_main(shutdown_event=None):
     from pydantic import BaseModel
     from sqlalchemy.orm import Session
     from src.data import crud, models, schemas, beholder
+    from src.utils.app_paths import CapturePathError
     from src.data.database import SessionLocal, engine, auto_migrate_database, backup_database
     from src.data.database_coordination import (
         DatabaseAccessUnavailable,
@@ -1370,6 +1371,10 @@ def run_server_main(shutdown_event=None):
                 "beholder_incident": beholder.incident_to_dict(exc.incident),
             },
         )
+
+    @app.exception_handler(CapturePathError)
+    async def capture_path_error_handler(request, exc):
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     @app.exception_handler(DatabaseAccessUnavailable)
     async def database_access_unavailable_handler(request, exc):

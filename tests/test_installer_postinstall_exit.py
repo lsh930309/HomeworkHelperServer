@@ -296,7 +296,7 @@ end;
 
 @pytest.mark.parametrize("scenario", [
     "selected", "unchecked", "silent", "other-owner", "redirected", "running", "junction", "parent-junction", "locked",
-    "gamebar", "legacy-unverified",
+    "gamebar", "legacy-unverified", "legacy-image", "legacy-recording",
 ])
 def test_inno_uninstall_cleans_only_opted_in_owner_data_without_following_links(tmp_path, inert_uninstall_setup_exe, scenario):
     import ctypes
@@ -312,6 +312,18 @@ def test_inno_uninstall_cleans_only_opted_in_owner_data_without_following_links(
     for marker in (db, backup, other, outside):
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(marker.name, encoding="utf-8")
+    if scenario == "selected":
+        for icon in (data / "icon_cache" / "game_v6_jumbo_32px.png",
+                     data / "custom_icons" / "game_stamina.png"):
+            icon.parent.mkdir(parents=True, exist_ok=True)
+            icon.write_bytes(b"app-owned icon")
+    legacy_capture = {
+        "legacy-image": data / "icon_cache" / "legacy-shot.PNG",
+        "legacy-recording": data / "captures" / "old-recording.MKV",
+    }.get(scenario)
+    if legacy_capture is not None:
+        legacy_capture.parent.mkdir(parents=True, exist_ok=True)
+        legacy_capture.write_bytes(b"existing user capture")
 
     app = tmp_path / "program"
     result = subprocess.run([str(inert_uninstall_setup_exe), "/VERYSILENT", "/SUPPRESSMSGBOXES",
@@ -367,11 +379,14 @@ def test_inno_uninstall_cleans_only_opted_in_owner_data_without_following_links(
     assert ("unchecked" in events) is (scenario != "silent"), log
     assert ("checkbox-enabled" in events) is (scenario not in {"silent", "other-owner", "redirected"}), log
     assert ("close" in events) is (scenario in {"selected", "running"}), log
-    preserved = {"running", "junction", "parent-junction", "locked", "gamebar", "legacy-unverified"}
+    preserved = {"running", "junction", "parent-junction", "locked", "gamebar", "legacy-unverified",
+                 "legacy-image", "legacy-recording"}
     assert ("preserved" in events) is (scenario in preserved), log
     if scenario == "selected":
         assert not data.exists(), log
     else:
         assert db.read_text(encoding="utf-8") == db.name and backup.read_text(encoding="utf-8") == backup.name, log
+    if legacy_capture is not None:
+        assert legacy_capture.read_bytes() == b"existing user capture", log
     assert other.read_text(encoding="utf-8") == other.name
     assert outside.read_text(encoding="utf-8") == outside.name

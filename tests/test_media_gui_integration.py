@@ -1,6 +1,7 @@
 """게임 소리 정책의 GUI 진입점을 가짜 런타임·저장소로 검증한다."""
 import json
 import os
+from threading import Event
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -20,6 +21,7 @@ from test_gui_layout import _FakeApiClient, _patch_main_window_deps, _stop_windo
 class FakeRuntime:
     def __init__(self, **_kwargs):
         self.targets = []
+        self.volume_changes = []
         self.options = []
         self.commands = []
         self.stop_calls = []
@@ -28,8 +30,10 @@ class FakeRuntime:
         self.on_change = _kwargs.get("on_change")
         self.snapshot = MediaCenterSnapshot()
 
-    def update_targets(self, targets):
+    def update_targets(self, targets, *, volume_change=None):
         self.targets.append(targets)
+        if volume_change is not None:
+            self.volume_changes.append(volume_change)
 
     def start(self, options):
         self.options.append(options)
@@ -245,8 +249,9 @@ def test_enabled_window_publishes_runtime_identity_without_session_database_ack(
     )
     assert (target.user_muted, target.user_volume) == (False, 55)
     game.default_volume = 60
-    assert view._on_game_audio_preferences_changed(game)
+    assert view._on_game_audio_preferences_changed(game, apply_volume=True)
     assert runtime.targets[-1][0].user_volume == 60
+    assert runtime.volume_changes == [runtime.targets[-1][0]]
     assert view.request_media_command("play", "spotify-exact-session")
     assert runtime.commands == [("play", "spotify-exact-session")]
 
@@ -301,6 +306,58 @@ def test_media_stop_result_is_required_before_restore_ack(window, monkeypatch, s
     assert not view.configure_media_center(MediaOptions())
     # 다음 fixture 정상 정리를 막지 않으며 운영 런타임에는 접근하지 않는다.
     runtime.stop_result = True
+
+
+def test_async_backend_failure_releases_game_volume_and_allows_database_restore(window, app, game, monkeypatch):
+    view, module = window
+    game.default_volume = 50
+    view.process_monitor.active_monitored_processes[game.id] = {
+        "pid": 42, "exe": "/game.exe", "start_time_approx": 123.0,
+    }
+    initializing, fail, published = Event(), Event(), Event()
+    created = []
+    writes = []
+    monkeypatch.setattr(module.audio_control, "set_app_volume", lambda *args: writes.append(args) or True)
+    monkeypatch.setattr(module.audio_control, "set_mute", lambda *args: writes.append(args) or True)
+    view._sync_default_volume_state(game, 42)
+    assert writes == [(42, 0.50), (42, False)]
+    writes.clear()
+
+    def fail_backend():
+        initializing.set()
+        assert fail.wait(1)
+        raise RuntimeError("격리된 미디어 초기화 실패")
+
+    def create_runtime(*, on_change):
+        def report(snapshot):
+            on_change(snapshot)
+            published.set()
+
+        runtime = MediaCenterRuntime(
+            report, backend_factory=fail_backend, audio_factory=forbidden,
+            native_factory=lambda: SimpleNamespace(foreground=forbidden),
+            focus_factory=forbidden, spotify_launcher=forbidden,
+        )
+        created.append(runtime)
+        return runtime
+
+    monkeypatch.setattr(module, "MediaCenterRuntime", create_runtime)
+    monkeypatch.setattr(module, "is_windows", lambda: True)
+    assert view.configure_media_center(MediaOptions())
+    try:
+        assert initializing.wait(1)
+        game.default_volume = 60
+        assert view._on_game_audio_preferences_changed(game, apply_volume=True)
+        assert writes == []
+    finally:
+        fail.set()
+    assert published.wait(1)
+    app.processEvents()
+    assert "격리된 미디어 초기화 실패" in view.media_center_state().error
+    assert not view.request_media_command("play")
+    assert writes == [(42, 0.60), (42, False)]
+    assert view.prepare_database_restore()
+    assert len(created) == 1
 
 
 def test_disabling_runtime_discards_late_snapshot_and_clears_command_owner(window, monkeypatch):
@@ -360,7 +417,8 @@ def sidebar(app, game, monkeypatch):
     )
     view = module.SidebarWidget(
         data, audio_state=lambda _key: (True, policy_observation(game)),
-        on_audio_change=lambda process: intents.append((process.default_volume, process.default_muted)) or True,
+        on_audio_change=lambda process, *, apply_volume=False: intents.append(
+            (process.default_volume, process.default_muted, apply_volume)) or True,
     )
     view._get_active_pid = lambda _key: 42
     yield view, writes, intents
@@ -384,7 +442,7 @@ def test_sidebar_policy_mute_is_not_saved_as_user_mute(sidebar, game):
     timer.timeout.emit()
     assert view._save_pool.waitForDone(1000)
     assert writes[-1]["default_muted"] is False and writes[-1]["default_volume"] == 60
-    assert intents == [(60, False), (60, True), (60, False)]
+    assert intents == [(60, False, True), (60, True, False), (60, False, False)]
     dial.close()
 
 
@@ -398,7 +456,8 @@ def test_volume_popover_uses_user_mute_and_shared_audio_writer(app, game, monkey
     data = SimpleNamespace(update_process=lambda process: writes.append(process.to_dict()) or True)
     view = module.VolumePopoverPanel(
         data, audio_state=lambda _key: (True, policy_observation(game)),
-        on_audio_change=lambda process: intents.append((process.default_volume, process.default_muted)) or True,
+        on_audio_change=lambda process, *, apply_volume=False: intents.append(
+            (process.default_volume, process.default_muted, apply_volume)) or True,
     )
     try:
         view.refresh([(game, 42)])
@@ -410,7 +469,7 @@ def test_volume_popover_uses_user_mute_and_shared_audio_writer(app, game, monkey
         mute.click()
         mute.click()
         assert view.cleanup(deadline_ms=1000)
-        assert intents == [(60, False), (60, True), (60, False)]
+        assert intents == [(60, False, True), (60, True, False), (60, False, False)]
         assert writes[-1]["default_muted"] is False and writes[-1]["default_volume"] == 60
     finally:
         assert view.cleanup(deadline_ms=1000)

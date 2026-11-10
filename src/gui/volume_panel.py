@@ -326,7 +326,7 @@ class VolumePopoverPanel(QWidget):
     def _on_volume_changed(self, value: int, process: ManagedProcess, pid: Optional[int]):
         """슬라이더 값 변경 시 실시간 볼륨 적용 및 DB 저장 예약."""
         process.default_volume = value
-        handled = bool(self._on_audio_change and self._on_audio_change(process))
+        handled = bool(self._on_audio_change and self._on_audio_change(process, apply_volume=True))
         if pid is not None and not handled:
             audio_control.set_app_volume(pid, value / 100.0)
         self._schedule_volume_save(process)

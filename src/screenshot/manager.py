@@ -105,7 +105,7 @@ class ScreenshotManager:
         logger.info("ScreenshotManager 정지")
 
     def capture_now(self) -> Optional[str]:
-        """즉시 스크린샷을 촬영합니다. 저장 경로를 반환하며 실패 시 None."""
+        """즉시 촬영합니다. 캡처 실패 시 None, 저장 경로 오류는 CapturePathError입니다."""
         from src.screenshot.capture import take_screenshot, take_screenshot_window
         game_name = self._get_game_name() if self._get_game_name else ""
         if self._capture_mode == "game_window" and self._get_target_hwnd:
@@ -130,7 +130,13 @@ class ScreenshotManager:
         ).start()
 
     def _do_capture(self) -> None:
-        path = self.capture_now()
+        from src.utils.app_paths import CapturePathError
+
+        try:
+            path = self.capture_now()
+        except CapturePathError as error:
+            logger.warning("스크린샷 촬영 차단: %s", error)
+            return
         if path and self._on_captured:
             self._on_captured(path)
 

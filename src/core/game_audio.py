@@ -44,7 +44,8 @@ class GameAudioCoordinator:
         self._retired: dict[tuple, GameAudioTarget] = {}
         self._session_volumes: dict[tuple, int | None] = {}
 
-    def update_targets(self, targets: tuple[GameAudioTarget, ...]) -> None:
+    def update_targets(self, targets: tuple[GameAudioTarget, ...], *,
+                       volume_changes: tuple[GameAudioTarget, ...] = ()) -> None:
         current = {_identity(target) for target in targets}
         for target in self._targets:
             if _identity(target) not in current:
@@ -52,6 +53,18 @@ class GameAudioCoordinator:
         for identity in current:
             self._retired.pop(identity, None)
         self._targets = tuple(targets)
+        if volume_changes:
+            # 마지막으로 수락한 현재 실행의 음량만 적용한다. 일반 관측에는 영향이 없다.
+            latest = {target.process_id: target for target in volume_changes}
+            refresh = {
+                _identity(target) for target in targets
+                if (changed := latest.get(target.process_id)) is not None
+                and _identity(changed) == _identity(target)
+                and changed.user_volume == target.user_volume
+            }
+            self._session_volumes = {
+                key: value for key, value in self._session_volumes.items() if key[0] not in refresh
+            }
 
     def _restore(self, targets, sessions) -> bool:
         succeeded = True

@@ -655,6 +655,44 @@ def test_settings_guard_blocks_small_personalized_default_regression(monkeypatch
     assert crud.get_settings(db).screenshot_save_dir == "C:/Shots"
 
 
+@pytest.mark.parametrize("partial", [True, False])
+def test_settings_refuse_new_capture_inside_app_data_but_leave_legacy_file_alone(partial, monkeypatch, tmp_path):
+    from src.utils.app_paths import CapturePathError
+
+    state = tmp_path / "app-data"
+    monkeypatch.setenv("HH_TEST_APPDATA_DIR", str(state))
+    SessionLocal = _session_factory(monkeypatch)
+    monkeypatch.setattr(crud, "base_dir", str(state))
+
+    def save(db, **updates):
+        if partial:
+            return crud.patch_settings(db, updates, actor="settings_full_update")
+        current = crud.get_settings(db)
+        payload = schemas.GlobalSettingsSchema.model_validate(current, from_attributes=True).model_dump()
+        return crud.update_settings(db, schemas.GlobalSettingsSchema(**(payload | updates)))
+
+    with SessionLocal() as db:
+        protected = state / "captures"
+        with pytest.raises(CapturePathError, match="호스트 앱 데이터 폴더"):
+            save(db, screenshot_save_dir=str(protected), theme="dark")
+        assert crud.get_settings(db).screenshot_save_dir != str(protected)
+        assert crud.get_settings(db).theme != "dark"
+
+        protected.mkdir(parents=True)
+        old_capture = protected / "existing.png"
+        old_capture.write_bytes(b"existing image")
+        # Simulate a setting and file written before the restriction existed.
+        crud.get_settings(db).screenshot_save_dir = str(protected)
+        db.commit()
+        saved = save(db, theme="dark")
+        assert saved.theme == "dark" and saved.screenshot_save_dir == str(protected)
+        assert old_capture.read_bytes() == b"existing image"
+
+        external = str(tmp_path / "app-data-captures")
+        assert save(db, screenshot_save_dir=external).screenshot_save_dir == external
+        assert old_capture.read_bytes() == b"existing image"
+
+
 def test_settings_guard_blocks_invalid_value_ranges(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod

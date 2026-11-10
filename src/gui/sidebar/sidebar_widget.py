@@ -463,7 +463,7 @@ class SidebarWidget(QWidget):
         get_recording_elapsed: Optional[Callable[[], int]] = None,
         on_hidden: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
-        on_audio_change: Optional[Callable[[ManagedProcess], bool]] = None,
+        on_audio_change: Optional[Callable[..., bool]] = None,
         audio_state: Optional[Callable] = None,
         on_media_options: Optional[Callable] = None,
         on_media_command: Optional[Callable] = None,
@@ -1188,7 +1188,7 @@ class SidebarWidget(QWidget):
 
     def _set_game_volume(self, value: int, process: ManagedProcess, pid: Optional[int]) -> None:
         process.default_volume = value
-        handled = bool(self._on_audio_change and self._on_audio_change(process))
+        handled = bool(self._on_audio_change and self._on_audio_change(process, apply_volume=True))
         if pid is not None and not handled:
             audio_control.set_app_volume(pid, value / 100.0)
         self._schedule_volume_save(process)
@@ -1801,18 +1801,26 @@ class SidebarWidget(QWidget):
 
     def _on_capture_now_clicked(self) -> None:
         """'지금 촬영' 버튼 클릭 핸들러."""
+        from PySide6.QtWidgets import QMessageBox
         from src.gui.main_window import MainWindow
+        from src.utils.app_paths import CapturePathError
         if MainWindow.INSTANCE and hasattr(MainWindow.INSTANCE, '_screenshot_manager'):
             mgr = MainWindow.INSTANCE._screenshot_manager
             if mgr:
                 self.hide()
 
                 def _capture() -> None:
-                    path = mgr.capture_now()
-                    self.show()
-                    if path:
-                        self._refresh_screenshot_thumbnails()
-                    self._reset_auto_hide()
+                    try:
+                        path = mgr.capture_now()
+                    except CapturePathError as error:
+                        self.show()
+                        QMessageBox.warning(self, "스크린샷 저장 경로", str(error))
+                    else:
+                        self.show()
+                        if path:
+                            self._refresh_screenshot_thumbnails()
+                    finally:
+                        self._reset_auto_hide()
 
                 QTimer.singleShot(100, _capture)
 

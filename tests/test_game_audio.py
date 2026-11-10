@@ -131,6 +131,40 @@ def test_default_volume_applies_only_initially_on_new_sessions_or_explicit_chang
     ]
 
 
+def test_reselecting_saved_game_volume_overrides_external_mixer_only_once(target):
+    session = Session()
+    coordinator = GameAudioCoordinator(Backend(session))
+    saved = replace(target, user_volume=50)
+    coordinator.update_targets((saved,))
+    coordinator.reconcile(42)
+
+    session.level = 0.45
+    coordinator.update_targets((saved,))
+    assert coordinator.reconcile(42)[0].volume == 0.45
+    coordinator.update_targets((saved,), volume_changes=(saved,))
+    assert coordinator.reconcile(42)[0].volume == 0.50
+
+    session.level = 0.40
+    assert coordinator.reconcile(42)[0].volume == 0.40
+    assert [write for write in session.writes if write[0] == "volume"] == [
+        ("volume", 0.5), ("volume", 0.5),
+    ]
+
+
+def test_late_volume_selection_does_not_override_reused_pid(target):
+    old_run = replace(target, user_volume=50)
+    new_run = replace(old_run, create_time=456.0)
+    session = Session()
+    coordinator = GameAudioCoordinator(Backend(session))
+    coordinator.update_targets((new_run,))
+    coordinator.reconcile(42)
+
+    session.level = 0.45
+    coordinator.update_targets((new_run,), volume_changes=(old_run,))
+    assert coordinator.reconcile(42)[0].volume == 0.45
+    assert [write for write in session.writes if write[0] == "volume"] == [("volume", 0.5)]
+
+
 def test_audible_is_calculated_per_actual_session_after_requested_writes(target):
     # max(volume) + all(muted) 조합은 이 두 무음 세션을 유음으로 오판한다.
     first = Session(level=1.0, muted=True)

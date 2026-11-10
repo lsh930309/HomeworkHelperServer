@@ -3,7 +3,7 @@ import os
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
     QDoubleSpinBox, QSpinBox, QLineEdit, QGroupBox,
-    QDialogButtonBox, QFormLayout, QComboBox, QPushButton, QFileDialog,
+    QDialogButtonBox, QFormLayout, QComboBox, QPushButton, QFileDialog, QMessageBox,
 )
 from PySide6.QtCore import Qt, QMetaObject, Slot, Q_ARG
 
@@ -14,6 +14,7 @@ from src.data.data_models import (
     SIDEBAR_MODE_DISABLED,
     normalize_sidebar_mode,
 )
+from src.utils.app_paths import CapturePathError, validate_capture_output_path
 
 
 class SidebarSettingsDialog(QDialog):
@@ -154,6 +155,7 @@ class SidebarSettingsDialog(QDialog):
         save_dir_row = QHBoxLayout()
         self._ss_save_dir_edit = QLineEdit(self._settings.screenshot_save_dir)
         self._ss_save_dir_edit.setPlaceholderText("비워두면 기본 경로 사용 (~/Pictures/GameCaptures)")
+        self._ss_save_dir_edit.setToolTip("호스트 앱 데이터 폴더 밖에 스크린샷을 저장합니다.")
         browse_btn = QPushButton("찾기...")
         browse_btn.setFixedWidth(60)
         browse_btn.clicked.connect(self._browse_screenshot_dir)
@@ -273,8 +275,22 @@ class SidebarSettingsDialog(QDialog):
             __import__('pathlib').Path.home() / "Pictures"
         )
         chosen = QFileDialog.getExistingDirectory(self, "스크린샷 저장 폴더 선택", start)
-        if chosen:
+        if chosen and self._check_screenshot_directory(chosen):
             self._ss_save_dir_edit.setText(chosen)
+
+    def _check_screenshot_directory(self, path: str) -> bool:
+        try:
+            validate_capture_output_path(path)
+        except CapturePathError as error:
+            QMessageBox.warning(self, "스크린샷 저장 경로", str(error))
+            return False
+        return True
+
+    def accept(self) -> None:
+        path = self._ss_save_dir_edit.text().strip()
+        if path and path != self._settings.screenshot_save_dir and not self._check_screenshot_directory(path):
+            return
+        super().accept()
 
     @Slot()
     def refresh_obs_info(self, *_args) -> None:

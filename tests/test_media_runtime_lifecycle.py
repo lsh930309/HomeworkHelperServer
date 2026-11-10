@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.core.game_audio import GameAudioCoordinator, GameAudioTarget
-from src.core.media_center import MediaCenterRuntime, MediaOptions
+from src.core.media_center import MediaCenterRuntime, MediaCenterSnapshot, MediaOptions
 
 from test_game_audio import Backend as WasapiBackend, Session as WasapiSession
 from test_media_center import Backend, Focus, Native, SpotifyAudio, session
@@ -46,7 +46,7 @@ class HeldSnapshotBackend(Backend):
 
 @contextmanager
 def coordinated_runtime(*, sessions=(), targets=(), wasapi_sessions=(), options=MediaOptions(),
-                        foreground=(100, 1000), launches=None):
+                        foreground=(100, 1000), launches=None, poll_seconds=60):
     """실제 worker/오디오 조정자와 fake OS 경계만 연결한다."""
     backend = HeldSnapshotBackend(sessions)
     wasapi = WasapiBackend(*wasapi_sessions)
@@ -73,7 +73,7 @@ def coordinated_runtime(*, sessions=(), targets=(), wasapi_sessions=(), options=
         spotify_window_closer=lambda *_args, **_kwargs: False,
     )
     # 첫 game 관측 뒤에는 다음 tick 없이 사용자 수정/stop 순서를 검증한다.
-    runtime.POLL_SECONDS = 60
+    runtime.POLL_SECONDS = poll_seconds
     runtime.IO_TIMEOUT_SECONDS = 2
     runtime.update_targets(targets)
     assert runtime.start(options)
@@ -109,6 +109,21 @@ def test_stop_reconciles_latest_active_and_retired_targets_without_touching_othe
         assert runtime.stop(timeout_seconds=1)
         assert not first_audio.muted and second_audio.muted
         assert unrelated.writes == []
+
+
+def test_explicit_volume_reselection_reaches_audio_while_media_lookup_waits():
+    game = WasapiSession()
+    target = GameAudioTarget("game", 42, 123, "/game.exe", False, 50)
+    with coordinated_runtime(targets=(target,), wasapi_sessions=(game,),
+                             options=MediaOptions(False, False, False), poll_seconds=.02) as (runtime, *_):
+        assert game.level == .50
+        game.level = .45
+        wait_for(lambda: runtime.snapshot.game_audio[0].volume == .45)
+        runtime.update_targets((target,), volume_change=target)
+        wait_for(lambda: runtime.snapshot.game_audio[0].volume == .50)
+        assert [write for write in game.writes if write[0] == "volume"] == [
+            ("volume", .50), ("volume", .50),
+        ]
 
 
 @pytest.mark.parametrize("action,disable,manual,expected", [
@@ -269,6 +284,78 @@ def test_reenabled_auto_bgm_blocks_an_older_explicit_off_pause_waiting_for_snaps
         assert runtime.snapshot.options.auto_bgm is True
 
 
+def test_quick_reenable_clears_other_media_hold_without_sending_stale_pause():
+    spotify = session(status="playing")
+    firefox = session("firefox", "Firefox.exe", "playing")
+    with coordinated_runtime(sessions=(spotify, firefox),
+                             options=MediaOptions(True, True, False)) as (runtime, backend, _, published):
+        backend.release_snapshot()
+        assert published.wait(1)
+        assert backend.commands == [("spotify", "pause")]
+
+        backend.hold_next_snapshot()
+        runtime._notify_worker()
+        assert backend.entered.wait(1)
+        backend.sessions = (replace(spotify, status="paused"), replace(firefox, status="paused"))
+        assert runtime.configure(MediaOptions(False, True, False))
+        assert runtime.request("pause_bgm_if_playing")
+        assert runtime.configure(MediaOptions(True, True, False))
+        backend.release_snapshot()
+        wait_for(lambda: runtime.snapshot.sessions[1].status == "paused")
+        assert backend.commands == [("spotify", "pause"), ("spotify", "play")]
+
+        runtime._notify_worker()
+        wait_for(lambda: runtime.snapshot.sessions[0].status == "playing")
+        assert backend.commands == [("spotify", "pause"), ("spotify", "play")]
+
+
+def test_next_track_does_not_discard_pause_when_other_media_starts():
+    spotify = session(status="playing")
+    firefox = session("firefox", "Firefox.exe", "paused")
+    with coordinated_runtime(sessions=(spotify, firefox),
+                             options=MediaOptions(True, True, False)) as (runtime, backend, _, published):
+        backend.release_snapshot()
+        assert published.wait(1)
+        assert backend.commands == []
+
+        backend.hold_next_snapshot()
+        assert runtime.request("next")
+        assert backend.entered.wait(1)
+        backend.sessions = (spotify, replace(firefox, status="playing"))
+        backend.release_snapshot()
+        wait_for(lambda: runtime.snapshot.sessions[1].status == "playing")
+        assert backend.commands == [("spotify", "next"), ("spotify", "pause")]
+
+
+@pytest.mark.parametrize("late_action, expected", [
+    pytest.param("next", ["next", "next", "pause"], id="second-next-keeps-pause"),
+    pytest.param("play", ["next"], id="manual-play-replaces-pause"),
+])
+def test_late_request_during_next_respects_external_media_pause(late_action, expected):
+    spotify = session(status="playing")
+    firefox = session("firefox", "Firefox.exe", "paused")
+    with coordinated_runtime(sessions=(spotify, firefox),
+                             options=MediaOptions(True, True, False)) as (runtime, backend, _, published):
+        backend.release_snapshot()
+        assert published.wait(1)
+        assert backend.commands == []
+
+        backend.hold_next_snapshot()
+        backend.block_control = True
+        assert runtime.request("next")
+        assert backend.entered.wait(1)
+        backend.sessions = (spotify, replace(firefox, status="playing"))
+        backend.release_snapshot()
+        assert backend.control_entered.wait(1)
+        assert runtime.request(late_action)
+        # This title only appears in the snapshot that processes the late request.
+        backend.sessions = (spotify, replace(firefox, status="playing", title="후속 관측"))
+        backend.block_control = False
+
+        wait_for(lambda: runtime.snapshot.sessions[1].title == "후속 관측")
+        assert sorted(backend.commands) == [("spotify", action) for action in expected]
+
+
 def test_explicit_off_pause_without_playing_bgm_preserves_manual_preparation():
     launches = []
     with coordinated_runtime(options=MediaOptions(False, True, False), launches=launches) as (runtime, backend, _, published):
@@ -342,7 +429,7 @@ def test_stop_before_worker_initialization_never_opens_native_resources():
     assert native_calls == []
 
 
-def test_later_factory_failure_cleans_already_created_audio_and_backend():
+def test_later_factory_failure_closes_backend_without_opening_audio_sessions():
     cleanup_calls, callbacks = [], []
 
     class Backend:
@@ -351,7 +438,7 @@ def test_later_factory_failure_cleans_already_created_audio_and_backend():
 
     class Audio:
         def update_targets(self, _targets):
-            pass
+            cleanup_calls.append("target update")
 
         def cleanup(self):
             cleanup_calls.append("audio")
@@ -367,11 +454,11 @@ def test_later_factory_failure_cleans_already_created_audio_and_backend():
     )
     runtime.start(MediaOptions(False, False, False))
     wait_for(lambda: bool(callbacks) and not runtime.running)
-    assert cleanup_calls == ["audio", "backend"]
+    assert cleanup_calls == ["backend"]
     assert "controlled focus initialization failure" in runtime.snapshot.error
     assert not runtime.snapshot.running
     assert not runtime.request("play") and not runtime.configure(MediaOptions())
-    assert not runtime.stop()
+    assert runtime.stop()
 
 
 def test_audio_cleanup_exception_still_closes_media_backend_and_blocks_normal_completion():
@@ -414,7 +501,8 @@ def test_old_runtime_callback_cannot_replace_new_runtime_projection():
     from src.gui.main_window import MainWindow
 
     old_owner, new_owner = object(), object()
-    old_snapshot, new_snapshot = object(), object()
+    old_snapshot = MediaCenterSnapshot(error="이전 작업 결과")
+    new_snapshot = MediaCenterSnapshot(running=True)
     view = SimpleNamespace(
         _shutting_down=False, _beholder_restore_runtime_suspended=False,
         _media_center=new_owner, _media_center_snapshot=None,

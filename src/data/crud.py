@@ -4,6 +4,7 @@ from src.data import models
 from src.data import schemas
 from src.data import beholder
 from src.data.data_models import normalize_sidebar_mode, SIDEBAR_MODE_DISABLED, SIDEBAR_MODE_VALUES
+from src.utils.app_paths import validate_capture_output_path
 from src.utils.resource_tracking import is_nikke_outpost_resource, predict_nikke_outpost_percent, predict_stamina_value
 from typing import Any, Optional
 from pathlib import Path
@@ -564,6 +565,11 @@ def _changed_fields(settings: models.GlobalSettings, update_data: dict[str, Any]
     return {key for key, value in update_data.items() if hasattr(settings, key) and getattr(settings, key) != value}
 
 
+def _validate_screenshot_directory_update(update_data: dict[str, Any], changed: set[str]) -> None:
+    if "screenshot_save_dir" in changed and update_data["screenshot_save_dir"] != "":
+        validate_capture_output_path(update_data["screenshot_save_dir"])
+
+
 def _normalize_sidebar_settings_update(current_settings: models.GlobalSettings, update_data: dict[str, Any]) -> None:
     """sidebar_mode와 legacy sidebar_enabled bool을 일관되게 동기화합니다."""
     if "sidebar_mode" not in update_data and "sidebar_enabled" not in update_data:
@@ -967,6 +973,7 @@ def update_settings(
         _normalize_sidebar_settings_update(db_settings, update_data)
         allowed = set(allowed_fields) if allowed_fields is not None else beholder.allowed_settings_fields_for_actor(actor)
         changed = _changed_fields(db_settings, update_data)
+        _validate_screenshot_directory_update(update_data, changed)
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
@@ -1005,6 +1012,7 @@ def patch_settings(
     _normalize_sidebar_settings_update(db_settings, update_data)
     allowed = set(allowed_fields) if allowed_fields is not None else beholder.allowed_settings_fields_for_actor(actor)
     changed = _changed_fields(db_settings, update_data)
+    _validate_screenshot_directory_update(update_data, changed)
     operation = beholder.BeholderOperation(
         kind=operation_kind,
         actor=actor,

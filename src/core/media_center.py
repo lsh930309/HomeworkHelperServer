@@ -43,6 +43,7 @@ class MediaCenterSnapshot:
     game_audio: tuple[GameAudioObservation, ...] = ()
     running: bool = False
     spotify_audio: SpotifyAudioSnapshot = SpotifyAudioSnapshot()
+    audio_released: bool = False
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class _Request:
     action: str
     session_id: str | None
     epoch: int
-    value: int | bool | None = None
+    value: int | bool | GameAudioTarget | None = None
 
 
 @dataclass(frozen=True)
@@ -145,9 +146,12 @@ class MediaCenterRuntime:
             self._thread.start()
         return True
 
-    def update_targets(self, targets: tuple[GameAudioTarget, ...]) -> None:
+    def update_targets(self, targets: tuple[GameAudioTarget, ...], *,
+                       volume_change: GameAudioTarget | None = None) -> None:
         with self._lock:
             self._targets = tuple(targets)
+            if volume_change is not None and not self._stop.is_set():
+                self._requests.append(_Request("game_volume", None, self._epoch, volume_change))
         self._notify_worker()
 
     def configure(self, options: MediaOptions) -> bool:
@@ -156,6 +160,8 @@ class MediaCenterRuntime:
                 return False
             if options == self._options:
                 return True
+            if options.auto_bgm != self._options.auto_bgm:
+                self._requests.append(_Request("auto_bgm", None, self._epoch, options.auto_bgm))
             self._options = options
         self._notify_worker()
         return True
@@ -217,12 +223,24 @@ class MediaCenterRuntime:
         with self._lock:
             return self._targets, self._options, self._generation
 
-    def _publish(self):
+    def _take_requests(self, *, game_volume=False):
+        with self._lock:
+            commands = []
+            for _ in range(len(self._requests)):
+                command = self._requests.popleft()
+                if (command.action == "game_volume") == game_volume:
+                    commands.append(command)
+                else:
+                    self._requests.append(command)
+            return self._targets, self._options, self._generation, commands
+
+    def _publish(self, *, stopped=False):
         snapshot = MediaCenterSnapshot(
             self._sessions, self._selected, self._inputs()[1],
             self._policy.media_hold, self._error, self._observations,
-            not self._stop.is_set(),
+            not stopped,
             self._spotify_audio_state,
+            stopped and self._cleanup_ok,
         )
         with self._lock:
             if snapshot == self._snapshot:
@@ -258,8 +276,9 @@ class MediaCenterRuntime:
         self._pending = None
         self._spotify_audio_state = SpotifyAudioSnapshot()
         self._policy = BgmPolicy()
-        loop = asyncio.new_event_loop()
+        loop = None
         try:
+            loop = asyncio.new_event_loop()
             if sys.platform == "win32":
                 import pythoncom
                 pythoncom.CoInitializeEx(pythoncom.COINIT_MULTITHREADED)
@@ -273,16 +292,19 @@ class MediaCenterRuntime:
         except asyncio.CancelledError:
             pass
         except Exception as exc:
-            self._cleanup_ok = False
-            self._failure(f"미디어 센터 시작/실행 실패: {exc}")
+            if self._cleanup_ok or not self._error:
+                self._failure(f"미디어 센터 시작/실행 실패: {exc}")
+            else:
+                logger.exception("미디어 센터 실행 및 정리 실패")
         finally:
             self._stop.set()
-            self._publish()
             with self._lock:
                 self._loop = self._wake = self._main_task = None
-            loop.close()
+            if loop is not None:
+                loop.close()
             if uninitialize is not None:
                 uninitialize()
+            self._publish(stopped=True)
 
     async def _run(self):
         backend = audio = focus = None
@@ -296,6 +318,7 @@ class MediaCenterRuntime:
             focus = self._focus_factory(started_at_wall=time.time(), native=self._native)
             self._backend, self._audio, self._focus = backend, audio, focus
             self._spotify_audio = self._spotify_audio_factory()
+            self._cleanup_ok = False
             tasks = [asyncio.create_task(self._game_loop()),
                      asyncio.create_task(self._media_loop())]
             await asyncio.gather(*tasks)
@@ -306,7 +329,7 @@ class MediaCenterRuntime:
                 await asyncio.gather(*tasks, return_exceptions=True)
             if focus is not None:
                 self._focus.cancel()
-            if audio is not None:
+            if tasks:
                 try:
                     audio.update_targets(self._inputs()[0])
                     self._cleanup_ok = audio.cleanup() is not False
@@ -326,15 +349,20 @@ class MediaCenterRuntime:
         last_external = None
         autofocus = self._inputs()[1].auto_focus
         while not self._stop.is_set():
-            targets, options, _ = self._inputs()
+            targets, options, _, commands = self._take_requests(game_volume=True)
             try:
+                if commands:
+                    self._audio.update_targets(targets, volume_changes=tuple(
+                        command.value for command in commands if command.epoch == self._epoch
+                    ))
+                else:
+                    self._audio.update_targets(targets)
                 raw_pid, raw_hwnd = self._native.foreground()
                 known = bool(raw_pid and raw_hwnd)
                 if known and raw_pid != os.getpid():
                     last_external = (raw_pid, raw_hwnd)
                 effective = last_external if raw_pid == os.getpid() or not known else (raw_pid, raw_hwnd)
                 foreground_pid = effective[0] if effective else None
-                self._audio.update_targets(targets)
                 self._observations = self._audio.reconcile(
                     foreground_pid,
                     background_mute=options.background_mute and foreground_pid is not None,
@@ -386,10 +414,9 @@ class MediaCenterRuntime:
                 self._clear_error("selection")
 
     async def _media_loop(self):
+        self._policy.set_enabled(self._inputs()[1].auto_bgm)
         while not self._stop.is_set():
             self._wake.clear()
-            _, options, generation = self._inputs()
-            self._policy.set_enabled(options.auto_bgm)
             observed_pending = self._pending
             try:
                 self._sessions = tuple(await asyncio.wait_for(
@@ -400,6 +427,14 @@ class MediaCenterRuntime:
             except Exception as exc:
                 self._failure(f"미디어 상태 조회 실패: {exc}", "observation")
                 valid = False
+            _, options, generation, commands = self._take_requests()
+            # 같은 조회를 기다리는 동안 OFF→ON이 끝나도 두 전환을 순서대로 처리한다.
+            for command in commands:
+                if command.epoch == self._epoch and command.action == "auto_bgm":
+                    self._policy.set_enabled(command.value)
+                    if not command.value and self._pending is not None and self._pending.automatic:
+                        self._pending = None
+            self._policy.set_enabled(options.auto_bgm)
             other_playing = any(item.status == "playing" and item.session_id != self._selected
                                 for item in self._sessions)
             selected = next((item for item in self._sessions if item.session_id == self._selected), None)
@@ -407,19 +442,16 @@ class MediaCenterRuntime:
                 game_audible=self._game_audible, other_playing=other_playing,
                 bgm_playing=selected is not None and selected.status == "playing",
             ) if valid else None
-            with self._lock:
-                commands = tuple(self._requests)
-                self._requests.clear()
             fresh = True
+            overrides_automatic = False
             for command in commands:
                 if self._stop.is_set():
                     break
-                if command.epoch == self._epoch:
-                    await self._execute(command, valid, fresh=fresh)
+                if command.epoch == self._epoch and command.action != "auto_bgm":
+                    overrides_automatic |= bool(await self._execute(command, valid, fresh=fresh))
                     if command.action in {"play", "pause", "pause_bgm_if_playing", "previous", "next", "dj"}:
                         fresh = False
-            policy_commands = any(command.action not in {"open", "prepare", "volume", "mute"} for command in commands)
-            if not policy_commands and automatic is not None and not self._stop.is_set():
+            if not overrides_automatic and automatic is not None and not self._stop.is_set():
                 if automatic == "pause" and self._selected is not None:
                     await self._control(self._selected, "pause", generation, automatic=True)
                 elif automatic == "play":
@@ -440,6 +472,7 @@ class MediaCenterRuntime:
                 pass
 
     async def _execute(self, command, valid, *, fresh=True):
+        """BGM 대상 또는 재생 상태를 직접 선택했으면 자동 결정을 넘긴다."""
         action, session_id = command.action, command.session_id
         if action == "open":
             try:
@@ -491,8 +524,10 @@ class MediaCenterRuntime:
             cancelled = False
         if action == "select":
             if any(item.session_id == session_id and is_spotify_session(item) for item in self._sessions):
+                changed = self._selected != session_id
                 self._explicit_selection = session_id
                 self._select_bgm()
+                return changed
             else:
                 self._failure("선택한 Spotify 세션을 찾을 수 없습니다.")
             return
@@ -502,18 +537,19 @@ class MediaCenterRuntime:
         if action == "dj":
             self._policy.manual_play()
             self._prepare("dj", automatic=False, generation=self._inputs()[2])
-            return
+            return True
         if action == "play" and (session_id is None or session_id == self._selected):
             self._policy.manual_play()
             await self._play(automatic=False, generation=self._inputs()[2], session_id=session_id, fresh=fresh)
-            return
+            return True
         target_id = session_id or self._selected
         if target_id is None:
             if action == "pause" and cancelled:
-                return
+                return session_id is None
             self._failure("제어할 미디어 세션이 없습니다.")
             return
         await self._control(target_id, action)
+        return action == "pause" and target_id == self._selected
 
     def _refresh_spotify_audio(self):
         try:
@@ -681,20 +717,38 @@ class MediaCenterRuntime:
                                  if pending.background_started_at is not None else None)
                 await self._control(selected.session_id, "play", pending.generation, automatic=pending.automatic)
 
+    def _automatic_is_current(self, generation, *, pause_target=None):
+        with self._lock:
+            if (self._stop.is_set() or not self._options.auto_bgm
+                    or any(request.action == "auto_bgm" for request in self._requests)):
+                return False
+            if pause_target is None:
+                return generation == self._generation
+            # 곡 이동은 준비 중인 Play를 취소하지만 같은 BGM의 자동 Pause는 취소하지 않는다.
+            return not any(
+                request.action == "dj"
+                or (request.action == "select" and request.session_id != pause_target)
+                or (request.action in {"play", "pause"} and request.session_id in {None, pause_target})
+                for request in self._requests
+            )
+
     def _automatic_allowed(self, generation):
-        return (not self._stop.is_set() and self._inputs()[1].auto_bgm and generation == self._inputs()[2]
-                and self._policy.permits_automatic_play(
-                    game_audible=self._game_audible,
-                    other_playing=any(item.status == "playing" and item.session_id != self._selected
-                                      for item in self._sessions)))
+        return self._automatic_is_current(generation) and self._policy.permits_automatic_play(
+            game_audible=self._game_audible,
+            other_playing=any(item.status == "playing" and item.session_id != self._selected
+                              for item in self._sessions),
+        )
 
     async def _control(self, session_id, action, generation=None, *, automatic=False):
-        if self._stop.is_set() or (generation is not None and generation != self._inputs()[2]):
+        if self._stop.is_set():
             return
         if automatic:
-            allowed = self._automatic_allowed(generation) if action == "play" else self._inputs()[1].auto_bgm
+            allowed = (self._automatic_allowed(generation) if action == "play"
+                       else self._automatic_is_current(generation, pause_target=session_id))
             if not allowed:
                 return
+        elif generation is not None and generation != self._inputs()[2]:
+            return
         if not any(item.session_id == session_id for item in self._sessions):
             self._failure("미디어 세션이 변경되어 이전 요청을 실행하지 않았습니다.")
             return

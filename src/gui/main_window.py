@@ -2470,27 +2470,40 @@ class MainWindow(QMainWindow):
         owner, snapshot = event
         if owner is not self._media_center:
             return
+        if snapshot.audio_released:
+            self._release_media_center(snapshot)
+            for process in self.data_manager.managed_processes:
+                self._sync_default_volume_state(process, self._get_active_pid(process.id))
+            return
         self._media_center_snapshot = snapshot
         self._sidebar_controller.dispatch_media_state(self.media_center_state())
 
-    def _publish_media_targets(self, changed_process: ManagedProcess | None = None) -> None:
+    def _publish_media_targets(self, changed_process: ManagedProcess | None = None, *,
+                               apply_volume: bool = False) -> None:
         runtime = getattr(self, "_media_center", None)
         if runtime is None:
             return
         active = self.process_monitor.active_monitored_processes
         targets = []
+        volume_change = None
         for process in self.data_manager.managed_processes:
             if changed_process is not None and changed_process.id == process.id:
                 process = changed_process
             entry = active.get(process.id)
             if entry is None:
                 continue
-            targets.append(GameAudioTarget(
+            target = GameAudioTarget(
                 process.id, int(entry["pid"]), float(entry["start_time_approx"]),
                 str(entry.get("exe") or process.monitoring_path),
                 bool(process.default_muted), process.default_volume,
-            ))
-        runtime.update_targets(tuple(targets))
+            )
+            targets.append(target)
+            if apply_volume and process is changed_process:
+                volume_change = target
+        if volume_change is None:
+            runtime.update_targets(tuple(targets))
+        else:
+            runtime.update_targets(tuple(targets), volume_change=volume_change)
 
     def _media_game_audio_state(self, process_id: str):
         active = self._media_center is not None
@@ -2499,10 +2512,11 @@ class MainWindow(QMainWindow):
                             if item.target.process_id == process_id), None)
         return active, observation
 
-    def _on_game_audio_preferences_changed(self, process: ManagedProcess) -> bool:
-        if self._media_center is None:
+    def _on_game_audio_preferences_changed(self, process: ManagedProcess, *,
+                                           apply_volume: bool = False) -> bool:
+        if self._media_center is None or self._media_center.snapshot.audio_released:
             return False
-        self._publish_media_targets(process)
+        self._publish_media_targets(process, apply_volume=apply_volume)
         return True
 
     def _stop_media_center(self, deadline_ms: int = 2000) -> bool:
@@ -2511,13 +2525,17 @@ class MainWindow(QMainWindow):
             return True
         stopped = runtime.stop(timeout_seconds=max(0, deadline_ms) / 1000.0)
         if stopped:
-            self._media_center = None
-            self._media_center_snapshot = None
-            self._volume_applied_pids.clear()
-            self._sidebar_controller.dispatch_media_state(None)
+            self._release_media_center()
         else:
             logger.warning("미디어 센터 종료 또는 사용자 음소거 복원이 완료되지 않았습니다.")
         return stopped
+
+    def _release_media_center(self, snapshot: MediaCenterSnapshot | None = None) -> None:
+        """정리 완료 후 기존 음량 처리에 소유권을 돌려준다."""
+        self._media_center = None
+        self._media_center_snapshot = snapshot
+        self._volume_applied_pids.clear()
+        self._sidebar_controller.dispatch_media_state(self.media_center_state())
 
     def _toggle_volume_panel(self):
         """볼륨 팝오버 패널을 토글합니다."""
@@ -2546,7 +2564,8 @@ class MainWindow(QMainWindow):
 
     def _sync_default_volume_state(self, process: ManagedProcess, pid: Optional[int]) -> None:
         """프로세스의 기본 볼륨을 시스템에 적용하거나 추적 상태를 정리합니다."""
-        if getattr(self, "_media_center", None) is not None:
+        runtime = getattr(self, "_media_center", None)
+        if runtime is not None and not runtime.snapshot.audio_released:
             self._mute_retry_tokens[process.id] = self._mute_retry_tokens.get(process.id, 0) + 1
             self._volume_retry_tokens[process.id] = self._volume_retry_tokens.get(process.id, 0) + 1
             self._publish_media_targets()

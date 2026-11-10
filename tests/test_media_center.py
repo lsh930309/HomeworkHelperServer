@@ -915,8 +915,8 @@ def test_same_play_on_every_ready_snapshot_does_not_starve_pending_completion(mo
             return result
         monkeypatch.setattr(backend, "snapshot", ready_snapshot_with_same_request)
         backend.sessions = (session(),)
-        wait_for(lambda: backend.commands == [("spotify", "play")], timeout=.15)
-        assert time.monotonic() < deadline and runtime._pending is None
+        wait_for(lambda: backend.commands == [("spotify", "play")] and runtime._pending is None, timeout=.15)
+        assert time.monotonic() < deadline
         before = len(repeated)
         wait_for(lambda: len(repeated) >= before + 4)
         assert all(repeated) and backend.commands == [("spotify", "play")] and launches == ["dj"]

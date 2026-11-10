@@ -480,7 +480,40 @@ begin
   end;
 end;
 
-function DeleteAppDataTree(const Path: String; IsDirectory, DeleteData: Boolean;
+function IsAppDataCaptureCandidate(const Path, DataRoot: String): Boolean;
+var
+  Ext, Stem, Parent, IconSuffix: String;
+  IconTag: Integer;
+begin
+  Result := False;
+  if DataRoot = '' then Exit;
+  Ext := Lowercase(ExtractFileExt(Path));
+  if (Ext = '') or
+    (Pos('|' + Ext + '|', '|.png|.jpg|.jpeg|.bmp|.webp|.gif|.tif|.tiff|.mp4|.mkv|.mov|.flv|.ts|.m3u8|.m4v|.avi|.webm|.mpeg|.mpg|.asf|.wmv|') = 0) then Exit;
+
+  // Generated icons are the only known image data owned by these app folders.
+  Parent := ExtractFileDir(Path);
+  Stem := Lowercase(ChangeFileExt(ExtractFileName(Path), ''));
+  if SameText(Parent, AddBackslash(DataRoot) + 'custom_icons') and
+    (Pos('|' + Ext + '|', '|.png|.jpg|.jpeg|.webp|') <> 0) and
+    (Length(Stem) > 8) and (Copy(Stem, Length(Stem) - 7, 8) = '_stamina') then Exit;
+  if (Ext = '.png') and SameText(Parent, AddBackslash(DataRoot) + 'icon_cache') then
+  begin
+    if (Length(Stem) > 10) and (Copy(Stem, Length(Stem) - 9, 10) = '_v4_native') then Exit;
+    IconTag := Pos('_v6_jumbo_', Stem);
+    IconSuffix := Copy(Stem, IconTag + Length('_v6_jumbo_'), Length(Stem));
+    if IconTag = 0 then
+    begin
+      IconTag := Pos('_v5_multires_', Stem);
+      IconSuffix := Copy(Stem, IconTag + Length('_v5_multires_'), Length(Stem));
+    end;
+    if (IconTag > 1) and
+      (Pos('|' + IconSuffix + '|', '|original|16px|24px|32px|48px|64px|96px|128px|256px|') <> 0) then Exit;
+  end;
+  Result := True;
+end;
+
+function DeleteAppDataTree(const Path, DataRoot: String; IsDirectory, DeleteData: Boolean;
   var Changed: Boolean): Boolean;
 var
   Handle: THandle;
@@ -489,6 +522,11 @@ var
   DeleteEntry: Byte;
 begin
   Result := False;
+  if not IsDirectory and IsAppDataCaptureCandidate(Path, DataRoot) then
+  begin
+    Log('앱 데이터 폴더에서 캡처로 보이는 파일을 발견해 데이터 삭제를 중단했습니다.');
+    Exit;
+  end;
   Handle := OpenPinnedDataPath(Path, DataDeleteAccess, IsDirectory, Missing);
   if Handle = THandle(-1) then
   begin
@@ -502,7 +540,7 @@ begin
       try
         repeat
           if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
-            if not DeleteAppDataTree(AddBackslash(Path) + FindRec.Name,
+            if not DeleteAppDataTree(AddBackslash(Path) + FindRec.Name, DataRoot,
               (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0, DeleteData, Changed) then Exit;
         until not FindNext(FindRec);
       finally
@@ -536,10 +574,10 @@ begin
   SetArrayLength(Handles, 0);
   try
     if not PinDataAncestors(ExtractFileDir(DataPath), Handles, Missing) then Exit;
-    // Read-only preflight refuses existing links and locks before the first deletion.
-    if not DeleteAppDataTree(DataPath, True, False, Changed) then Exit;
+    // Refuse existing links, locks and potential legacy captures before the first deletion.
+    if not DeleteAppDataTree(DataPath, DataPath, True, False, Changed) then Exit;
     if not GameBarSettingRestored(DataPath) then Exit;
-    if not DeleteAppDataTree(DataPath, True, True, Changed) then Exit;
+    if not DeleteAppDataTree(DataPath, DataPath, True, True, Changed) then Exit;
     Remaining := OpenPinnedDataPath(DataPath, 0, True, Missing);
     if Remaining <> THandle(-1) then CloseDataPath(Remaining);
     Result := Missing;
@@ -570,7 +608,7 @@ begin
   try
     if PinDataAncestors(Startup, Handles, Missing) then
     begin
-      if not DeleteAppDataTree(AddBackslash(Startup) + 'GameCycleHelper.lnk', False, True, Changed) then
+      if not DeleteAppDataTree(AddBackslash(Startup) + 'GameCycleHelper.lnk', '', False, True, Changed) then
       begin
         Log('이전 자동 실행 정리: 확인된 시작 폴더에서 바로가기를 삭제하지 못했습니다.');
         Result := lcFailed;
@@ -668,7 +706,7 @@ begin
     else if Changed then
       MsgBox('앱 데이터와 백업 일부를 삭제했지만 정리를 완료하지 못했습니다. 남은 파일을 확인해 주세요.', mbError, MB_OK)
     else
-      MsgBox('앱 종료, 파일 잠금, 경로 또는 Game Bar 설정 복원을 확인하지 못해 앱 데이터와 백업을 보존했습니다.',
+      MsgBox('안전하게 지울 수 있는 상태를 확인하지 못해 앱 데이터와 백업을 보존했습니다. 파일 잠금, 경로, 기존 캡처와 Game Bar 설정을 확인해 주세요.',
         mbError, MB_OK);
   end;
 end;

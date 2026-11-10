@@ -11,6 +11,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from src.utils.app_paths import validate_capture_output_path
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SAVE_DIR = Path.home() / "Pictures" / "GameCaptures"
@@ -87,7 +89,7 @@ def _build_save_path(save_dir: Optional[str], game_name: str = "") -> Path:
     time_str = f"{hour_12}_{now.minute:02d}_{now.second:02d}"
     date_str = now.strftime("%Y-%m-%d")
     safe_name = _sanitize_filename(game_name) if game_name.strip() else "capture"
-    return base / f"{safe_name}_{date_str} {ampm} {time_str}.png"
+    return validate_capture_output_path(base / f"{safe_name}_{date_str} {ampm} {time_str}.png")
 
 
 def _get_client_region(hwnd: int) -> Optional[tuple]:
