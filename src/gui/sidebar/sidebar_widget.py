@@ -9,9 +9,9 @@ from typing import Callable, Optional
 import psutil
 from PySide6.QtCore import (
     Qt, QObject, QPropertyAnimation, QEasingCurve, QSize,
-    QEvent, QRect, QTimer, QRunnable, QThreadPool, QSignalBlocker, Signal, Slot,
+    QEvent, QPointF, QRect, QTimer, QRunnable, QThreadPool, QSignalBlocker, Signal, Slot,
 )
-from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtGui import QScreen, QColor, QFontMetricsF, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QLayout, QPushButton, QScrollArea, QSizePolicy, QStyle, QTabBar, QVBoxLayout, QWidget,
@@ -412,29 +412,28 @@ class _HoverThumbCell(QLabel):
 
 
 class _GameNameLabel(QLabel):
-    """기본 글자 높이로 그리며 가용 폭을 넘는 경우에만 가로로 맞춘다."""
+    """한 줄 안에서 실제 글자 윤곽을 가운데 맞추고 긴 이름은 가로로 맞춘다."""
 
     def paintEvent(self, event) -> None:
         text = self.text()
         rect = self.contentsRect()
         if not text or rect.isEmpty():
             return
-        metrics = self.fontMetrics()
-        bounds = metrics.boundingRect(text)
-        left = min(0, bounds.left())
-        width = max(metrics.horizontalAdvance(text), bounds.right() + 1) - left
-        if width <= rect.width():
-            super().paintEvent(event)
+        font = self.font()
+        metrics = QFontMetricsF(font, self)
+        bounds = metrics.tightBoundingRect(text)
+        if bounds.isEmpty():
             return
+        left = min(0.0, bounds.left())
+        width = max(metrics.horizontalAdvance(text), bounds.right()) - left
 
         painter = QPainter(self)
         painter.setClipRect(rect)
-        painter.setFont(self.font())
+        painter.setFont(font)
         painter.setPen(self.palette().color(self.foregroundRole()))
-        painter.translate(rect.left(), rect.top())
-        painter.scale(rect.width() / width, 1.0)
-        baseline = (rect.height() - metrics.height()) // 2 + metrics.ascent()
-        painter.drawText(-left, baseline, text)
+        painter.translate(rect.left(), rect.top() + rect.height() / 2)
+        painter.scale(min(1.0, rect.width() / width), min(1.0, rect.height() / bounds.height()))
+        painter.drawText(QPointF(-left, -bounds.center().y()), text)
 
 
 class _GameRowSurface(QPushButton):
@@ -971,11 +970,15 @@ class SidebarWidget(QWidget):
         icon.setObjectName("gameIcon")
         icon.setFixedSize(icon_size, icon_size)
         icon.setProperty("hhRunning", running)
-        surface_layout.addWidget(icon)
+        surface_layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
         self._load_icon_async(process)
 
+        name_height = icon_size // 2
+        gauge_zone = icon_size - name_height
+        gauge_gap = round(gauge_zone * 4 / 15)
         text = QVBoxLayout()
-        text.setSpacing(inset)
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(gauge_gap)
         name = _GameNameLabel(" ".join(process.name.splitlines()))
         name.setObjectName("gameName")
         name.setProperty("hhRole", "sidebarGameName")
@@ -983,19 +986,18 @@ class SidebarWidget(QWidget):
         name.setToolTip(process.name)
         name.setAccessibleDescription(process.name)
         name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        name.setFixedHeight(name_height)
         text.addWidget(name)
 
         bar = CapsuleProgressBar()
         bar.setObjectName("gameProgressBar")
         bar.setAccessibleName(f"{process.name} 진행률")
         bar.setTextVisible(True)
-        bar.setFixedHeight(round(self.width() * 0.054))
+        bar.setFixedHeight(gauge_zone - gauge_gap)
         text.addWidget(bar)
         surface_layout.addLayout(text, 1)
         surface_layout.setAlignment(text, Qt.AlignmentFlag.AlignVCenter)
 
-        name.ensurePolished()
-        name.setFixedHeight(name.fontMetrics().height())
         for child in (icon, name, bar):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 

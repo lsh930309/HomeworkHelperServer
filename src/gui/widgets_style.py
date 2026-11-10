@@ -10,7 +10,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QProgressBar, QWidget
 
 if TYPE_CHECKING:
@@ -172,6 +172,12 @@ class CapsuleProgressBar(QProgressBar):
         "high": "#e67e22",
         "full": "danger",
     }
+    _SIDEBAR_BUCKET_COLORS = {
+        "low": "#347e4a",
+        "medium": "#8c6928",
+        "high": "#9f622e",
+        "full": "#ac4a47",
+    }
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -212,11 +218,13 @@ class CapsuleProgressBar(QProgressBar):
         tokens = widgets_theme_tokens(dark)
         rect = QRectF(0.0, 0.0, float(self.width()), float(self.height()))
         radius = rect.height() / 2.0
+        sidebar = self.objectName() == "gameProgressBar"
+        track = ("#11181e" if dark else "#29313c") if sidebar else tokens["surface"]
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(tokens["surface"]))
+        painter.setBrush(QColor(track))
         painter.drawRoundedRect(rect, radius, radius)
 
         span = self.maximum() - self.minimum()
@@ -226,36 +234,42 @@ class CapsuleProgressBar(QProgressBar):
             fill_rect = QRectF(rect.left(), rect.top(), fill_width, rect.height())
             bucket = str(self.property("hhBucket") or "low")
             color_key = self._BUCKET_COLORS.get(bucket, "success")
-            fill_color = tokens[color_key] if color_key in tokens else color_key
+            fill_color = (self._SIDEBAR_BUCKET_COLORS.get(bucket, self._SIDEBAR_BUCKET_COLORS["low"])
+                          if sidebar else tokens.get(color_key, color_key))
             painter.setBrush(QColor(fill_color))
             painter.drawRoundedRect(fill_rect, radius, radius)
 
         if self.isTextVisible():
-            self._paint_caption(painter, rect, tokens, dark)
+            self._paint_caption(painter, rect)
         painter.end()
 
-    def _paint_caption(self, painter: QPainter, rect: QRectF, tokens: dict[str, str], dark: bool) -> None:
+    def _paint_caption(self, painter: QPainter, rect: QRectF) -> None:
         missing = self.value() < self.minimum()
         caption = self.format() if missing else self.text()
-        if not caption or rect.width() <= 4:
+        if not caption or rect.width() <= 4 or rect.height() <= 2:
             return
         glyphs = QPainterPath()
-        glyphs.addText(0.0, 0.0, self.font(), caption)
+        font = self.font()
+        if missing:
+            if font.pixelSize() > 0:
+                font.setPixelSize(max(1, round(font.pixelSize() * 10 / 11)))
+            else:
+                font.setPointSizeF(font.pointSizeF() * 10 / 11)
+            font.setWeight(QFont.Weight.Normal)
+        glyphs.addText(0.0, 0.0, font, caption)
         bounds = glyphs.boundingRect()
         if bounds.isEmpty():
             return
 
         painter.translate(rect.center())
-        painter.scale(min(1.0, (rect.width() - 4) / bounds.width()), 1.0)
+        painter.scale(min(1.0, (rect.width() - 4) / bounds.width()),
+                      min(1.0, (rect.height() - 2) / bounds.height()))
         painter.translate(-bounds.center().x(), -bounds.center().y())
         if missing:
-            painter.fillPath(glyphs, QColor(tokens["muted"]))
+            painter.fillPath(glyphs, QColor("#aab3bf"))
         else:
-            ink = tokens["text"] if dark else tokens["surface"]
-            outline = tokens["surface"] if dark else tokens["text"]
-            painter.strokePath(glyphs, QPen(QColor(outline), 1.5, Qt.PenStyle.SolidLine,
-                                           Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-            painter.fillPath(glyphs, QColor(ink))
+            painter.fillPath(glyphs.translated(0.0, 1.0), QColor(0, 0, 0, 96))
+            painter.fillPath(glyphs, QColor("#f4f6fa"))
 
 
 def tint_icon(icon: QIcon, color: QColor, logical_size: int = 16) -> QIcon:
@@ -402,14 +416,15 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
     button_height = round(widget.width() * 0.1) - 2  # border 1px × 2
     button_padding = round(widget.width() * 0.03)
     action_content = round(widget.width() * 0.114) - 2  # 공통 외곽 크기에서 테두리 양쪽 1px을 제외
+    surface_height = round(widget.width() * 0.125) - 2  # 1px 패딩을 제외한 창 전환 영역 높이
     tab_gap = round(widget.width() * 0.012)
     row_radius = round(widget.width() * 0.02)
     widget.setStyleSheet(
         f"""
         QWidget {{ color: {t['text']}; }}
         QLabel[hhRole="sidebarSecondary"] {{ color: {t['muted']}; font-size: 11px; }}
-        QLabel[hhRole="sidebarGameName"] {{ color: {t['text']}; font-size: {round(widget.width() * 0.043)}px; }}
-        QProgressBar#gameProgressBar {{ font-size: 11px; }}
+        QLabel[hhRole="sidebarGameName"] {{ color: {t['text']}; font-size: {round(widget.width() * 0.05)}px; font-weight: 500; }}
+        QProgressBar#gameProgressBar {{ font-size: {round(widget.width() * 0.039)}px; font-weight: 500; }}
         QLabel[hhRole="sidebarSectionTitle"] {{ font-size: 12px; font-weight: 500; }}
         QFrame[hhRole="sidebarGameRow"] {{ background: transparent; border: none; border-radius: {row_radius}px; }}
         QFrame[hhRole="sidebarGameRow"][hhRunning="true"] {{ background: rgba(42,101,174,77); }}
@@ -428,7 +443,7 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
         QPushButton[hhRole="sidebarIconAction"] {{ min-width: {action_content}px; max-width: {action_content}px;
             min-height: {action_content}px; max-height: {action_content}px; padding: 0px; }}
         QPushButton[hhRole="sidebarIconAction"][hhDanger="true"] {{ color: {t['danger']}; background: {t['danger_soft']}; }}
-        QPushButton[hhRole="sidebarGameSurface"] {{ min-height: 0px; padding: 1px;
+        QPushButton[hhRole="sidebarGameSurface"] {{ min-height: {surface_height}px; padding: 1px;
             background: transparent; border-radius: {row_radius}px; border: none; }}
         QPushButton[hhRole="sidebarGameSurface"][hhRunning="true"]:hover {{ background: rgba(42,101,174,62); }}
         QPushButton[hhRole="sidebarGameSurface"][hhRunning="true"]:focus {{ background: rgba(42,101,174,115); }}

@@ -9,13 +9,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, QThread, QThreadPool, Qt
-from PySide6.QtGui import QImage, QWheelEvent
+from PySide6.QtGui import QFont, QImage, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
 from src.data.data_models import GlobalSettings, ManagedProcess
 from src.gui.sidebar.controls import SidebarClockFace, SidebarDivider, VolumeDial
-from src.gui.widgets_style import CapsuleProgressBar, GameIconLabel
+from src.gui.widgets_style import CapsuleProgressBar, GameIconLabel, apply_sidebar_widgets_style
 from src.gui.sidebar import sidebar_widget as module
 
 
@@ -335,7 +335,7 @@ def _relative_luminance(color):
                zip((0.2126, 0.7152, 0.0722), (color.redF(), color.greenF(), color.blueF())))
 
 
-def _assert_readable_text_inside_gauge(gauge, *, split_fill):
+def _assert_readable_text_inside_gauge(gauge, *, split_fill, shadow):
     assert gauge.isTextVisible()
     rendered = gauge.grab().toImage()
     gauge.setTextVisible(False)
@@ -364,6 +364,17 @@ def _assert_readable_text_inside_gauge(gauge, *, split_fill):
             assert max((contrast(x, y) for x, y in glyph_pixels if (x < width / 2) is side), default=0) >= 3
     else:
         assert max(contrast(x, y) for x, y in glyph_pixels) >= 3
+    if shadow is not None:
+        differences = {
+            (x, y): _relative_luminance(rendered.pixelColor(x, y)) - _relative_luminance(bare.pixelColor(x, y))
+            for x, y in glyph_pixels
+        }
+        dark_pixels = {point for point, delta in differences.items() if delta < -0.015}
+        if shadow:
+            assert any((x, y + 1) in dark_pixels or (x, y + 2) in dark_pixels
+                       for (x, y), delta in differences.items() if delta > 0.08)
+        else:
+            assert not dark_pixels
     return rendered, bare
 
 
@@ -407,7 +418,8 @@ def test_stopped_game_displays_zero_and_later_resource_updates_on_the_same_row(s
         assert gauge.format() == shown_value
         assert gauge.accessibleDescription() == shown_value
         assert "꺼짐" in surface.accessibleDescription() and shown_value in surface.accessibleDescription()
-        rendered, bare = _assert_readable_text_inside_gauge(gauge, split_fill=percent == 50.0)
+        shadow = False if percent is None else True if percent in (50.0, 100.0) else None
+        rendered, bare = _assert_readable_text_inside_gauge(gauge, split_fill=percent == 50.0, shadow=shadow)
         if percent is not None:
             assert 100 * gauge.value() / gauge.maximum() == pytest.approx(percent)
             assert gauge.property("hhBucket") == bucket
@@ -562,30 +574,43 @@ def test_late_icon_for_previous_registration_path_does_not_replace_current_game(
 
 
 @pytest.mark.parametrize("running", [False, True])
-def test_styled_row_keeps_action_and_volume_outer_sizes_square(sidebar, app, monkeypatch, running):
+@pytest.mark.parametrize("width,height", [(280, 920), (240, 760), (320, 1080)])
+def test_styled_row_keeps_action_and_volume_outer_sizes_square(sidebar, app, monkeypatch, running, width, height):
     from src.gui.main_window import MainWindow
     view, game, _settings, _writes = sidebar
     active = {game.id: {"pid":42, "start_time_approx":123.0}} if running else {}
     monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    if width != view.width():
+        view.setFixedWidth(width)
+        apply_sidebar_widgets_style(view, dark=True)
     view.refresh_content()
-    view.resize(280, 900)
+    view.resize(width, height)
     view.show()
     app.processEvents()
     row = current_row(view)
     controls = [row.findChild(QPushButton, "gameAction"), row.findChild(VolumeDial)]
+    action_size = round(width * 0.114)
     for control in controls:
         # 실제 stylesheet polish가 setFixedSize의 최소 크기를 덮어쓸 수 있다.
-        assert control.width() == control.height() == 32
-        assert control.minimumSize().toTuple() == control.maximumSize().toTuple() == (32, 32)
+        assert control.width() == control.height() == action_size
+        assert control.minimumSize().toTuple() == control.maximumSize().toTuple() == (action_size, action_size)
     icon = row.findChild(GameIconLabel)
-    assert icon.size().toTuple() == (30, 30)
     name = row.findChild(QLabel, "gameName")
     gauge = row.findChild(CapsuleProgressBar, "gameProgressBar")
-    assert name.font().pixelSize() == 12
-    text_top = name.mapTo(row, name.rect().topLeft()).y()
-    text_bottom = gauge.mapTo(row, gauge.rect().bottomLeft()).y()
+
+    def top(widget):
+        return widget.mapTo(row, QPoint()).y()
+
+    gap = top(gauge) - (top(name) + name.height())
+    assert top(name) == top(icon)
+    assert top(gauge) + gauge.height() == top(icon) + icon.height()
+    if width == 280:
+        assert (icon.height(), name.height(), gap, gauge.height()) == (30, 15, 4, 11)
+        assert name.font().pixelSize() == 14 and name.font().weight() == QFont.Weight.Medium
+    else:
+        assert abs(gap - icon.height() * 4 / 30) <= 1
+        assert abs(gauge.height() - icon.height() * 11 / 30) <= 1
     centers = [widget.mapTo(row, widget.rect().center()).y() for widget in (icon, *controls)]
-    centers.append((text_top + text_bottom) // 2)
     assert max(centers) - min(centers) <= 1
 
 

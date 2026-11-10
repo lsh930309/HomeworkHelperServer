@@ -2399,7 +2399,7 @@ def test_sidebar_long_names_stay_on_one_line_without_clipping_controls(sidebar_l
         assert name.mapTo(row, name.rect().bottomLeft()).y() < gauge.mapTo(row, QPoint()).y()
         assert name.mapTo(row, QPoint()).x() == gauge.mapTo(row, QPoint()).x()
         assert name.width() == gauge.width()
-        assert name.height() == name.fontMetrics().height()
+        assert name.height() == 15 and gauge.height() == 11
         assert name.text() == name.toolTip() == name.accessibleDescription() == title
         if title == titles[-1]:
             assert name.fontMetrics().horizontalAdvance(title) > name.contentsRect().width()
@@ -2613,7 +2613,7 @@ def test_sidebar_balanced_layout_with_single_line_names_fits_controls_and_bottom
         name = row.findChild(QLabel, "gameName")
         dial = row.findChild(VolumeDial)
         action = row.findChild(QPushButton, "gameAction")
-        assert not name.wordWrap() and name.height() >= name.fontMetrics().height()
+        assert not name.wordWrap() and name.height() == 15
         assert action.geometry().right() < dial.geometry().left()
         assert dial.geometry().right() < row.width()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
