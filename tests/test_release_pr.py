@@ -25,6 +25,7 @@ class SimulatedRelease(release_pr.ReleaseCommand):
         self.complete_upload = False
         self.viewer_permission = "WRITE"
         self.host_preflight = {"ok": True}
+        self.remote_main_before_merge = None
         super().__init__(checkout)
 
     def run(self, *args, stdin=None, timeout=120):
@@ -42,6 +43,10 @@ class SimulatedRelease(release_pr.ReleaseCommand):
                 git(self.repo, "update-ref", f"refs/tags/{name}", target)
             return response()
         if args[:2] == ("git", "ls-remote"):
+            if "--heads" in args:
+                assert args[-1] == "refs/heads/main"
+                current = self.remote_main_before_merge or git(self.repo, "rev-parse", "refs/remotes/origin/main")
+                return response(f"{current}\trefs/heads/main")
             return response("\n".join(f"{target}\trefs/tags/{name}" for name, target in self.tags.items()))
         if args[:2] == ("git", "push"):
             for spec in args[args.index("origin") + 1:]:
@@ -109,7 +114,7 @@ def prepare_pr(checkout, path="src/feature.py"):
     message = checkout / ".git/merge-message.txt"
     message.write_text("[feat] 시험 변경 병합\n\n- 변경 사항:\n  - 기능을 병합합니다.\n\n- 검증:\n  - 격리된 시험을 실행했습니다.\n", encoding="utf-8")
     args = release_pr.parser().parse_args([
-        "merge", "42", "--head", head, "--message-file", str(message), "--host", "fixture.invalid",
+        "merge", "42", "--head", head, "--base", baseline, "--message-file", str(message), "--host", "fixture.invalid",
     ])
     return command, args
 
@@ -127,6 +132,11 @@ def test_incomplete_windows_upload_stays_draft_and_retry_keeps_the_merge_version
     assert command.pr_data["url"] in command.draft["body"]
 
     command.complete_upload = True
+    args.base = "b" * 40
+    with pytest.raises(ValueError, match="첫 부모"):
+        command.run_pr(args)
+    assert command.draft["isDraft"]
+    args.base = None
     command.run_pr(args)
     assert not command.draft["isDraft"]
     assert set(command.tags) == {"H/v1.6.0", "C/v1.0.0", "H/v1.7.0"}
@@ -154,6 +164,31 @@ def test_stale_pr_head_and_dry_run_cannot_merge_or_publish(repo):
     assert not any(call[:3] == ("gh", "repo", "view") or "release-preflight" in call for call in command.calls)
 
 
+@pytest.mark.parametrize(("mode", "message"), [
+    ("missing", "전체 SHA를 --base"),
+    ("stale", "검토한 --base와 다릅니다"),
+    ("race", "병합 준비 중 GitHub main"),
+])
+def test_open_pr_requires_the_reviewed_main_revision_until_merge(repo, mode, message):
+    command, args = prepare_pr(repo)
+    if mode == "missing":
+        args.base = None
+    elif mode == "stale":
+        args.base = "b" * 40
+    else:
+        command.remote_main_before_merge = "b" * 40
+
+    with pytest.raises(ValueError) as raised:
+        command.run_pr(args)
+    assert message in str(raised.value)
+    assert command.pr_data["state"] == "OPEN"
+    assert command.draft is None and not command.ledger.path.exists()
+    assert not command.ledger.path.with_suffix(".lock").exists()
+    assert not any(call[:3] in {("gh", "pr", "merge"), ("gh", "release", "create")} for call in command.calls)
+    assert not any(call[:2] == ("git", "push") for call in command.calls)
+    assert any(call[:3] == ("git", "ls-remote", "--heads") for call in command.calls) == (mode == "race")
+
+
 @pytest.mark.parametrize("failure", ["mac_github", "windows_preflight", "previous_product_merge"])
 def test_preflight_failures_leave_pr_and_release_untouched(repo, failure):
     command, args = prepare_pr(repo)
@@ -171,6 +206,7 @@ def test_preflight_failures_leave_pr_and_release_untouched(repo, failure):
         git(repo, "switch", "main")
         git(repo, "merge", "--no-ff", "-m", "전용 명령을 거치지 않은 제품 병합", "previous")
         git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        args.base = git(repo, "rev-parse", "HEAD")
         message = "PR 병합 릴리즈를 먼저 재개"
 
     with pytest.raises((ValueError, RuntimeError)) as raised:

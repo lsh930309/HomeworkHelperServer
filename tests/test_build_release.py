@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import zipfile
 from datetime import datetime
 from types import SimpleNamespace
 from pathlib import Path
@@ -359,7 +360,12 @@ class _DummyGui:
         return None
 
 
-def test_release_archive_moves_root_artifacts_into_target_type_buckets(tmp_path, monkeypatch):
+@pytest.fixture
+def accepted_windows_fixture_pair(monkeypatch):
+    monkeypatch.setattr(build, "_restorable_windows_pair", lambda paths: all(path.is_file() for path in paths))
+
+
+def test_release_archive_moves_root_artifacts_into_target_type_buckets(tmp_path, monkeypatch, accepted_windows_fixture_pair):
     release_dir = tmp_path / "release"
     archives_dir = release_dir / "archives"
     release_dir.mkdir()
@@ -388,7 +394,7 @@ def test_release_archive_moves_root_artifacts_into_target_type_buckets(tmp_path,
     assert (release_dir / "notes.txt").exists()
 
 
-def test_rebuilding_same_version_keeps_first_complete_windows_pair_and_latest_macos_pkg(tmp_path, monkeypatch):
+def test_rebuilding_same_version_keeps_first_complete_windows_pair_and_latest_macos_pkg(tmp_path, monkeypatch, accepted_windows_fixture_pair):
     class Clock(datetime):
         day = 1
 
@@ -417,7 +423,7 @@ def test_rebuilding_same_version_keeps_first_complete_windows_pair_and_latest_ma
 
 
 @pytest.mark.parametrize("failure", ["copy", "cleanup"])
-def test_windows_archive_failure_preserves_a_complete_recoverable_pair(tmp_path, monkeypatch, failure):
+def test_windows_archive_failure_preserves_a_complete_recoverable_pair(tmp_path, monkeypatch, accepted_windows_fixture_pair, failure):
     release = tmp_path / "release"
     release.mkdir()
     archive = release / "archives"
@@ -458,7 +464,7 @@ def test_windows_archive_failure_preserves_a_complete_recoverable_pair(tmp_path,
     assert not list(archive.glob(".pair-stage-*"))
 
 
-def test_windows_pruning_and_legacy_archive_keep_complete_pairs(tmp_path, monkeypatch):
+def test_windows_pruning_and_legacy_archive_keep_complete_pairs(tmp_path, monkeypatch, accepted_windows_fixture_pair):
     release = tmp_path / "release"
     release.mkdir()
     archive = release / "archives"
@@ -486,6 +492,95 @@ def test_windows_pruning_and_legacy_archive_keep_complete_pairs(tmp_path, monkey
     pair_root = archive / "windows-host/by-version"
     assert sorted(folder.name for folder in pair_root.iterdir()) == ["dev.11"]
     assert {path.suffix for path in (pair_root / "dev.11").iterdir()} == {".exe", ".zip"}
+
+
+def windows_fixture_package(folder, release_id, *, signed=True, portable="valid"):
+    setup = folder / f"HomeworkHelper_{release_id}_Setup.exe"
+    package = folder / f"HomeworkHelper_{release_id}_Portable.zip"
+    setup.write_bytes(b"signed fixture" if signed else b"unsigned fixture")
+    if portable == "valid":
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr("app/homework_helper.exe", b"application fixture")
+            archive.writestr("app/homework_helper_service.exe", b"service fixture")
+    elif portable == "damaged":
+        package.write_bytes(b"interrupted ZIP fixture")
+    return setup, package
+
+
+@pytest.mark.parametrize(("signed", "portable"), [(False, "valid"), (True, "damaged"), (True, "missing")])
+def test_invalid_first_archive_candidate_does_not_block_signed_rebuild(tmp_path, monkeypatch, signed, portable):
+    release = tmp_path / "release"
+    release.mkdir()
+    archive = release / "archives"
+    monkeypatch.setattr(build, "RELEASE_DIR", release)
+    monkeypatch.setattr(build, "ARCHIVES_DIR", archive)
+    monkeypatch.setattr(build, "_windows_setup_signature_valid", lambda path: path.read_bytes() == b"signed fixture")
+    release_id = "dev.4"
+    folder = archive / "windows-host/by-version" / release_id
+    windows_fixture_package(release, release_id, signed=signed, portable=portable)
+
+    build.archive_old_files(_DummyGui(), prune_archives=False)
+    assert not folder.exists()
+    active = windows_fixture_package(release, release_id)
+    expected = {path.name: path.read_bytes() for path in active}
+    build.archive_old_files(_DummyGui(), prune_archives=False)
+    assert {path.name: path.read_bytes() for path in folder.iterdir()} == expected
+
+
+@pytest.mark.parametrize("probe_stdout", [None, "UnknownError", "unexpected fixture output"])
+def test_unavailable_verifier_preserves_active_and_archived_packages(tmp_path, monkeypatch, probe_stdout):
+    release = tmp_path / "release"
+    release.mkdir()
+    archive = release / "archives"
+    monkeypatch.setattr(build, "RELEASE_DIR", release)
+    monkeypatch.setattr(build, "ARCHIVES_DIR", archive)
+    with monkeypatch.context() as fixture:
+        fixture.setattr(build, "_windows_setup_signature_valid", lambda _path: True)
+        windows_fixture_package(release, "dev.4")
+        build.archive_old_files(_DummyGui(), prune_archives=False)
+    saved = archive / "windows-host/by-version/dev.4"
+    active = windows_fixture_package(release, "dev.5")
+    expected = {path: path.read_bytes() for path in (*active, *saved.iterdir())}
+
+    calls = []
+
+    def probe(command, **kwargs):
+        assert command[0] == "powershell"
+        candidate = Path(kwargs["env"]["HH_ARCHIVE_SETUP_PATH"])
+        assert candidate.name == active[0].name and candidate.parent.parent == archive
+        calls.append(command)
+        if probe_stdout is None:
+            raise subprocess.CalledProcessError(1, command, output="unexpected fixture output")
+        return subprocess.CompletedProcess(command, 0, probe_stdout, "")
+
+    monkeypatch.setattr(build.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(build.subprocess, "run", probe)
+    with pytest.raises(build.BuildConfigError) as raised:
+        build.archive_old_files(_DummyGui(), archive_keep=1)
+    assert len(calls) == 1 and "unexpected fixture output" not in str(raised.value)
+    assert {path: path.read_bytes() for path in expected} == expected
+    assert not (saved.parent / "dev.5").exists() and not list(archive.glob(".pair-stage-*"))
+
+
+def test_rebuilding_an_old_version_protects_its_last_restore_pair_from_pruning(tmp_path, monkeypatch):
+    release = tmp_path / "release"
+    release.mkdir()
+    archive = release / "archives"
+    monkeypatch.setattr(build, "RELEASE_DIR", release)
+    monkeypatch.setattr(build, "ARCHIVES_DIR", archive)
+    monkeypatch.setattr(build, "_windows_setup_signature_valid", lambda _path: True)
+    old = datetime.now().timestamp() - 2 * 24 * 60 * 60
+    for package in windows_fixture_package(release, "dev.4"):
+        os.utime(package, (old, old))
+    windows_fixture_package(release, "dev.5")
+    build.archive_old_files(_DummyGui(), prune_archives=False)
+    folder = archive / "windows-host/by-version/dev.4"
+    expected = {path.name: path.read_bytes() for path in folder.iterdir()}
+
+    windows_fixture_package(release, "dev.4", signed=False, portable="missing")
+    build.archive_old_files(_DummyGui(), archive_keep=1, archive_days=1)
+    assert {path.name: path.read_bytes() for path in folder.iterdir()} == expected
+    assert (folder.parent / "dev.5").is_dir()
 
 
 def test_sha256_file_reports_file_digest(tmp_path):

@@ -332,6 +332,39 @@ def _complete_windows_pair(paths: tuple[Path, Path]) -> bool:
     return all(path.is_file() and path.stat().st_size > 0 for path in paths)
 
 
+def _windows_setup_signature_valid(setup: Path) -> bool:
+    if platform.system() != "Windows":
+        raise BuildConfigError("Windows 보관 패키지의 서명은 Windows에서 확인해야 합니다.")
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "(Get-AuthenticodeSignature -LiteralPath $env:HH_ARCHIVE_SETUP_PATH -ErrorAction Stop).Status.ToString()"],
+            env={**os.environ, "HH_ARCHIVE_SETUP_PATH": str(setup)},
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise BuildConfigError(f"보관 후보의 Setup 서명을 확인할 수 없습니다: {setup.name}") from error
+    status = result.stdout.strip()
+    if status == "Valid":
+        return True
+    if status in {"NotSigned", "HashMismatch", "NotTrusted"}:
+        return False
+    raise BuildConfigError(f"보관 후보의 Setup 서명 유효성을 판단할 수 없습니다: {setup.name}")
+
+
+def _restorable_windows_pair(paths: tuple[Path, Path]) -> bool:
+    from tools.windows_host_probe import payload_hashes
+
+    setup, portable = paths
+    if not _complete_windows_pair(paths) or not _windows_setup_signature_valid(setup):
+        return False
+    try:
+        payload_hashes(portable)
+    except (ValueError, zipfile.BadZipFile):
+        return False
+    return True
+
+
 def _archive_windows_pair(console, release_id: str) -> int:
     """Publish a complete immutable pair before removing any active files."""
     info = {"string": release_id}
@@ -345,7 +378,7 @@ def _archive_windows_pair(console, release_id: str) -> int:
     else:
         # An unambiguous package pair from the previous layout is already a backup.
         existing = [list(archive.rglob(path.name)) for path in active]
-        has_previous = all(len(paths) == 1 for paths in existing) and _complete_windows_pair(
+        has_previous = all(len(paths) == 1 for paths in existing) and _restorable_windows_pair(
             (existing[0][0], existing[1][0])
         )
         if not has_previous and _complete_windows_pair(active):
@@ -355,9 +388,13 @@ def _archive_windows_pair(console, release_id: str) -> int:
                 staged = Path(temporary)
                 for file in active:
                     shutil.copy2(file, staged / file.name)
-                staged.rename(pair_dir)
-            archived = 2
-            console.log(f"  ✓ {release_id} Setup·Portable 쌍 보관")
+                if _restorable_windows_pair(windows_package_paths(info, staged)):
+                    staged.rename(pair_dir)
+                    archived = 2
+            if archived:
+                console.log(f"  ✓ {release_id} Setup·Portable 쌍 보관")
+            else:
+                console.log(f"  ⚠ 복원 조건을 충족하지 않는 Windows 산출물 정리: {release_id}", "warning")
         elif not has_previous:
             console.log(f"  ⚠ 미완성 Windows 산출물 정리: {release_id}", "warning")
 
@@ -366,7 +403,7 @@ def _archive_windows_pair(console, release_id: str) -> int:
     return archived
 
 
-def prune_archive_files(console, *, keep: int = 10, days: int = 90):
+def prune_archive_files(console, *, keep: int = 10, days: int = 90, protected_windows_versions=frozenset()):
     """Keep archives bounded by target/type count and age."""
     if keep < 1:
         keep = 1
@@ -383,6 +420,8 @@ def prune_archive_files(console, *, keep: int = 10, days: int = 90):
             if _complete_windows_pair(paths):
                 pairs.append((max(path.stat().st_mtime for path in paths), folder))
     for index, (mtime, folder) in enumerate(sorted(pairs, reverse=True)):
+        if folder.name in protected_windows_versions:
+            continue
         if index >= keep or datetime.fromtimestamp(mtime) < cutoff:
             try:
                 # Remove the pair from the restore namespace in one operation.
@@ -404,6 +443,9 @@ def prune_archive_files(console, *, keep: int = 10, days: int = 90):
             reverse=True,
         )
         for index, file_path in enumerate(archived_files):
+            match = WINDOWS_PACKAGE_PAIR.fullmatch(file_path.name)
+            if match and match["version"] in protected_windows_versions:
+                continue
             mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
             if index >= keep or mtime < cutoff:
                 try:
@@ -468,7 +510,7 @@ def archive_old_files(console, *, archive_keep: int = 10, archive_days: int = 90
 
     console.log(f"\n총 {archived_count}개 파일 아카이빙 완료", 'success')
     if prune_archives:
-        prune_archive_files(console, keep=archive_keep, days=archive_days)
+        prune_archive_files(console, keep=archive_keep, days=archive_days, protected_windows_versions=windows_versions)
 
 
 def clean_build_artifacts(console):

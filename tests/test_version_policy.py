@@ -179,6 +179,59 @@ def test_build_py_ownership_is_identical_for_commits_and_the_staged_index(repo, 
     assert policy.changed_products(repo, before, git(repo, "rev-parse", "HEAD")) == expected
 
 
+def test_resolving_a_real_host_only_build_conflict_is_a_host_dev_change(repo, monkeypatch):
+    def source(value):
+        return f"def create_installer():\n    return {value}\n\ndef create_macos_pkg():\n    return 100\n"
+
+    baseline = commit(repo, "build.py", source(1))
+    git(repo, "update-ref", "refs/remotes/origin/main", baseline)
+    start_policy(repo)
+    git(repo, "switch", "-c", "host-feature")
+    feature = commit(repo, "build.py", source(2))
+    ledger = policy.VersionLedger(repo)
+    assert ledger.resolve_build("host", feature).version == "dev.1"
+    git(repo, "switch", "main")
+    main_tip = commit(repo, "build.py", source(3))
+    git(repo, "update-ref", "refs/remotes/origin/main", main_tip)
+    git(repo, "switch", "host-feature")
+    conflicted = subprocess.run(("git", "merge", "--no-ff", "--no-commit", "main"), cwd=repo,
+                                capture_output=True, text=True)
+    assert conflicted.returncode == 1
+    assert git(repo, "ls-files", "--unmerged", "build.py")
+
+    (repo / "build.py").write_text(source(5), encoding="utf-8")
+    git(repo, "add", "build.py")
+    assert check_staged(repo, monkeypatch) == 0
+    git(repo, "commit", "-m", "호스트 빌드 충돌 해결")
+    resolved = git(repo, "rev-parse", "HEAD")
+    policy.validate_commit_range(repo, main_tip, resolved)
+    assert ledger.resolve_build("host", resolved).version == "dev.2"
+
+
+def test_reordering_cross_scope_build_definitions_is_shared_but_known_module_keeps_owner(repo, monkeypatch):
+    host = "def create_installer():\n    return 1\n"
+    client = "def create_macos_pkg(installer=create_installer):\n    return installer\n"
+    baseline = commit(repo, "build.py", host + "\n" + client)
+    git(repo, "update-ref", "refs/remotes/origin/main", baseline)
+    start_policy(repo)
+    git(repo, "switch", "-c", "build-order")
+    path = repo / "build.py"
+    path.write_text(client + "\n" + host, encoding="utf-8")
+    git(repo, "add", "build.py")
+    assert check_staged(repo, monkeypatch) == 1
+    git(repo, "commit", "-m", "다른 제품 정의의 평가 순서 변경")
+    reordered = git(repo, "rev-parse", "HEAD")
+    assert policy.changed_products(repo, baseline, reordered) == {"host", "client"}
+
+    git(repo, "switch", "-c", "client-packager", "main")
+    known = commit(repo, "tools/package_macos_remote_app.py", "version = '1.0.1'")
+    assert policy.changed_products(repo, baseline, known) == {"client"}
+
+    git(repo, "switch", "-c", "unknown-packager", "main")
+    moved = commit(repo, "build.py", "from tools.unknown_module import create_installer\n\n" + client)
+    assert policy.changed_products(repo, baseline, moved) == {"host", "client"}
+
+
 def test_only_the_start_node_can_have_both_product_tags(repo):
     ledger = policy.VersionLedger(repo)
     git(repo, "tag", "H/v1.6.0")

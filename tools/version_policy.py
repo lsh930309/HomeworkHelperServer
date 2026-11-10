@@ -51,7 +51,7 @@ BUILD_CLIENT_DEFINITIONS = {
 BUILD_ARCHIVE_DEFINITIONS = {
     "ARCHIVES_DIR", "VERSION_ID", "VERSIONED_PACKAGE_NAME", "WINDOWS_ARCHIVE_ID", "WINDOWS_PACKAGE_PAIR",
     "artifact_archive_bucket", "iter_release_artifacts_for_archive", "prune_archive_files", "archive_old_files",
-    "_complete_windows_pair", "_archive_windows_pair",
+    "_complete_windows_pair", "_archive_windows_pair", "_windows_setup_signature_valid", "_restorable_windows_pair",
 }
 
 
@@ -148,33 +148,25 @@ def resolve_commit(repo: Path, commit: str) -> str:
     return resolved
 
 
-def _build_definition_scope(node: ast.stmt) -> str:
+def _build_definition_scope(node: ast.stmt) -> tuple[str, str | None]:
     if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and not node.decorator_list:
         name = node.name
     elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
         name = node.targets[0].id
     elif isinstance(node, ast.Import) and [(alias.name, alias.asname) for alias in node.names] == [("tempfile", None)]:
-        return "archive"
-    elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("tools."):
-        # Moving named definitions to a product module preserves their ownership.
-        scopes = {_build_name_scope(alias.asname or alias.name) for alias in node.names}
-        return scopes.pop() if len(scopes) == 1 else "shared"
+        return "archive", None
     else:
-        return "shared"
-    return _build_name_scope(name)
-
-
-def _build_name_scope(name: str) -> str:
+        return "shared", None
     if name in BUILD_HOST_DEFINITIONS:
-        return "host"
+        return "host", name
     if name in BUILD_CLIENT_DEFINITIONS:
-        return "client"
+        return "client", name
     if name in BUILD_ARCHIVE_DEFINITIONS:
-        return "archive"
-    return "shared"
+        return "archive", name
+    return "shared", None
 
 
-def _build_sections(repo: Path, tree: str) -> dict[str, list[str]] | None:
+def _build_sections(repo: Path, tree: str) -> list[tuple[str, str, str]] | None:
     blob = _git_result(repo, "cat-file", "blob", f"{tree}:{BUILD_SCRIPT}", allowed=(0, 128))
     if blob.returncode:
         return None
@@ -182,23 +174,53 @@ def _build_sections(repo: Path, tree: str) -> dict[str, list[str]] | None:
         nodes = ast.parse(blob.stdout).body
     except (SyntaxError, ValueError):
         return None
-    sections = {scope: [] for scope in ("host", "client", "shared")}
+    sections = []
     for node in nodes:
-        scope = _build_definition_scope(node)
+        scope, name = _build_definition_scope(node)
         if scope != "archive":
-            sections[scope].append(ast.dump(node))
+            body = ast.dump(node)
+            sections.append((scope, name or body, body))
     return sections
 
 
-def _diff_products(repo: Path, paths: Iterable[str], before: str, after: str) -> set[str]:
+def _scope_positions(
+    sections: list[tuple[str, str, str]], common: set[tuple[str, str]],
+) -> dict[tuple[str, str], list[set[tuple[str, str]]]]:
+    """Keep the relative order of surviving definitions across scope boundaries."""
+    positions: dict[tuple[str, str], list[set[tuple[str, str]]]] = {}
+    earlier: set[tuple[str, str]] = set()
+    for scope, name, _ in sections:
+        key = (scope, name)
+        if key in common:
+            positions.setdefault(key, []).append({other for other in earlier if other[0] != scope})
+            earlier.add(key)
+    return positions
+
+
+def _build_products(
+    left: list[tuple[str, str, str]] | None, right: list[tuple[str, str, str]] | None,
+) -> set[str]:
+    if left is None or right is None:
+        return set(START_VERSIONS)
+    if left == right:
+        return set()
+    left_bodies = {scope: [body for owner, _, body in left if scope == owner] for scope in (*START_VERSIONS, "shared")}
+    right_bodies = {scope: [body for owner, _, body in right if scope == owner] for scope in (*START_VERSIONS, "shared")}
+    common = {(scope, name) for scope, name, _ in left} & {(scope, name) for scope, name, _ in right}
+    if left_bodies["shared"] != right_bodies["shared"] or _scope_positions(left, common) != _scope_positions(right, common):
+        return set(START_VERSIONS)
+    return {product for product in START_VERSIONS if left_bodies[product] != right_bodies[product]}
+
+
+def _diff_products(
+    repo: Path, paths: Iterable[str], before: str, after: str, *, build_projections: tuple[str, ...] = (),
+) -> set[str]:
     paths = set(paths)
     products = classify_paths(paths - {BUILD_SCRIPT})
     if BUILD_SCRIPT in paths:
-        left, right = _build_sections(repo, before), _build_sections(repo, after)
-        if left is None or right is None or left["shared"] != right["shared"]:
-            products.update(START_VERSIONS)
-        else:
-            products.update(product for product in START_VERSIONS if left[product] != right[product])
+        actual = _build_sections(repo, after)
+        for projected in build_projections or (before,):
+            products.update(_build_products(_build_sections(repo, projected), actual))
     return products
 
 
@@ -224,24 +246,37 @@ def _is_main_sync(repo: Path, side_parents: list[str], main_tips: tuple[str, ...
     return imported_main
 
 
-def _automatic_merge_tree(repo: Path, first: str, second: str) -> str:
-    result = _git_result(repo, "merge-tree", "--write-tree", "--no-messages", first, second, allowed=(0, 1))
-    tree, _, _ = result.stdout.partition("\n")
+def _automatic_merge_tree(repo: Path, first: str, second: str, *options: str) -> tuple[str, set[str]]:
+    result = _git_result(
+        repo, "merge-tree", "--write-tree", "--no-messages", "--name-only", "-z", *options, first, second, allowed=(0, 1),
+    )
+    tree, *paths = result.stdout.split("\0")
     if not COMMIT.fullmatch(tree):
         raise VersionPolicyError("main 동기화의 자동 병합 트리를 확인할 수 없습니다.")
-    return tree
+    return tree, {path for path in paths if path}
+
+
+def _main_sync_products(repo: Path, first: str, second: str, after: str) -> set[str]:
+    automatic, conflicts = _automatic_merge_tree(repo, first, second)
+    revisions = (automatic, after) if after else ("--cached", automatic)
+    paths = set(_git(repo, "diff", "--no-renames", "--name-only", "-z", *revisions, "--").split("\0"))
+    projections: tuple[str, ...] = ()
+    if BUILD_SCRIPT in conflicts:
+        # Git preserves the automatic, non-conflicting edits in both projections.
+        try:
+            alternatives = [_automatic_merge_tree(repo, first, second, "-X", side) for side in ("ours", "theirs")]
+        except VersionPolicyError as exc:
+            raise VersionPolicyError("현재 Git으로 build.py 충돌의 두 병합 결과를 재현할 수 없습니다.") from exc
+        if any(BUILD_SCRIPT in unresolved for _, unresolved in alternatives):
+            return set(START_VERSIONS)
+        projections = tuple(tree for tree, _ in alternatives)
+    return _diff_products(repo, paths | conflicts, automatic, after, build_projections=projections)
 
 
 def _commit_products(repo: Path, commit: str, main_tips: tuple[str, ...]) -> set[str]:
     parents = _git(repo, "show", "-s", "--format=%P", commit).split()
     if _is_main_sync(repo, parents[1:], main_tips):
-        # Compare the recorded result with Git's automatic merge of both parents.
-        paths = _git(
-            repo, "show", "--remerge-diff", "--format=", "--no-renames", "--name-only", "-z", commit, "--"
-        ).split("\0")
-        if BUILD_SCRIPT in paths:
-            return _diff_products(repo, paths, _automatic_merge_tree(repo, *parents), commit)
-        return classify_paths(paths)
+        return _main_sync_products(repo, *parents, commit)
     return changed_products(repo, parents[0], commit)
 
 
@@ -544,9 +579,12 @@ def main() -> int:
         merge_head_path = repo / _git(repo, "rev-parse", "--git-path", "MERGE_HEAD").strip()
         parents = merge_head_path.read_text(encoding="ascii").split() if merge_head_path.is_file() else []
         main_tips = tuple(history[-1] for history in ledger._main_histories())
-        compared_tree = _automatic_merge_tree(repo, "HEAD", parents[0]) if _is_main_sync(repo, parents, main_tips) else "HEAD"
-        staged = _git(repo, "diff", "--cached", "--no-renames", "--name-only", "-z", compared_tree, "--")
-        _one_product(_diff_products(repo, staged.split("\0"), compared_tree, ""), "스테이징한 커밋")
+        if _is_main_sync(repo, parents, main_tips):
+            products = _main_sync_products(repo, "HEAD", parents[0], "")
+        else:
+            staged = _git(repo, "diff", "--cached", "--no-renames", "--name-only", "-z", "HEAD", "--")
+            products = _diff_products(repo, staged.split("\0"), "HEAD", "")
+        _one_product(products, "스테이징한 커밋")
     except VersionPolicyError as exc:
         print(exc, file=sys.stderr)
         return 1

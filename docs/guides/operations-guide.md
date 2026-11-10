@@ -317,11 +317,12 @@ python tools/release_pr.py bootstrap --commit '<main 전체 SHA>' --dry-run
 된다는 사용자의 별도 명시 동의를 받는다. 이전 요청이나 관행을 이번 병합 동의로 간주하지 않는다. head 또는
 base가 바뀌면 변경을 다시 확인하고 동의를 받는다.
 
-맥 `main`에서 검토한 PR의 전체 head SHA와
+맥 `main`에서 검토한 PR의 전체 head SHA, GitHub `main`의 전체 base SHA와
 [규칙에 맞는 병합 메시지](../development/commit-message-policy.md)를 명시한다. 호스트 PR에는 기존 SSH 대상과 인증 옵션을 추가한다.
 
 ```bash
 python tools/release_pr.py merge 123 --head '<검토한 PR의 전체 SHA>' \
+  --base '<검토한 main의 전체 SHA>' \
   --message-file '<병합 메시지 파일>' --host '<Windows 호스트>' --user '<SSH 사용자>'
 ```
 
@@ -337,7 +338,9 @@ python tools/host_operations.py release-preflight --host '<Windows 호스트>' \
 ```
 
 사용자에게 메이저 승인을 받은 PR만 `--approved-major`를 지정한다. GitHub 웹의 병합과 일반 `gh pr merge`는 이 흐름의 시작점이 아니다.
-병합 직전에는 PR이 변경한 제품과 커밋을 확인하고, 병합 뒤에는 GitHub `main`에 반영된 실제 변경을 확인한다.
+열린 PR은 미리보기에서도 `--head`와 `--base`를 요구한다. 실제 병합 직전에 원격 `main`을 다시 조회하며,
+병합 뒤에는 결과의 첫 부모와 PR head를 대조한다. GitHub의 병합 요청은 head SHA에만 일치를 강제할 수
+있으므로, 마지막 조회와 실제 병합 사이에 base가 바뀌면 병합 결과 확인에서 중단한다.
 제품 패키지 변경이 있는 마이너·메이저만 제품 태그를 등록하고 PR 제목·본문을 바탕으로 릴리즈를 작성한다.
 릴리즈 설명에 인용되는 PR 본문에는 게시해도 되는 내용만 남긴다. `main`에 직접 반영한 패치 버전은 로컬 버전 기록에 남는다.
 
@@ -346,6 +349,7 @@ python tools/host_operations.py release-preflight --host '<Windows 호스트>' \
 필수 패키지의 파일명과 SHA-256을 GitHub 응답과 대조한 뒤 draft를 공개한다. 게시와 앱 설치는 별도 작업이다.
 
 병합 뒤 빌드나 게시가 실패하면 같은 PR 번호와 검토한 head SHA로 명령을 다시 실행한다.
+이미 병합된 PR은 `--base`를 생략해 재개할 수 있고, `--base`를 주면 병합 커밋의 첫 부모와 대조한다.
 병합 커밋과 버전은 그대로 사용한다. 초안에 이미 있는 패키지는 빌드 환경의 같은 버전 파일과 SHA-256이 같을 때 재사용한다.
 로컬 파일을 찾을 수 없거나 SHA-256이 다르면 기존 첨부를 보존하고 중단하므로, 원래 패키지를 확인한 뒤 재개한다.
 맥 `main`이 클라이언트의 릴리즈 커밋보다 앞서 간 경우에는

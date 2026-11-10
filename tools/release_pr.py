@@ -165,6 +165,10 @@ class ReleaseCommand:
         self.require_main_checkout(published)
         if pr["isDraft"] or pr["state"] != "OPEN":
             raise ValueError("검토가 끝난 열린 PR을 지정하세요.")
+        if not args.base:
+            raise ValueError("열린 PR에는 검토한 main의 전체 SHA를 --base로 지정하세요.")
+        if args.base != published:
+            raise ValueError("현재 GitHub main이 검토한 --base와 다릅니다. 변경을 다시 리뷰하고 병합 동의를 받으세요.")
         self.ledger.check_main_ready(published)
         self.git("fetch", "--no-tags", "origin", f"refs/pull/{args.number}/head")
         if self.git("rev-parse", "FETCH_HEAD") != args.head:
@@ -223,6 +227,9 @@ class ReleaseCommand:
             raise ValueError("릴리즈 표시는 병합 명령이 자동으로 붙입니다.")
         subject, _, body = message.strip().partition("\n")
         self.require_merge_access(args, event.product)
+        remote_main = self.git("ls-remote", "--heads", "origin", "refs/heads/main")
+        if remote_main != f"{args.base}\trefs/heads/main":
+            raise ValueError("병합 준비 중 GitHub main이 검토한 --base에서 바뀌었습니다. 변경을 다시 리뷰하고 병합 동의를 받으세요.")
         self.gh("pr", "merge", str(args.number), "--merge", "--match-head-commit", args.head,
                 "--subject", subject, "--body-file", "-", stdin=f"{body.strip()}\n\n{event.trailer}\n")
 
@@ -233,6 +240,8 @@ class ReleaseCommand:
         parents = self.git("show", "-s", "--format=%P", commit).split()
         if len(parents) != 2 or parents[1] != args.head:
             raise ValueError("검토한 PR head와 main에 병합된 커밋의 부모가 다릅니다.")
+        if args.base and parents[0] != args.base:
+            raise ValueError("이미 병합된 PR의 첫 부모가 검토한 --base와 다릅니다. 실제 병합 변경을 다시 확인하세요.")
         if commit not in self.git("rev-list", "--first-parent", published, "--not", parents[0]).splitlines():
             raise ValueError("GitHub main의 첫 부모 이력에서 병합 커밋을 찾을 수 없습니다.")
         markers = TRAILER.findall(self.git("show", "-s", "--format=%B", commit))
@@ -389,6 +398,7 @@ def parser() -> argparse.ArgumentParser:
     merge = commands.add_parser("merge", allow_abbrev=False)
     merge.add_argument("number", type=int)
     merge.add_argument("--head", required=True, type=full_sha)
+    merge.add_argument("--base", type=full_sha, help="열린 PR에서 리뷰한 GitHub main의 전체 SHA")
     merge.add_argument("--message-file", type=Path)
     merge.add_argument("--approved-major", action="store_true")
     merge.add_argument("--host")
