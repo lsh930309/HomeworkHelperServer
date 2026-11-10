@@ -84,14 +84,53 @@ Type: files; Name: "{app}\{#MyAppExeName}"
 Type: files; Name: "{app}\homework_helper_service.exe"
 Type: filesandordirs; Name: "{app}\_internal"
 
-[UninstallDelete]
-; 앱이 생성한 데이터는 사용자 AppData에 있으므로 여기서는 삭제하지 않음
-; 필요 시 사용자에게 안내 메시지만 표시
-
 [Code]
+const
+  PrivilegeServiceParameters = 'SYSTEM\CurrentControlSet\Services\HomeworkHelperPrivilege\Parameters';
+  WindowsProfileList = 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\';
+  DataReadAttributes = $80;
+  DataDeleteAccess = $10000;
+  DataShareRead = 1;
+  DataOpenExisting = 3;
+  DataOpenPathEntry = $02200000; // BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+  DataFileDispositionInfo = 4;
+  DataFileAttributeTagInfo = 9;
+
+type
+  TLegacyCleanup = (lcDone, lcUnverified, lcFailed);
+  TDataPathHandles = array of THandle;
+  TDataPathAttributes = record
+    Attributes: LongWord;
+    ReparseTag: LongWord;
+  end;
+
 var
   PostInstallSucceeded: Boolean;
   ServiceWasRunning, ServiceStoppedForUpdate, InstallationStarted: Boolean;
+  ApprovedDataCleanupPath: String;
+
+function ConvertOwnerSid(const Value: String; var Sid: THandle): Boolean;
+  external 'ConvertStringSidToSidW@advapi32.dll stdcall uninstallonly';
+function CheckOwnerToken(Token, Sid: THandle; var IsMember: LongWord): Boolean;
+  external 'CheckTokenMembership@advapi32.dll stdcall uninstallonly';
+function FreeOwnerSid(Sid: THandle): THandle;
+  external 'LocalFree@kernel32.dll stdcall uninstallonly';
+function OpenDataPath(const Path: String; Access, Share: LongWord; Security: THandle;
+  Creation, Flags: LongWord; Template: THandle): THandle;
+  external 'CreateFileW@kernel32.dll stdcall';
+function ReadDataPathAttributes(Handle: THandle; InfoClass: LongWord;
+  var Info: TDataPathAttributes; Size: LongWord): Boolean;
+  external 'GetFileInformationByHandleEx@kernel32.dll stdcall';
+function ReadFinalDataPath(Handle: THandle; Path: String; Size, Flags: LongWord): LongWord;
+  external 'GetFinalPathNameByHandleW@kernel32.dll stdcall';
+function MarkDataPathForDeletion(Handle: THandle; InfoClass: LongWord;
+  var DeleteFile: Byte; Size: LongWord): Boolean;
+  external 'SetFileInformationByHandle@kernel32.dll stdcall';
+function CloseDataPath(Handle: THandle): Boolean;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+procedure CloseAppNormally(); forward;
+function RemoveLegacyStartupShortcutForOwner(const OwnerSid: String): TLegacyCleanup; forward;
 
 // ============================================================
 // 권한 서비스 설치/해제. 운영 호스트 적용은 사용자 설치 실행 시에만 수행합니다.
@@ -117,26 +156,12 @@ end;
 
 procedure RemoveLegacyStartupShortcut();
 var
-  ScriptPath, Script, Owner: String;
-  ResultCode: Integer;
+  OwnerSid: String;
 begin
-  Owner := ExpandConstant('{param:HostUser|lsh93}');
-  if (Pos('''', Owner) > 0) or (Pos('"', Owner) > 0) then
-    RaiseException('호스트 사용자 이름이 올바르지 않습니다.');
-  ScriptPath := ExpandConstant('{tmp}\hh_remove_legacy_startup.ps1');
-  Script := '$ErrorActionPreference = "Stop"' + #13#10 +
-    '$sid = ([Security.Principal.NTAccount]''' + Owner + ''').Translate([Security.Principal.SecurityIdentifier]).Value' + #13#10 +
-    '$profile = (Get-ItemProperty ("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\" + $sid)).ProfileImagePath' + #13#10 +
-    '$link = Join-Path ([Environment]::ExpandEnvironmentVariables($profile)) "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\GameCycleHelper.lnk"' + #13#10 +
-    'if (Test-Path -LiteralPath $link) { Remove-Item -LiteralPath $link -Force }' + #13#10 +
-    '$run = "Registry::HKEY_USERS\" + $sid + "\Software\Microsoft\Windows\CurrentVersion\Run"' + #13#10 +
-    'if (Test-Path $run) { Remove-ItemProperty -Path $run -Name GameCycleHelper -ErrorAction SilentlyContinue }';
-  SaveStringToFile(ScriptPath, Script, False);
-  if not Exec('powershell.exe', '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath + '"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-    RaiseException('이전 자동 실행 경로를 정리하지 못했습니다.');
-  if ResultCode <> 0 then
-    RaiseException('이전 자동 실행 경로 정리 실패. 종료 코드: ' + IntToStr(ResultCode));
+  if not RegQueryStringValue(HKLM64, PrivilegeServiceParameters, 'OwnerSid', OwnerSid) then
+    RaiseException('이전 자동 실행을 정리할 설치 소유 계정을 확인하지 못했습니다.');
+  if RemoveLegacyStartupShortcutForOwner(OwnerSid) = lcFailed then
+    RaiseException('확인된 이전 자동 실행 항목을 정리하지 못했습니다.');
 end;
 
 function TailscaleExePath(): String;
@@ -277,18 +302,374 @@ begin
     Result := 1;
 end;
 
+function IsInstalledOwner(const OwnerSid: String): Boolean;
+var
+  Sid: THandle;
+  IsMember: LongWord;
+begin
+  Result := False;
+  if not ConvertOwnerSid(OwnerSid, Sid) then Exit;
+  try
+    Result := CheckOwnerToken(0, Sid, IsMember) and (IsMember <> 0);
+  finally
+    FreeOwnerSid(Sid);
+  end;
+end;
+
+function InstalledOwnerProfile(const OwnerSid: String): String;
+var
+  Profile: String;
+  Index: Integer;
+begin
+  Result := '';
+  if (Copy(OwnerSid, 1, 4) <> 'S-1-') or (Length(OwnerSid) <= 4) then Exit;
+  for Index := 5 to Length(OwnerSid) do
+    if Pos(Copy(OwnerSid, Index, 1), '0123456789-') = 0 then Exit;
+  if not RegQueryStringValue(HKLM64, WindowsProfileList + OwnerSid, 'ProfileImagePath', Profile) then Exit;
+  if SameText(Copy(Profile, 1, 13), '%SystemDrive%') then
+    Profile := ExpandConstant('{sd}') + Copy(Profile, 14, Length(Profile));
+  if (Length(ExtractFileDrive(Profile)) <> 2) or (Copy(Profile, 3, 1) <> '\') or
+    (Pos('%', Profile) <> 0) or not SameText(Profile, ExpandFileName(Profile)) then Exit;
+  Result := Profile;
+end;
+
+function OwnerAppDataPath(const OwnerSid: String): String;
+var
+  Profile, Roaming: String;
+begin
+  Result := '';
+  Profile := InstalledOwnerProfile(OwnerSid);
+  if (Profile = '') or not IsInstalledOwner(OwnerSid) then Exit;
+  Roaming := AddBackslash(Profile) + 'AppData\Roaming';
+  if not SameText(Roaming, ExpandConstant('{userappdata}')) or not SameText(Roaming, GetEnv('APPDATA')) then Exit;
+  Result := AddBackslash(Roaming) + '{#MyAppName}';
+end;
+
+function ConfirmAppDataCleanup(CanDelete: Boolean): Boolean;
+var
+  Form: TSetupForm;
+  Description: TNewStaticText;
+  DeleteCheck: TNewCheckBox;
+  ContinueButton: TNewButton;
+begin
+#if Ver >= EncodeVer(6,6,0,0)
+  Form := CreateCustomForm(390, 145, True, True);
+#else
+  Form := CreateCustomForm();
+  Form.ClientWidth := ScaleX(390);
+  Form.ClientHeight := ScaleY(145);
+#endif
+  try
+    Form.Caption := 'HomeworkHelper 제거 옵션';
+    Form.Position := poScreenCenter;
+    Description := TNewStaticText.Create(Form);
+    Description.Parent := Form;
+    Description.AutoSize := False;
+    Description.WordWrap := True;
+    Description.SetBounds(ScaleX(16), ScaleY(16), ScaleX(358), ScaleY(52));
+    if CanDelete then
+      Description.Caption := '선택하면 앱이 저장한 게임 기록, 설정, 백업이 삭제되며 복구할 수 없습니다.'
+    else
+      Description.Caption := '설치 소유 계정과 로컬 데이터 경로를 확인할 수 없어 앱 데이터를 보존합니다.';
+
+    DeleteCheck := TNewCheckBox.Create(Form);
+    DeleteCheck.Parent := Form;
+    DeleteCheck.SetBounds(ScaleX(16), ScaleY(72), ScaleX(358), ScaleY(20));
+    DeleteCheck.Caption := '앱 데이터와 백업도 삭제';
+    DeleteCheck.Checked := False;
+    DeleteCheck.Enabled := CanDelete;
+
+    ContinueButton := TNewButton.Create(Form);
+    ContinueButton.Parent := Form;
+    ContinueButton.SetBounds(ScaleX(264), ScaleY(108), ScaleX(110), ScaleY(25));
+    ContinueButton.Caption := '제거 계속';
+    ContinueButton.Default := True;
+    ContinueButton.ModalResult := mrOK;
+    Result := False;
+    if Form.ShowModal = mrOK then Result := DeleteCheck.Checked and CanDelete;
+  finally
+    Form.Free();
+  end;
+end;
+
+function OpenPinnedDataPath(const Path: String; Access: LongWord;
+  IsDirectory: Boolean; var Missing: Boolean): THandle;
+var
+  Handle: THandle;
+  Info: TDataPathAttributes;
+  FinalPath: String;
+  Count: LongWord;
+begin
+  Result := THandle(-1);
+  Missing := False;
+  // Open the entry itself and refuse any redirect in the final resolved path.
+  Handle := OpenDataPath(Path, Access or DataReadAttributes, DataShareRead, 0,
+    DataOpenExisting, DataOpenPathEntry, 0);
+  if Handle = THandle(-1) then
+  begin
+    Missing := DLLGetLastError() = 2; // ERROR_FILE_NOT_FOUND, not a missing parent or access denial.
+    Exit;
+  end;
+  try
+    if not ReadDataPathAttributes(Handle, DataFileAttributeTagInfo, Info, 8) or
+      ((Info.Attributes and FILE_ATTRIBUTE_REPARSE_POINT) <> 0) or
+      (((Info.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) <> IsDirectory) then Exit;
+    FinalPath := StringOfChar(#0, Length(Path) + 5);
+    Count := ReadFinalDataPath(Handle, FinalPath, Length(FinalPath), 0);
+    if (Count = 0) or (Count >= Length(FinalPath)) then Exit;
+    SetLength(FinalPath, Count);
+    if SameText(FinalPath, '\\?\' + Path) then Result := Handle;
+  finally
+    if Result = THandle(-1) then CloseDataPath(Handle);
+  end;
+end;
+
+function PinDataAncestors(const Path: String; var Handles: TDataPathHandles; var Missing: Boolean): Boolean;
+var
+  DriveRoot, Parent: String;
+  Handle: THandle;
+  Index: Integer;
+begin
+  Result := False;
+  Missing := False;
+  DriveRoot := AddBackslash(ExtractFileDrive(Path));
+  if not SameText(Path, DriveRoot) then
+  begin
+    Parent := ExtractFileDir(Path);
+    if (Parent = '') or SameText(Parent, Path) then Exit;
+    if not PinDataAncestors(Parent, Handles, Missing) then Exit;
+  end;
+  Handle := OpenPinnedDataPath(Path, 0, True, Missing);
+  if Handle = THandle(-1) then Exit;
+  Index := GetArrayLength(Handles);
+  SetArrayLength(Handles, Index + 1);
+  Handles[Index] := Handle;
+  Result := True;
+end;
+
+function GameBarSettingRestored(const DataPath: String): Boolean;
+var
+  IniPath: String;
+  IniContents: AnsiString;
+  DirectoryHandle, IniHandle: THandle;
+  Missing: Boolean;
+begin
+  Result := False;
+  DirectoryHandle := OpenPinnedDataPath(DataPath, 0, True, Missing);
+  if DirectoryHandle = THandle(-1) then
+  begin
+    Result := Missing;
+    Exit;
+  end;
+  try
+    IniPath := AddBackslash(DataPath) + 'display_settings.ini';
+    IniHandle := OpenPinnedDataPath(IniPath, 0, False, Missing);
+    if IniHandle = THandle(-1) then
+    begin
+      Result := Missing;
+      Exit;
+    end;
+    try
+      if not LoadStringFromFile(IniPath, IniContents) then Exit;
+      Result := Pos('gamebar_original_value', IniContents) = 0;
+    finally
+      CloseDataPath(IniHandle);
+    end;
+  finally
+    CloseDataPath(DirectoryHandle);
+  end;
+end;
+
+function DeleteAppDataTree(const Path: String; IsDirectory, DeleteData: Boolean;
+  var Changed: Boolean): Boolean;
+var
+  Handle: THandle;
+  FindRec: TFindRec;
+  Missing: Boolean;
+  DeleteEntry: Byte;
+begin
+  Result := False;
+  Handle := OpenPinnedDataPath(Path, DataDeleteAccess, IsDirectory, Missing);
+  if Handle = THandle(-1) then
+  begin
+    Result := Missing;
+    Exit;
+  end;
+  try
+    if IsDirectory then
+    begin
+      if not FindFirst(AddBackslash(Path) + '*', FindRec) then Exit;
+      try
+        repeat
+          if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+            if not DeleteAppDataTree(AddBackslash(Path) + FindRec.Name,
+              (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0, DeleteData, Changed) then Exit;
+        until not FindNext(FindRec);
+      finally
+        FindClose(FindRec);
+      end;
+    end;
+    if DeleteData then
+    begin
+      // Mark the exact verified object, never reopen a mutable path to delete it.
+      DeleteEntry := 1;
+      if not MarkDataPathForDeletion(Handle, DataFileDispositionInfo, DeleteEntry, 1) then Exit;
+      Changed := True;
+    end;
+    Result := True;
+  finally
+    CloseDataPath(Handle);
+  end;
+end;
+
+function DeleteAppData(const DataPath: String; var Changed: Boolean): Boolean;
+var
+  Handles: TDataPathHandles;
+  Index: Integer;
+  Remaining: THandle;
+  Missing: Boolean;
+begin
+  Result := False;
+  Changed := False;
+  if (ExtractFileName(DataPath) <> '{#MyAppName}') or
+    (Length(ExtractFileDrive(DataPath)) <> 2) or not SameText(DataPath, ExpandFileName(DataPath)) then Exit;
+  SetArrayLength(Handles, 0);
+  try
+    if not PinDataAncestors(ExtractFileDir(DataPath), Handles, Missing) then Exit;
+    // Read-only preflight refuses existing links and locks before the first deletion.
+    if not DeleteAppDataTree(DataPath, True, False, Changed) then Exit;
+    if not GameBarSettingRestored(DataPath) then Exit;
+    if not DeleteAppDataTree(DataPath, True, True, Changed) then Exit;
+    Remaining := OpenPinnedDataPath(DataPath, 0, True, Missing);
+    if Remaining <> THandle(-1) then CloseDataPath(Remaining);
+    Result := Missing;
+  finally
+    for Index := GetArrayLength(Handles) - 1 downto 0 do
+      CloseDataPath(Handles[Index]);
+  end;
+end;
+
+function RemoveLegacyStartupShortcutForOwner(const OwnerSid: String): TLegacyCleanup;
+var
+  Profile, Startup, RunKey: String;
+  Handles: TDataPathHandles;
+  Missing, Changed: Boolean;
+  Index: Integer;
+begin
+  Profile := InstalledOwnerProfile(OwnerSid);
+  if Profile = '' then
+  begin
+    Log('이전 자동 실행 정리: 설치 소유 프로필을 확인할 수 없습니다.');
+    Result := lcUnverified;
+    Exit;
+  end;
+  Result := lcDone;
+  Startup := AddBackslash(Profile) + 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup';
+  SetArrayLength(Handles, 0);
+  Changed := False;
+  try
+    if PinDataAncestors(Startup, Handles, Missing) then
+    begin
+      if not DeleteAppDataTree(AddBackslash(Startup) + 'GameCycleHelper.lnk', False, True, Changed) then
+      begin
+        Log('이전 자동 실행 정리: 확인된 시작 폴더에서 바로가기를 삭제하지 못했습니다.');
+        Result := lcFailed;
+      end;
+    end
+    else if not Missing then
+    begin
+      Log('이전 자동 실행 정리: 시작 폴더 경로를 확인할 수 없습니다.');
+      Result := lcUnverified;
+    end;
+  finally
+    for Index := GetArrayLength(Handles) - 1 downto 0 do CloseDataPath(Handles[Index]);
+  end;
+  RunKey := OwnerSid + '\Software\Microsoft\Windows\CurrentVersion\Run';
+  if not RegKeyExists(HKU, OwnerSid) then
+  begin
+    Log('이전 자동 실행 정리: 설치 소유 사용자 레지스트리 하이브가 로드되지 않아 Run 값을 확인하지 못했습니다.');
+    if Result = lcDone then Result := lcUnverified;
+  end
+  else if RegValueExists(HKU, RunKey, 'GameCycleHelper') and
+    not RegDeleteValue(HKU, RunKey, 'GameCycleHelper') then
+  begin
+    Log('이전 자동 실행 정리: 확인된 Run 값을 삭제하지 못했습니다.');
+    Result := lcFailed;
+  end;
+end;
+
+function AppProcessStateForDataCleanup(): Integer;
+var
+  ExpectedExe: String;
+begin
+  // 0: stopped, 1: only the installed owner's app/API, 2: any other or uncertain instance.
+  ExpectedExe := ExpandConstant('{app}\{#MyAppExeName}');
+  StringChange(ExpectedExe, '''', '''''');
+  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -Command "try { $expected = ''' + ExpectedExe + '''; ' +
+    '$owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; ' +
+    '$session = [Diagnostics.Process]::GetCurrentProcess().SessionId; ' +
+    '$apps = @(Get-CimInstance Win32_Process -Filter (''Name={0}homework_helper.exe{0}'' -f [char]39) -ErrorAction Stop); ' +
+    'if ($apps.Count -eq 0) { exit 0 }; foreach ($app in $apps) { ' +
+    'if ($app.ExecutablePath -ne $expected -or $app.SessionId -ne $session) { exit 2 }; ' +
+    '$identity = Invoke-CimMethod -InputObject $app -MethodName GetOwnerSid -ErrorAction Stop; ' +
+    'if ($identity.ReturnValue -ne 0 -or $identity.Sid -ne $owner) { exit 2 } }; ' +
+    'exit 1 } catch { exit 2 }"',
+    '', SW_HIDE, ewWaitUntilTerminated, Result) then Result := 2;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   UninstallServiceResult: Integer;
+  OwnerSid, DataPath: String;
+  Changed: Boolean;
+  LegacyResult: TLegacyCleanup;
 begin
   if CurUninstallStep = usUninstall then
   begin
+    // Service removal clears the persisted SID. Capture it before any cleanup.
+    OwnerSid := '';
+    RegQueryStringValue(HKLM64, PrivilegeServiceParameters, 'OwnerSid', OwnerSid);
+    DataPath := '';
+    if not UninstallSilent then
+    begin
+      DataPath := OwnerAppDataPath(OwnerSid);
+      if not ConfirmAppDataCleanup(DataPath <> '') then DataPath := '';
+      if DataPath <> '' then
+      begin
+        if AppProcessStateForDataCleanup() = 1 then CloseAppNormally();
+        if AppProcessStateForDataCleanup() <> 0 then
+        begin
+          MsgBox('앱과 API의 정상 종료를 확인하지 못해 앱 데이터와 백업을 보존합니다.', mbError, MB_OK);
+          DataPath := '';
+        end;
+      end;
+    end;
+
     if not Exec(ExpandConstant('{app}\homework_helper_service.exe'), 'uninstall',
       ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, UninstallServiceResult) then
       RaiseException('권한 서비스를 제거하지 못했습니다.');
     if UninstallServiceResult <> 0 then
       RaiseException('권한 서비스 제거 실패. 종료 코드: ' + IntToStr(UninstallServiceResult));
     DeleteScheduledTasks();
+    LegacyResult := RemoveLegacyStartupShortcutForOwner(OwnerSid);
+    if (DataPath <> '') and (LegacyResult <> lcDone) then
+    begin
+      MsgBox('이전 자동 실행 항목의 정리를 확인하지 못해 앱 데이터와 백업을 보존합니다.', mbError, MB_OK);
+      DataPath := '';
+    end;
+    ApprovedDataCleanupPath := DataPath;
+  end
+  else if (CurUninstallStep = usPostUninstall) and (ApprovedDataCleanupPath <> '') then
+  begin
+    Changed := False;
+    if (AppProcessStateForDataCleanup() = 0) and DeleteAppData(ApprovedDataCleanupPath, Changed) then
+      Log('앱 데이터와 백업 삭제 완료')
+    else if Changed then
+      MsgBox('앱 데이터와 백업 일부를 삭제했지만 정리를 완료하지 못했습니다. 남은 파일을 확인해 주세요.', mbError, MB_OK)
+    else
+      MsgBox('앱 종료, 파일 잠금, 경로 또는 Game Bar 설정 복원을 확인하지 못해 앱 데이터와 백업을 보존했습니다.',
+        mbError, MB_OK);
   end;
 end;
 
