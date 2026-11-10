@@ -313,7 +313,11 @@ macOS 패키지는 해당 Mac의 build.py로 준비한다. 설치 관리자 인�
 python tools/release_pr.py bootstrap --commit '<main 전체 SHA>' --dry-run
 ```
 
-그 이후 맥 `main`에서 검토한 PR의 전체 head SHA와
+그 이후 PR의 정확한 head와 base 사이의 변경을 리뷰한다. 모든 지적의 해결을 확인한 뒤, 같은 PR을 병합해도
+된다는 사용자의 별도 명시 동의를 받는다. 이전 요청이나 관행을 이번 병합 동의로 간주하지 않는다. head 또는
+base가 바뀌면 변경을 다시 확인하고 동의를 받는다.
+
+맥 `main`에서 검토한 PR의 전체 head SHA와
 [규칙에 맞는 병합 메시지](../development/commit-message-policy.md)를 명시한다. 호스트 PR에는 기존 SSH 대상과 인증 옵션을 추가한다.
 
 ```bash
@@ -321,7 +325,17 @@ python tools/release_pr.py merge 123 --head '<검토한 PR의 전체 SHA>' \
   --message-file '<병합 메시지 파일>' --host '<Windows 호스트>' --user '<SSH 사용자>'
 ```
 
-`merge --dry-run`은 GitHub와 소스 입력을 조회하고 제품과 버전업 유형을 표시한다.
+`merge --dry-run`은 GitHub와 소스 입력을 조회하고 원장을 변경하지 않은 채 이전 `main` 이력 처리 가능 여부,
+변경 제품과 버전업 유형을 확인한다. 실제 병합 전에는 맥의 `gh` 인증과 대상 저장소 쓰기 권한을 조회한다.
+호스트 PR은 기존 SSH로 Windows에도 접속해 고정 저장소의 `origin`과 Windows `gh`의 게시 권한을 확인한다.
+사전 점검에 실패하면 PR을 병합하기 전에 중단한다. Windows의 읽기 전용 점검은 아래 명령으로 따로 실행할 수 있다.
+이 점검은 인증 정보와 계정 식별자를 제외한 결과만 출력하고 별도 로그 파일을 만들지 않는다.
+
+```bash
+python tools/host_operations.py release-preflight --host '<Windows 호스트>' \
+  --release-repo '<owner/repository>'
+```
+
 사용자에게 메이저 승인을 받은 PR만 `--approved-major`를 지정한다. GitHub 웹의 병합과 일반 `gh pr merge`는 이 흐름의 시작점이 아니다.
 병합 직전에는 PR이 변경한 제품과 커밋을 확인하고, 병합 뒤에는 GitHub `main`에 반영된 실제 변경을 확인한다.
 제품 패키지 변경이 있는 마이너·메이저만 제품 태그를 등록하고 PR 제목·본문을 바탕으로 릴리즈를 작성한다.

@@ -29,7 +29,7 @@ OBS 녹화·방송·가상 카메라와 활성 리플레이 버퍼, 프로세스
 
 사용자가 이전 버전 복귀를 요청한 경우 보관 패키지 선택은
 [공용 운영 도구의 archived-release 절차](operations-guide.md#소스-준비빌드설치)를 따른다.
-이미 빌드된 원본을 설치하며 이후의 정상 백업·종료·Setup·검증 절차는 동일하다.
+이미 빌드된 원본 Setup과 Portable 쌍을 함께 선택한다. 이후의 정상 백업·종료·Setup·검증 절차는 동일하다.
 
 공용 backup 단계는 기존 `src.data.database.backup_database` writer를 사용하며 읽은 DB 경로가
 지정 사용자의 실제 `AppData/Roaming/HomeworkHelper/homework_helper_data/app_data.db`인지 확인한다.

@@ -12,6 +12,7 @@ import platform
 import argparse
 import hashlib
 import importlib.metadata
+import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -49,6 +50,8 @@ VERSION_ID = r"(?:v[0-9]+\.[0-9]+\.[0-9]+|dev\.[1-9][0-9]*)"
 VERSIONED_PACKAGE_NAME = re.compile(
     rf"(?:HomeworkHelper_{VERSION_ID}_(?:Setup\.exe|Portable\.zip)|HomeworkHelperRemote_{VERSION_ID}\.pkg)"
 )
+WINDOWS_ARCHIVE_ID = rf"(?:{VERSION_ID}|v[0-9]+\.[0-9]+\.[0-9]+_b[1-9][0-9]*_g[0-9a-f]{{4,40}})"
+WINDOWS_PACKAGE_PAIR = re.compile(rf"HomeworkHelper_(?P<version>{WINDOWS_ARCHIVE_ID})_(?:Setup\.exe|Portable\.zip)")
 WINDOWS_PYTHON_VERSION = (3, 14)
 WINDOWS_REQUIRED_DISTRIBUTIONS = (
     "PySide6",
@@ -325,6 +328,44 @@ def iter_release_artifacts_for_archive() -> list[Path]:
     ]
 
 
+def _complete_windows_pair(paths: tuple[Path, Path]) -> bool:
+    return all(path.is_file() and path.stat().st_size > 0 for path in paths)
+
+
+def _archive_windows_pair(console, release_id: str) -> int:
+    """Publish a complete immutable pair before removing any active files."""
+    info = {"string": release_id}
+    active = windows_package_paths(info)
+    archive = ARCHIVES_DIR / "windows-host"
+    pair_dir = archive / "by-version" / release_id
+    archived = 0
+    if pair_dir.exists():
+        if not _complete_windows_pair(windows_package_paths(info, pair_dir)):
+            raise BuildConfigError(f"보관된 Windows 패키지 쌍이 불완전합니다: {release_id}")
+    else:
+        # An unambiguous package pair from the previous layout is already a backup.
+        existing = [list(archive.rglob(path.name)) for path in active]
+        has_previous = all(len(paths) == 1 for paths in existing) and _complete_windows_pair(
+            (existing[0][0], existing[1][0])
+        )
+        if not has_previous and _complete_windows_pair(active):
+            pair_dir.parent.mkdir(parents=True, exist_ok=True)
+            # Staging lives outside the Windows archive reader's namespace.
+            with tempfile.TemporaryDirectory(prefix=".pair-stage-", dir=ARCHIVES_DIR) as temporary:
+                staged = Path(temporary)
+                for file in active:
+                    shutil.copy2(file, staged / file.name)
+                staged.rename(pair_dir)
+            archived = 2
+            console.log(f"  ✓ {release_id} Setup·Portable 쌍 보관")
+        elif not has_previous:
+            console.log(f"  ⚠ 미완성 Windows 산출물 정리: {release_id}", "warning")
+
+    for file in active:
+        file.unlink(missing_ok=True)
+    return archived
+
+
 def prune_archive_files(console, *, keep: int = 10, days: int = 90):
     """Keep archives bounded by target/type count and age."""
     if keep < 1:
@@ -334,10 +375,27 @@ def prune_archive_files(console, *, keep: int = 10, days: int = 90):
 
     cutoff = datetime.now() - timedelta(days=max(1, days))
     deleted = 0
+    windows_pairs = ARCHIVES_DIR / "windows-host" / "by-version"
+    pairs = []
+    for folder in windows_pairs.glob("*"):
+        if folder.is_dir() and re.fullmatch(WINDOWS_ARCHIVE_ID, folder.name):
+            paths = windows_package_paths({"string": folder.name}, folder)
+            if _complete_windows_pair(paths):
+                pairs.append((max(path.stat().st_mtime for path in paths), folder))
+    for index, (mtime, folder) in enumerate(sorted(pairs, reverse=True)):
+        if index >= keep or datetime.fromtimestamp(mtime) < cutoff:
+            try:
+                # Remove the pair from the restore namespace in one operation.
+                with tempfile.TemporaryDirectory(prefix=".pair-prune-", dir=ARCHIVES_DIR) as temporary:
+                    folder.rename(Path(temporary) / folder.name)
+                deleted += 2
+            except OSError as error:
+                console.log(f"  ⚠ Windows archive 정리 실패 ({folder.name}): {error}", 'warning')
+
     bucket_dirs = [
         path
         for path in ARCHIVES_DIR.glob("*/*")
-        if path.is_dir()
+        if path.is_dir() and path != windows_pairs
     ]
     for bucket_dir in bucket_dirs:
         archived_files = sorted(
@@ -383,7 +441,12 @@ def archive_old_files(console, *, archive_keep: int = 10, archive_days: int = 90
         return
 
     archived_count = 0
+    windows_versions = set()
     for file_path in files_to_archive:
+        match = WINDOWS_PACKAGE_PAIR.fullmatch(file_path.name)
+        if match:
+            windows_versions.add(match["version"])
+            continue
         bucket = artifact_archive_bucket(file_path)
         if bucket is None:
             continue
@@ -399,6 +462,9 @@ def archive_old_files(console, *, archive_keep: int = 10, archive_days: int = 90
             shutil.move(str(file_path), str(dest))
         archived_count += 1
         console.log(f"  ✓ {file_path.name} → archives/{target}/{artifact_type}/{slot}/")
+
+    for release_id in sorted(windows_versions):
+        archived_count += _archive_windows_pair(console, release_id)
 
     console.log(f"\n총 {archived_count}개 파일 아카이빙 완료", 'success')
     if prune_archives:

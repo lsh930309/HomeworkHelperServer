@@ -79,18 +79,20 @@ python build.py
 
 ## Archive 관리
 
-빌드 시작 시 `release/` 루트의 기존 배포 산출물을 보관한다. 새 버전 형식은 같은 번호로
-다시 빌드해도 보관소에 동명의 복사본이 생기지 않도록 `by-version`에 둔다. 이전 버전 형식은
-날짜별 보관 경로를 사용한다.
+빌드 시작 시 `release/` 루트의 기존 배포 산출물을 보관한다. 새 Windows 버전의 Setup EXE와
+Portable ZIP은 두 파일이 모두 준비됐을 때 한 디렉터리로 보관한다. 같은 버전을 다시 빌드해도
+이미 완성된 보관 쌍은 유지하며, 한 파일만 남은 중간 산출물로 교체하지 않는다.
+macOS 패키지는 종류별 `by-version`에 보관한다. 기존 Windows의 종류별·날짜별 경로도 복귀에 사용할 수 있다.
 
 ```text
+release/archives/windows-host/by-version/{release_id}/{Setup,Portable}
 release/archives/{target}/{artifact_type}/by-version/{artifact}
 release/archives/{target}/{artifact_type}/{YY-MM-DD}/{artifact}
 ```
 
 기본 pruning 정책:
 
-- target/type별 최신 10개 보존
+- Windows 보관 쌍 또는 그 외 target/type별 최신 10개 보존
 - 90일 초과 산출물 삭제
 
 옵션:

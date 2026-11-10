@@ -23,6 +23,8 @@ class SimulatedRelease(release_pr.ReleaseCommand):
         self.draft = None
         self.calls = []
         self.complete_upload = False
+        self.viewer_permission = "WRITE"
+        self.host_preflight = {"ok": True}
         super().__init__(checkout)
 
     def run(self, *args, stdin=None, timeout=120):
@@ -52,6 +54,8 @@ class SimulatedRelease(release_pr.ReleaseCommand):
             return subprocess.run(args, cwd=self.repo, capture_output=True, text=True, check=False)
         if args[:3] == ("gh", "pr", "view"):
             return response(json.dumps(self.pr_data))
+        if args[:3] == ("gh", "repo", "view"):
+            return response(json.dumps({"viewerPermission": self.viewer_permission}))
         if args[:3] == ("gh", "pr", "merge"):
             assert args[args.index("--match-head-commit") + 1] == self.pr_data["headRefOid"]
             git(self.repo, "merge", "--no-ff", "-m", args[args.index("--subject") + 1],
@@ -74,6 +78,9 @@ class SimulatedRelease(release_pr.ReleaseCommand):
             assert "--draft=false" in args
             self.draft["isDraft"] = False
             return response()
+        if args[1:3] == ("tools/host_operations.py", "release-preflight"):
+            assert args[args.index("--release-repo") + 1] == "fixture/repository"
+            return response(json.dumps(self.host_preflight), code=0 if self.host_preflight["ok"] else 1)
         if len(args) > 2 and args[1:3] == ("tools/host_operations.py", "release-build"):
             build_commit = args[args.index("--commit") + 1]
             tag = args[args.index("--release-tag") + 1]
@@ -133,6 +140,8 @@ def test_incomplete_windows_upload_stays_draft_and_retry_keeps_the_merge_version
 def test_stale_pr_head_and_dry_run_cannot_merge_or_publish(repo):
     command, args = prepare_pr(repo)
     args.dry_run = True
+    command.viewer_permission = "READ"
+    command.host_preflight = {"ok": False, "reason": "transport"}
     command.run_pr(args)
     args.head = "a" * 40
     with pytest.raises(ValueError, match="PR head"):
@@ -141,6 +150,38 @@ def test_stale_pr_head_and_dry_run_cannot_merge_or_publish(repo):
     assert set(command.tags) == {"H/v1.6.0", "C/v1.0.0"}
     assert command.draft is None
     assert not command.ledger.path.exists()
+    assert not command.ledger.path.with_suffix(".lock").exists()
+    assert not any(call[:3] == ("gh", "repo", "view") or "release-preflight" in call for call in command.calls)
+
+
+@pytest.mark.parametrize("failure", ["mac_github", "windows_preflight", "previous_product_merge"])
+def test_preflight_failures_leave_pr_and_release_untouched(repo, failure):
+    command, args = prepare_pr(repo)
+    if failure == "mac_github":
+        command.viewer_permission = "READ"
+        message = "GitHub CLI"
+    elif failure == "windows_preflight":
+        command.host_preflight = {"ok": False, "reason": "transport"}
+        from tools.host_operations import RELEASE_PREFLIGHT_FAILURES
+
+        message = RELEASE_PREFLIGHT_FAILURES["transport"]
+    else:
+        git(repo, "switch", "-c", "previous")
+        commit(repo, "src/previous.py", "릴리즈가 없는 제품 변경")
+        git(repo, "switch", "main")
+        git(repo, "merge", "--no-ff", "-m", "전용 명령을 거치지 않은 제품 병합", "previous")
+        git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        message = "PR 병합 릴리즈를 먼저 재개"
+
+    with pytest.raises((ValueError, RuntimeError)) as raised:
+        command.run_pr(args)
+    assert message in str(raised.value)
+    assert command.pr_data["state"] == "OPEN"
+    assert set(command.tags) == {"H/v1.6.0", "C/v1.0.0"}
+    assert command.draft is None and not command.ledger.path.exists()
+    assert not any(call[:3] in {("gh", "pr", "merge"), ("gh", "release", "create")} for call in command.calls)
+    assert not any(call[:2] == ("git", "push") for call in command.calls)
+    assert any("release-preflight" in call for call in command.calls) == (failure == "windows_preflight")
 
 
 def test_documentation_pr_merges_without_version_or_release(repo):
@@ -167,6 +208,7 @@ def test_bootstrap_pushes_two_tags_atomically_from_exact_main(repo):
 
 
 def test_macos_retry_reuses_matching_asset_and_never_overwrites_different_file(repo, monkeypatch):
+    monkeypatch.delattr(hashlib, "file_digest", raising=False)
     head = git(repo, "rev-parse", "HEAD")
     command = SimulatedRelease(repo, head)
     version = release_pr.BuildVersion("client", "1.1.0", head, "1.1.0")

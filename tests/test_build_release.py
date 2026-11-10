@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -377,16 +378,8 @@ def test_release_archive_moves_root_artifacts_into_target_type_buckets(tmp_path,
 
     archived = sorted(path.relative_to(archives_dir).as_posix() for path in archives_dir.rglob("*") if path.is_file())
     assert len(archived) == 3
-    assert any(
-        path.startswith("windows-host/installer/")
-        and path.endswith("/HomeworkHelper_v1.2.0_b1_gabc1234_Setup.exe")
-        for path in archived
-    )
-    assert any(
-        path.startswith("windows-host/portable/")
-        and path.endswith("/HomeworkHelper_v1.2.0_b1_gabc1234_Portable.zip")
-        for path in archived
-    )
+    assert "windows-host/by-version/v1.2.0_b1_gabc1234/HomeworkHelper_v1.2.0_b1_gabc1234_Setup.exe" in archived
+    assert "windows-host/by-version/v1.2.0_b1_gabc1234/HomeworkHelper_v1.2.0_b1_gabc1234_Portable.zip" in archived
     assert any(
         path.startswith("macos-client/pkg/")
         and path.endswith("/HomeworkHelperRemote_v0.2.0_b1_gabc1234.pkg")
@@ -395,7 +388,7 @@ def test_release_archive_moves_root_artifacts_into_target_type_buckets(tmp_path,
     assert (release_dir / "notes.txt").exists()
 
 
-def test_rebuilding_same_version_on_another_day_keeps_one_archive_per_package(tmp_path, monkeypatch):
+def test_rebuilding_same_version_keeps_first_complete_windows_pair_and_latest_macos_pkg(tmp_path, monkeypatch):
     class Clock(datetime):
         day = 1
 
@@ -409,17 +402,90 @@ def test_rebuilding_same_version_on_another_day_keeps_one_archive_per_package(tm
     archive = release / "archives"
     monkeypatch.setattr(build, "RELEASE_DIR", release)
     monkeypatch.setattr(build, "ARCHIVES_DIR", archive)
-    filenames = ["HomeworkHelper_dev.12_Setup.exe", "HomeworkHelper_dev.12_Portable.zip", "HomeworkHelperRemote_v1.0.0.pkg"]
-    for day in (1, 2):
+    names = ["HomeworkHelper_dev.12_Setup.exe", "HomeworkHelper_dev.12_Portable.zip", "HomeworkHelperRemote_v1.0.0.pkg"]
+    for day, filenames in ((1, names), (2, [names[0], names[2]]), (3, names)):
         Clock.day = day
         for filename in filenames:
             (release / filename).write_text(str(day), encoding="utf-8")
         build.archive_old_files(_DummyGui(), prune_archives=False)
 
-    for filename in filenames:
+    for filename in names:
         found = list(archive.rglob(filename))
         assert len(found) == 1
-        assert found[0].read_text(encoding="utf-8") == "2"
+        assert found[0].read_text(encoding="utf-8") == ("3" if filename.endswith(".pkg") else "1")
+        assert not (release / filename).exists()
+
+
+@pytest.mark.parametrize("failure", ["copy", "cleanup"])
+def test_windows_archive_failure_preserves_a_complete_recoverable_pair(tmp_path, monkeypatch, failure):
+    release = tmp_path / "release"
+    release.mkdir()
+    archive = release / "archives"
+    monkeypatch.setattr(build, "RELEASE_DIR", release)
+    monkeypatch.setattr(build, "ARCHIVES_DIR", archive)
+    names = ("HomeworkHelper_dev.7_Setup.exe", "HomeworkHelper_dev.7_Portable.zip")
+    active = [release / name for name in names]
+    for path in active:
+        path.write_bytes(path.name.encode())
+    if failure == "copy":
+        copy = build.shutil.copy2
+
+        def fail_second(source, target, *args, **kwargs):
+            if source == active[1]:
+                raise OSError("격리된 두 번째 복사 실패")
+            return copy(source, target, *args, **kwargs)
+
+        monkeypatch.setattr(build.shutil, "copy2", fail_second)
+    else:
+        unlink = Path.unlink
+
+        def fail_cleanup(path, *args, **kwargs):
+            if path == active[1]:
+                raise OSError("격리된 활성 ZIP 정리 실패")
+            return unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_cleanup)
+
+    with pytest.raises(OSError, match="격리된"):
+        build.archive_old_files(_DummyGui(), prune_archives=False)
+    pair = archive / "windows-host/by-version/dev.7"
+    if failure == "copy":
+        assert not pair.exists()
+        assert [path.read_bytes() for path in active] == [name.encode() for name in names]
+    else:
+        assert [(pair / name).read_bytes() for name in names] == [name.encode() for name in names]
+        assert active[1].exists()
+    assert not list(archive.glob(".pair-stage-*"))
+
+
+def test_windows_pruning_and_legacy_archive_keep_complete_pairs(tmp_path, monkeypatch):
+    release = tmp_path / "release"
+    release.mkdir()
+    archive = release / "archives"
+    monkeypatch.setattr(build, "RELEASE_DIR", release)
+    monkeypatch.setattr(build, "ARCHIVES_DIR", archive)
+    legacy = "v1.0.0_b1_gabc1234"
+    for suffix, bucket in (("Setup.exe", "installer"), ("Portable.zip", "portable")):
+        name = f"HomeworkHelper_{legacy}_{suffix}"
+        path = archive / "windows-host" / bucket / "legacy-date" / name
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"legacy original")
+        (release / name).write_bytes(b"unpublished rebuild")
+    build.archive_old_files(_DummyGui(), prune_archives=False)
+    assert not (archive / "windows-host/by-version" / legacy).exists()
+    assert sorted(path.read_bytes() for path in archive.rglob(f"*{legacy}*")) == [b"legacy original"] * 2
+
+    now = datetime.now().timestamp()
+    for index, release_id in enumerate(("dev.10", "dev.11")):
+        for suffix in ("Setup.exe", "Portable.zip"):
+            active = release / f"HomeworkHelper_{release_id}_{suffix}"
+            active.write_text("완전한 쌍", encoding="utf-8")
+            os.utime(active, (now - 10 + index, now - 10 + index))
+        build.archive_old_files(_DummyGui(), prune_archives=False)
+    build.prune_archive_files(_DummyGui(), keep=1)
+    pair_root = archive / "windows-host/by-version"
+    assert sorted(folder.name for folder in pair_root.iterdir()) == ["dev.11"]
+    assert {path.suffix for path in (pair_root / "dev.11").iterdir()} == {".exe", ".zip"}
 
 
 def test_sha256_file_reports_file_digest(tmp_path):

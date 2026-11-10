@@ -106,6 +106,32 @@ def test_release_build_forwards_only_the_issued_host_release(event, monkeypatch,
         assert "-ReleaseRepo 'fixture/repo'" in calls[0]
 
 
+@pytest.mark.parametrize(("status", "stdout", "expected"), [
+    (0, '{"ok":true,"untrusted":"fixture secret"}', {"ok": True}),
+    (0, '{"ok":false,"reason":"cli-missing","untrusted":"fixture secret"}', {"ok": False, "reason": "cli-missing"}),
+    (1, 'fixture secret', {"ok": False, "reason": "transport"}),
+])
+def test_release_preflight_reports_only_known_result_without_build_or_state_write(status, stdout, expected, monkeypatch, tmp_path, capsys):
+    calls = []
+
+    def remote(config, script, *, timeout):
+        calls.append(script)
+        return subprocess.CompletedProcess([], status, stdout, "fixture secret")
+
+    monkeypatch.setattr(ops, "run_remote_powershell", remote)
+    monkeypatch.setattr(ops, "published_commit", lambda *_: pytest.fail("preflight must not select a source"))
+    monkeypatch.setattr(ops, "VersionLedger", lambda *_: pytest.fail("preflight must not access the ledger"))
+    code = ops.main(["release-preflight", "--host", "test.invalid", "--release-repo", "fixture/repo",
+                     "--report-root", str(tmp_path)])
+    assert code == (0 if expected["ok"] else 1)
+    output = capsys.readouterr()
+    assert json.loads(output.out) == expected
+    assert "fixture secret" not in output.out + output.err
+    assert not list(tmp_path.iterdir())
+    assert len(calls) == 1
+    assert "-Command 'release-preflight'" in calls[0] and "-ReleaseRepo 'fixture/repo'" in calls[0]
+
+
 def test_inspect_never_requests_publication_or_host_changes(monkeypatch, tmp_path, capsys):
     captured = {}
     def remote(config, script, *, timeout):
@@ -438,6 +464,8 @@ function gh {
     ("none", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
     ("archive-missing", []), ("archive-duplicate", []), ("archive-invalid", []),
     ("archive-ok", ["payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
+    ("archive-pair", ["payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
+    ("archive-incomplete-pair", []),
 ])
 def test_windows_install_stops_before_mutation_on_preparation_failure(tmp_path, failure, expected):
     # Full PowerShell workflow, OS calls mocked in this disposable process only.
@@ -452,12 +480,18 @@ def test_windows_install_stops_before_mutation_on_preparation_failure(tmp_path, 
     stale = BuildVersion("host", "1.6.1", commit, "1.6.1")
     (repo / "build.version.json").write_text((stale if failure == "snapshot" else version).to_json(), encoding="utf-8")
     archived_release = "v1.0.0_b1_gabc1234"
-    if failure in {"archive-ok", "archive-duplicate"}:
+    if failure in {"archive-ok", "archive-duplicate", "archive-pair", "archive-incomplete-pair"}:
         for folder in (["one", "two"] if failure == "archive-duplicate" else ["one"]):
             archive = repo / "release/archives/windows-host" / folder
             archive.mkdir(parents=True)
             for suffix in ("Setup.exe", "Portable.zip"):
                 (archive / f"HomeworkHelper_{archived_release}_{suffix}").write_bytes(b"inert fixture")
+        if failure in {"archive-pair", "archive-incomplete-pair"}:
+            pair = repo / "release/archives/windows-host/by-version" / archived_release
+            pair.mkdir(parents=True)
+            (pair / f"HomeworkHelper_{archived_release}_Setup.exe").write_bytes(b"pair fixture")
+            if failure == "archive-pair":
+                (pair / f"HomeworkHelper_{archived_release}_Portable.zip").write_bytes(b"pair fixture")
     elif failure.startswith("archive-"):
         (repo / "release/archives/windows-host").mkdir(parents=True)
     source = (ops.ROOT / "tools/windows_host_operations.ps1").read_text(encoding="utf-8")
@@ -507,7 +541,7 @@ function Invoke-RestMethod {return @{ok=$true;db_ready=$true;database_access=@{m
     tail = result.stdout.strip().splitlines()[-1]
     trace = json.loads(tail)
     assert trace["events"] == expected, result.stdout + result.stderr
-    assert trace["failed"] == (failure not in {"none", "archive-ok"}), result.stdout + result.stderr
+    assert trace["failed"] == (failure not in {"none", "archive-ok", "archive-pair"}), result.stdout + result.stderr
 
 
 def test_media_preview_pixels_are_saved_once_and_cannot_escape_report(tmp_path):

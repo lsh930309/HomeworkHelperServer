@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('inspect','logs','prepare-source','build','release-build','install','desktop','verify','media-qa')][string]$Command,
+    [ValidateSet('inspect','logs','prepare-source','build','release-preflight','release-build','install','desktop','verify','media-qa')][string]$Command,
     [string]$Repo, [string]$Owner, [string]$ExpectedComputer,
     [string]$Commit, [string]$Branch, [string]$VersionSnapshot, [string]$ArchivedRelease,
     [string]$ReleaseTag, [string]$ReleaseRepo,
@@ -93,12 +93,31 @@ function Require-DraftRelease {
     if ($Draft.isDraft -ne $true -or $Draft.tagName -cne $ReleaseTag) { throw '초안 릴리즈에서만 호스트 패키지를 올릴 수 있습니다' }
     return $Draft
 }
-function Require-PublishedReleaseTag {
+function Test-ReleaseRepository {
+    if ($ReleaseRepo -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z') { return $false }
     $Origin = Git-Checked @('remote','get-url','origin')
     $Repository = [regex]::Match($Origin,'^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)(?<name>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?\z')
-    if (!$Repository.Success -or $Repository.Groups['name'].Value -ine $ReleaseRepo) {
-        throw 'Windows origin과 GitHub 릴리즈 저장소가 다릅니다'
+    return ($Repository.Success -and $Repository.Groups['name'].Value -ieq $ReleaseRepo)
+}
+function Get-ReleasePreflight {
+    if (!(Test-ReleaseRepository)) { return @{ok=$false;reason='repository-mismatch'} }
+    if (!(Get-Command gh -ErrorAction SilentlyContinue)) { return @{ok=$false;reason='cli-missing'} }
+    $Previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        $null = & gh auth status --hostname github.com 2>$null
+        if ($LASTEXITCODE -ne 0) { return @{ok=$false;reason='github-auth'} }
+        $Permission = & gh repo view ('github.com/'+$ReleaseRepo) --json viewerPermission --jq '.viewerPermission' 2>$null
+        if ($LASTEXITCODE -ne 0 -or ($Permission -join '').Trim() -cnotin @('WRITE','MAINTAIN','ADMIN')) {
+            return @{ok=$false;reason='github-permission'}
+        }
+        return @{ok=$true}
+    } finally {
+        $ErrorActionPreference = $Previous
     }
+}
+function Require-PublishedReleaseTag {
+    if (!(Test-ReleaseRepository)) { throw 'Windows origin과 GitHub 릴리즈 저장소가 다릅니다' }
     $Ref = 'refs/tags/'+$ReleaseTag
     $Peeled = $Ref+'^{}'
     $DirectCommit = $null
@@ -277,6 +296,9 @@ switch ($Command) {
         Invoke-HostBuild
         @{ok=$true; source=$Commit; version=(Read-RequestedVersion); release=(Join-Path $Repo 'release')} | ConvertTo-Json -Depth 5
     }
+    'release-preflight' {
+        Get-ReleasePreflight | ConvertTo-Json -Compress
+    }
     'release-build' {
         $Draft = Require-DraftRelease
         $Files = $null
@@ -334,11 +356,22 @@ switch ($Command) {
             if ($ArchivedRelease -cnotmatch '^(?:v[0-9]+\.[0-9]+\.[0-9]+(?:_b[1-9][0-9]*_g[0-9a-f]{4,40})?|dev\.[1-9][0-9]*)\z') { throw '보관 릴리스 ID 형식 오류' }
             $Release = $ArchivedRelease
             $Archive = Join-Path $Repo 'release\archives\windows-host'
-            $Setups = @(Get-ChildItem $Archive -File -Recurse -Filter ('HomeworkHelper_'+$Release+'_Setup.exe'))
-            $Portables = @(Get-ChildItem $Archive -File -Recurse -Filter ('HomeworkHelper_'+$Release+'_Portable.zip'))
-            if ($Setups.Count -ne 1 -or $Portables.Count -ne 1) { throw '보관 패키지가 없거나 중복됨: '+$Release }
-            $Setup = $Setups[0].FullName
-            $Portable = $Portables[0].FullName
+            $SetupName = 'HomeworkHelper_'+$Release+'_Setup.exe'
+            $PortableName = 'HomeworkHelper_'+$Release+'_Portable.zip'
+            $Pair = Join-Path (Join-Path $Archive 'by-version') $Release
+            if (Test-Path -LiteralPath $Pair) {
+                $Setup = Join-Path $Pair $SetupName
+                $Portable = Join-Path $Pair $PortableName
+                if (!(Test-Path -LiteralPath $Setup -PathType Leaf) -or !(Test-Path -LiteralPath $Portable -PathType Leaf)) {
+                    throw '보관 패키지 쌍이 불완전함: '+$Release
+                }
+            } else {
+                $Setups = @(Get-ChildItem -LiteralPath $Archive -File -Recurse -Filter $SetupName)
+                $Portables = @(Get-ChildItem -LiteralPath $Archive -File -Recurse -Filter $PortableName)
+                if ($Setups.Count -ne 1 -or $Portables.Count -ne 1) { throw '보관 패키지가 없거나 중복됨: '+$Release }
+                $Setup = $Setups[0].FullName
+                $Portable = $Portables[0].FullName
+            }
         } else {
             $Files = Invoke-Probe 'release'
             $Release = $Files.release_id

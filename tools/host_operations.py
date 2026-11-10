@@ -19,6 +19,14 @@ sys.path.insert(0, str(ROOT))
 from tools.ssh_host_testbench import SSHConfig, run_remote_powershell
 from tools.version_policy import BuildVersion, VersionLedger, VersionPolicyError
 
+RELEASE_PREFLIGHT_FAILURES = {
+    "cli-missing": "Windows에서 GitHub CLI를 찾을 수 없습니다. 병합 전에 호스트의 게시 환경을 준비하세요.",
+    "github-auth": "Windows GitHub CLI의 기존 인증을 확인할 수 없습니다.",
+    "repository-mismatch": "Windows 작업 저장소의 origin이 릴리즈 대상 저장소와 다릅니다.",
+    "github-permission": "Windows GitHub CLI의 릴리즈 대상 저장소 쓰기 권한을 확인할 수 없습니다.",
+    "transport": "Windows SSH 연결 또는 릴리즈 사전 점검 응답을 확인할 수 없습니다.",
+}
+
 VERIFY_FILES = ("build.py", "tools/host_operations.py", "tools/ssh_host_testbench.py", "tools/windows_host_probe.py",
                 "tools/windows_session_probe.py", "tools/windows_host_operations.ps1", "tools/version_policy.py",
                 "tests/test_host_operations.py",
@@ -107,9 +115,30 @@ def remote_script(args, commit: str = "", branch: str = "", version: BuildVersio
     return "& {\n" + script + "\n} " + invocation
 
 
+def release_preflight(args: argparse.Namespace) -> int:
+    """Expose only a known outcome, never SSH or GitHub authentication output."""
+    reason = "transport"
+    try:
+        result = run_remote_powershell(SSHConfig(args.host, args.user, args.ssh_port, args.identity),
+                                       remote_script(args), timeout=45)
+        if result.returncode == 0:
+            payload = json.loads(result.stdout)
+            if isinstance(payload, dict) and payload.get("ok") is True:
+                print('{"ok": true}')
+                return 0
+            if isinstance(payload, dict) and payload.get("ok") is False:
+                reported = payload.get("reason")
+                if isinstance(reported, str) and reported in RELEASE_PREFLIGHT_FAILURES:
+                    reason = reported
+    except (ValueError, OSError, subprocess.SubprocessError):
+        pass
+    print(json.dumps({"ok": False, "reason": reason}))
+    return 1
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("command", choices=("inspect", "logs", "prepare-source", "build", "release-build", "install", "desktop", "verify", "media-qa"))
+    p.add_argument("command", choices=("inspect", "logs", "prepare-source", "build", "release-preflight", "release-build", "install", "desktop", "verify", "media-qa"))
     p.add_argument("--host", required=True, help="Tailscale device/MagicDNS name, explicit IP or external FQDN")
     p.add_argument("--user")
     p.add_argument("--ssh-port", type=int, default=22)
@@ -119,7 +148,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--commit", help="Published local HEAD (defaults to current HEAD)")
     p.add_argument("--archived-release", help="install only: reinstall this exact release from build.py archives")
     p.add_argument("--release-tag", help="release-build only: tag of the existing draft release")
-    p.add_argument("--release-repo", help="release-build only: owner/repository of the draft release")
+    p.add_argument("--release-repo", help="release-preflight and release-build only: owner/repository of the release")
     p.add_argument("--duration", type=int, choices=range(0, 121), default=0,
                    metavar="0..120", help="desktop observation duration; 0 takes one snapshot")
     p.add_argument("--log-lines", type=int, choices=range(1, 2001), default=80, metavar="1..2000")
@@ -144,10 +173,15 @@ def main(argv=None) -> int:
     if args.command == "release-build":
         if not (args.commit and args.release_tag and args.release_repo):
             argument_parser.error("release-build에는 --commit, --release-tag, --release-repo가 필요합니다.")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.release_repo):
-            argument_parser.error("--release-repo는 owner/repository 형식이어야 합니다.")
+    elif args.command == "release-preflight":
+        if not args.release_repo or args.commit or args.release_tag:
+            argument_parser.error("release-preflight에는 --release-repo만 지정하세요. 커밋과 태그는 필요하지 않습니다.")
     elif args.release_tag or args.release_repo:
-        argument_parser.error("--release-tag와 --release-repo는 release-build에서만 사용합니다.")
+        argument_parser.error("--release-tag는 release-build, --release-repo는 release-preflight와 release-build에서 사용합니다.")
+    if args.release_repo and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.release_repo):
+        argument_parser.error("--release-repo는 owner/repository 형식이어야 합니다.")
+    if args.command == "release-preflight":
+        return release_preflight(args)
     report = args.report_root / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8])
     try:
         report.mkdir(parents=True)

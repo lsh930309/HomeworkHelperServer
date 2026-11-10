@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -28,7 +29,30 @@ CLIENT_FILES = {
     "tools/package_macos_remote_app.py",
     "tools/ensure_macos_local_codesign_identity.py",
 }
-SHARED_FILES = {"build.py", "assets/icons/app/app_icon.png"}
+BUILD_SCRIPT = "build.py"
+SHARED_FILES = {BUILD_SCRIPT, "assets/icons/app/app_icon.png"}
+BUILD_HOST_DEFINITIONS = {
+    "WINDOWS_VERSION_FILE", "DASHBOARD_FRONTEND_DIR", "DASHBOARD_STATIC_BUILD_DIR", "DASHBOARD_CACHE_DIR",
+    "SPEC_FILE", "APP_NAME", "APP_FOLDER", "INNO_SETUP_PATH", "INSTALLER_SCRIPT", "WINDOWS_PYTHON_VERSION",
+    "WINDOWS_REQUIRED_DISTRIBUTIONS", "CERT_DIR", "CERT_THUMBPRINT_FILE",
+    "bootstrap_windows_build_runtime", "installed_distribution_versions", "validate_windows_build_runtime",
+    "load_windows_version_info", "windows_package_paths", "build_dashboard_frontend", "build_with_pyinstaller",
+    "find_signtool", "sign_file", "sign_build_artifacts", "create_zip_distribution",
+    "windows_installer_output_base", "create_inno_setup_command", "create_installer", "run_windows_build",
+}
+BUILD_CLIENT_DEFINITIONS = {
+    "MACOS_PACKAGE_TOOL", "MACOS_CLIENT_DIR", "MACOS_APP_NAME", "MACOS_APP_BUNDLE", "MACOS_SWIFT_RELEASE_EXECUTABLE",
+    "MACOS_APP_EXECUTABLE", "MACOS_APP_PROCESS_NAME", "MACOS_PKG_SCRIPTS_DIR", "MACOS_CODESIGN_IDENTITY_ENV",
+    "MACOS_DEFAULT_CODESIGN_IDENTITY", "load_macos_version_info", "macos_pkg_path", "macos_pkg_preinstall_script",
+    "prepare_macos_pkg_scripts_dir", "create_pkgbuild_command", "macos_codesign_identity",
+    "resolve_macos_codesign_identity", "macos_codesign_identity_available", "create_macos_app_bundle_command",
+    "build_macos_remote_app", "create_macos_pkg", "run_macos_build",
+}
+BUILD_ARCHIVE_DEFINITIONS = {
+    "ARCHIVES_DIR", "VERSION_ID", "VERSIONED_PACKAGE_NAME", "WINDOWS_ARCHIVE_ID", "WINDOWS_PACKAGE_PAIR",
+    "artifact_archive_bucket", "iter_release_artifacts_for_archive", "prune_archive_files", "archive_old_files",
+    "_complete_windows_pair", "_archive_windows_pair",
+}
 
 
 class VersionPolicyError(RuntimeError):
@@ -89,13 +113,20 @@ def classify_paths(paths: Iterable[str]) -> set[str]:
     return products
 
 
-def _git(repo: Path, *args: str) -> str:
+def _git_result(repo: Path, *args: str, allowed: tuple[int, ...] = (0,)) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(
-            ("git", *args), cwd=repo, check=True, capture_output=True, text=True, errors="surrogateescape"
-        ).stdout
-    except (OSError, subprocess.CalledProcessError) as exc:
+        result = subprocess.run(
+            ("git", *args), cwd=repo, check=False, capture_output=True, text=True, errors="surrogateescape"
+        )
+    except OSError as exc:
         raise VersionPolicyError(f"Git 버전 이력을 읽을 수 없습니다. git {' '.join(args)}") from exc
+    if result.returncode not in allowed:
+        raise VersionPolicyError(f"Git 버전 이력을 읽을 수 없습니다. git {' '.join(args)}")
+    return result
+
+
+def _git(repo: Path, *args: str) -> str:
+    return _git_result(repo, *args).stdout
 
 
 def _ref(repo: Path, ref: str) -> str | None:
@@ -117,8 +148,63 @@ def resolve_commit(repo: Path, commit: str) -> str:
     return resolved
 
 
+def _build_definition_scope(node: ast.stmt) -> str:
+    if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and not node.decorator_list:
+        name = node.name
+    elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+        name = node.targets[0].id
+    elif isinstance(node, ast.Import) and [(alias.name, alias.asname) for alias in node.names] == [("tempfile", None)]:
+        return "archive"
+    elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("tools."):
+        # Moving named definitions to a product module preserves their ownership.
+        scopes = {_build_name_scope(alias.asname or alias.name) for alias in node.names}
+        return scopes.pop() if len(scopes) == 1 else "shared"
+    else:
+        return "shared"
+    return _build_name_scope(name)
+
+
+def _build_name_scope(name: str) -> str:
+    if name in BUILD_HOST_DEFINITIONS:
+        return "host"
+    if name in BUILD_CLIENT_DEFINITIONS:
+        return "client"
+    if name in BUILD_ARCHIVE_DEFINITIONS:
+        return "archive"
+    return "shared"
+
+
+def _build_sections(repo: Path, tree: str) -> dict[str, list[str]] | None:
+    blob = _git_result(repo, "cat-file", "blob", f"{tree}:{BUILD_SCRIPT}", allowed=(0, 128))
+    if blob.returncode:
+        return None
+    try:
+        nodes = ast.parse(blob.stdout).body
+    except (SyntaxError, ValueError):
+        return None
+    sections = {scope: [] for scope in ("host", "client", "shared")}
+    for node in nodes:
+        scope = _build_definition_scope(node)
+        if scope != "archive":
+            sections[scope].append(ast.dump(node))
+    return sections
+
+
+def _diff_products(repo: Path, paths: Iterable[str], before: str, after: str) -> set[str]:
+    paths = set(paths)
+    products = classify_paths(paths - {BUILD_SCRIPT})
+    if BUILD_SCRIPT in paths:
+        left, right = _build_sections(repo, before), _build_sections(repo, after)
+        if left is None or right is None or left["shared"] != right["shared"]:
+            products.update(START_VERSIONS)
+        else:
+            products.update(product for product in START_VERSIONS if left[product] != right[product])
+    return products
+
+
 def changed_products(repo: Path, before: str, after: str) -> set[str]:
-    return classify_paths(_git(repo, "diff", "--no-renames", "--name-only", "-z", before, after, "--").split("\0"))
+    paths = _git(repo, "diff", "--no-renames", "--name-only", "-z", before, after, "--").split("\0")
+    return _diff_products(repo, paths, before, after)
 
 
 def _one_product(products: set[str], subject: str) -> str | None:
@@ -127,9 +213,41 @@ def _one_product(products: set[str], subject: str) -> str | None:
     return next(iter(products), None)
 
 
+def _is_main_sync(repo: Path, side_parents: list[str], main_tips: tuple[str, ...]) -> bool:
+    imported_main = any(
+        _git_result(repo, "merge-base", "--is-ancestor", parent, main, allowed=(0, 1)).returncode == 0
+        for parent in side_parents
+        for main in main_tips
+    )
+    if imported_main and len(side_parents) != 1:
+        raise VersionPolicyError("main 동기화와 다른 브랜치 병합은 서로 다른 커밋으로 나누세요.")
+    return imported_main
+
+
+def _automatic_merge_tree(repo: Path, first: str, second: str) -> str:
+    result = _git_result(repo, "merge-tree", "--write-tree", "--no-messages", first, second, allowed=(0, 1))
+    tree, _, _ = result.stdout.partition("\n")
+    if not COMMIT.fullmatch(tree):
+        raise VersionPolicyError("main 동기화의 자동 병합 트리를 확인할 수 없습니다.")
+    return tree
+
+
+def _commit_products(repo: Path, commit: str, main_tips: tuple[str, ...]) -> set[str]:
+    parents = _git(repo, "show", "-s", "--format=%P", commit).split()
+    if _is_main_sync(repo, parents[1:], main_tips):
+        # Compare the recorded result with Git's automatic merge of both parents.
+        paths = _git(
+            repo, "show", "--remerge-diff", "--format=", "--no-renames", "--name-only", "-z", commit, "--"
+        ).split("\0")
+        if BUILD_SCRIPT in paths:
+            return _diff_products(repo, paths, _automatic_merge_tree(repo, *parents), commit)
+        return classify_paths(paths)
+    return changed_products(repo, parents[0], commit)
+
+
 def validate_commit_range(repo: Path, before: str, after: str) -> None:
     for commit in _git(repo, "rev-list", f"{before}..{after}").splitlines():
-        _one_product(changed_products(repo, f"{commit}^1", commit), commit)
+        _one_product(_commit_products(repo, commit, (before,)), commit)
 
 
 def _advance(version: str, event: str) -> str:
@@ -245,7 +363,7 @@ class VersionLedger:
 
     def _record_through(
         self, data: dict, history: list[str], baseline: str, commit: str,
-        event: str, expected_product: str | None,
+        event: str | None, expected_product: str | None, *, require_prior_tags: bool = False,
     ) -> BuildVersion | None:
         entries = data["main"]
         versions = START_VERSIONS.copy()
@@ -262,6 +380,8 @@ class VersionLedger:
                 result = _entry_version(node, record)
                 if tagged and result != tagged:
                     raise VersionPolicyError(f"{node}의 정식 태그와 버전 기록이 다릅니다.")
+                if require_prior_tags and result and record["event"] != "patch" and not tagged:
+                    raise VersionPolicyError(f"{node}의 PR 병합 릴리즈를 먼저 재개하세요.")
             else:
                 product = _one_product(changed_products(self.repo, before, node), node)
                 merge, marker = self._merge_kind(node)
@@ -271,10 +391,10 @@ class VersionLedger:
                     kind = marker[2] if marker else ("major" if tagged.version.endswith(".0.0") else "minor")
                     if requested and kind != requested:
                         raise VersionPolicyError(f"{node}의 정식 태그와 요청한 버전업 유형이 다릅니다.")
+                elif product is None and requested in (None, "patch"):
+                    kind = marker[2] if merge and marker else "patch"
                 elif merge or marker:
-                    if requested is None and product is None and marker:
-                        kind = marker[2]
-                    elif not merge or not marker or requested != marker[2]:
+                    if not merge or not marker or requested != marker[2]:
                         raise VersionPolicyError(f"{node}의 PR 병합 릴리즈를 먼저 재개하세요.")
                     else:
                         kind = requested
@@ -292,6 +412,15 @@ class VersionLedger:
         if expected_product is not None and (not result or result.product != expected_product):
             raise VersionPolicyError("예상 제품과 main에서 변경한 제품이 다릅니다.")
         return result
+
+    def check_main_ready(self, commit: str) -> None:
+        """Check for unresolved previous product merges without recording any versions."""
+        commit = resolve_commit(self.repo, commit)
+        history = self._main_history(commit, published=True)
+        baseline = self.require_baseline()
+        if history.index(commit) < history.index(baseline):
+            raise VersionPolicyError("시작 태그 이후의 main만 새 PR을 병합할 수 있습니다.")
+        self._record_through(self._load(), history, baseline, commit, None, None, require_prior_tags=True)
 
     def record_main(
         self, commit: str, *, event: str, expected_product: str | None = None, major_approved: bool = False,
@@ -324,10 +453,6 @@ class VersionLedger:
         initial = START_VERSIONS[product]
         return BuildVersion(product, initial, commit, initial)
 
-    def _dev_commits(self, commit: str, main: str) -> list[str]:
-        fork = _git(self.repo, "merge-base", main, commit).strip()
-        return _git(self.repo, "rev-list", "--first-parent", "--reverse", f"{fork}..{commit}").splitlines()
-
     def _known_dev(self, product: str, commit: str, versions: dict) -> BuildVersion | None:
         for node in _git(self.repo, "rev-list", "--first-parent", commit).splitlines():
             if node in versions:
@@ -343,6 +468,7 @@ class VersionLedger:
         if any(commit in history for history in histories):
             raise VersionPolicyError("main 커밋에는 개발 버전을 부여할 수 없습니다.")
         history = histories[0]
+        main_tips = tuple(dict.fromkeys(branch_history[-1] for branch_history in histories))
         baseline = self._baseline(history, required=False)
         with self._edit() as data:
             versions = data["dev"][product]
@@ -352,8 +478,8 @@ class VersionLedger:
                 fork = _git(self.repo, "merge-base", history[-1], commit).strip()
                 if fork in history[history.index(baseline) :]:
                     base = self._known_main(product, fork, history, baseline).version
-            for node in self._dev_commits(commit, history[-1]):
-                products = changed_products(self.repo, f"{node}^1", node)
+            for node in _git(self.repo, "rev-list", "--first-parent", "--reverse", commit, "--not", *main_tips).splitlines():
+                products = _commit_products(self.repo, node, main_tips)
                 if baseline:
                     _one_product(products, node)
                 if product in products and node not in versions:
@@ -413,9 +539,14 @@ def main() -> int:
         # The new product rule starts at the agreed two-tag baseline.
         if not any(_ref(repo, f"refs/tags/{tag}") for tag in START_TAGS.values()):
             return 0
-        VersionLedger(repo).require_baseline()
-        staged = _git(repo, "diff", "--cached", "--no-renames", "--name-only", "-z", "--")
-        _one_product(classify_paths(staged.split("\0")), "스테이징한 커밋")
+        ledger = VersionLedger(repo)
+        ledger.require_baseline()
+        merge_head_path = repo / _git(repo, "rev-parse", "--git-path", "MERGE_HEAD").strip()
+        parents = merge_head_path.read_text(encoding="ascii").split() if merge_head_path.is_file() else []
+        main_tips = tuple(history[-1] for history in ledger._main_histories())
+        compared_tree = _automatic_merge_tree(repo, "HEAD", parents[0]) if _is_main_sync(repo, parents, main_tips) else "HEAD"
+        staged = _git(repo, "diff", "--cached", "--no-renames", "--name-only", "-z", compared_tree, "--")
+        _one_product(_diff_products(repo, staged.split("\0"), compared_tree, ""), "스테이징한 커밋")
     except VersionPolicyError as exc:
         print(exc, file=sys.stderr)
         return 1

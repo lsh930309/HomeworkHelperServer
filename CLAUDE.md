@@ -114,3 +114,4 @@
 
 권장 형식은 `docs/development/commit-message-policy.md`와 `.gitmessage`를 따른다.
 제품에 영향을 주는 커밋과 브랜치 분리는 [제품 단위 커밋 규칙](docs/development/commit-message-policy.md#제품-단위-커밋-규칙)을 따른다.
+PR 병합 전에는 [PR 병합 승인](docs/development/commit-message-policy.md#pr-병합-승인)에 따라 최종 diff를 리뷰하고, 수정과 검증을 마친 뒤 사용자의 명시적 병합 동의를 받는다.

@@ -54,6 +54,12 @@ def merge_pr(repo, branch, product, event):
     return git(repo, "rev-parse", "HEAD")
 
 
+def check_staged(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(sys, "argv", ["version_policy.py", "check-staged"])
+    return policy.main()
+
+
 def test_dev_numbers_follow_product_changes_and_stay_fixed_across_branches(repo):
     start_policy(repo)
     ledger = policy.VersionLedger(repo)
@@ -93,6 +99,84 @@ def test_direct_patch_and_published_pr_advance_independent_products(repo):
     assert version == policy.BuildVersion("client", "1.1.0", merged, "1.1.0")
     assert policy.VersionLedger(repo).record_main(merged, event="minor", expected_product="client") == version
     assert ledger.resolve_build("host", merged).version == "1.6.1"
+
+
+def test_unmarked_document_merge_allows_later_patch_and_product_pr(repo):
+    start_policy(repo)
+    git(repo, "switch", "-c", "documentation")
+    commit(repo, "docs/feature.md", "문서 수정")
+    git(repo, "switch", "main")
+    git(repo, "merge", "--no-ff", "-m", "문서 브랜치 병합", "documentation")
+    neutral = git(repo, "rev-parse", "HEAD")
+    patch = commit(repo, "src/host.py", "호스트 직접 수정")
+    git(repo, "update-ref", "refs/remotes/origin/main", patch)
+    ledger = policy.VersionLedger(repo)
+
+    ledger.check_main_ready(patch)
+    assert not ledger.path.exists() and not ledger.path.with_suffix(".lock").exists()
+    assert ledger.resolve_build("host", patch).version == "1.6.1"
+    assert ledger.read_main(neutral)[1] is None
+
+    git(repo, "switch", "-c", "host-feature")
+    commit(repo, "src/feature.py", "호스트 새 기능")
+    merged = merge_pr(repo, "host-feature", "host", "minor")
+    assert ledger.record_main(merged, event="minor", expected_product="host").version == "1.7.0"
+
+
+def test_main_sync_keeps_dev_number_and_records_only_manual_product_change(repo, monkeypatch):
+    start_policy(repo)
+    git(repo, "switch", "-c", "host-feature")
+    feature = commit(repo, "src/feature.py", "호스트 개발 기능")
+    ledger = policy.VersionLedger(repo)
+    assert ledger.resolve_build("host", feature).version == "dev.1"
+    git(repo, "switch", "main")
+    commit(repo, "src/main_host.py", "main 호스트 패치")
+    main_tip = commit(repo, "clients/macos/Sources/Main.swift", "main 클라이언트 패치")
+    git(repo, "update-ref", "refs/remotes/origin/main", main_tip)
+    git(repo, "switch", "host-feature")
+    git(repo, "merge", "--no-ff", "--no-commit", "main")
+    assert check_staged(repo, monkeypatch) == 0
+    git(repo, "commit", "-m", "main 동기화")
+    synced = git(repo, "rev-parse", "HEAD")
+    policy.validate_commit_range(repo, main_tip, synced)
+    assert ledger.resolve_build("host", synced).version == "dev.1"
+
+    git(repo, "switch", "main")
+    main_tip = commit(repo, "clients/macos/Sources/Later.swift", "다음 main 클라이언트 패치")
+    git(repo, "update-ref", "refs/remotes/origin/main", main_tip)
+    git(repo, "switch", "host-feature")
+    git(repo, "merge", "--no-ff", "--no-commit", "main")
+    (repo / "src/manual.py").write_text("병합 중 호스트 변경", encoding="utf-8")
+    (repo / "clients/macos/Sources/Manual.swift").write_text("병합 중 클라이언트 변경", encoding="utf-8")
+    git(repo, "add", "src/manual.py", "clients/macos/Sources/Manual.swift")
+    assert check_staged(repo, monkeypatch) == 1
+    git(repo, "rm", "-f", "clients/macos/Sources/Manual.swift")
+    assert check_staged(repo, monkeypatch) == 0
+    git(repo, "commit", "-m", "호스트 변경이 포함된 main 동기화")
+    edited_sync = git(repo, "rev-parse", "HEAD")
+    policy.validate_commit_range(repo, main_tip, edited_sync)
+    assert ledger.resolve_build("host", edited_sync).version == "dev.2"
+
+
+@pytest.mark.parametrize(("symbol", "expected"), [
+    ("create_installer", {"host"}), ("create_macos_pkg", {"client"}),
+    ("archive_old_files", set()), ("main", {"host", "client"}),
+])
+def test_build_py_ownership_is_identical_for_commits_and_the_staged_index(repo, monkeypatch, symbol, expected):
+    symbols = ("create_installer", "create_macos_pkg", "archive_old_files", "main")
+    initial = "\n\n".join(f"def {name}():\n    return {index}" for index, name in enumerate(symbols))
+    before = commit(repo, "build.py", initial)
+    git(repo, "update-ref", "refs/remotes/origin/main", before)
+    start_policy(repo)
+    git(repo, "switch", "-c", "build-change")
+    changed = initial.replace(f"def {symbol}():\n    return {symbols.index(symbol)}", f"def {symbol}():\n    return 99")
+    path = repo / "build.py"
+    path.write_text(changed, encoding="utf-8")
+    git(repo, "add", "build.py")
+    path.write_text("작업 트리의 이 내용은 스테이징하지 않음", encoding="utf-8")
+    assert check_staged(repo, monkeypatch) == (1 if len(expected) > 1 else 0)
+    git(repo, "commit", "-m", "빌드 함수 변경")
+    assert policy.changed_products(repo, before, git(repo, "rev-parse", "HEAD")) == expected
 
 
 def test_only_the_start_node_can_have_both_product_tags(repo):
