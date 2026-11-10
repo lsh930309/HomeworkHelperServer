@@ -17,7 +17,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools.validate_commit_message import validate_message
-from tools.version_policy import BuildVersion, START_TAGS, VersionLedger, changed_products, validate_commit_range
+from tools.version_policy import BuildVersion, START_TAGS, START_VERSIONS, VersionLedger, changed_products, validate_commit_range
 
 
 MAIN = "refs/remotes/origin/main"
@@ -41,9 +41,12 @@ class MergeRelease:
 
 
 def release_assets(version: BuildVersion) -> tuple[str, ...]:
+    from build import macos_pkg_path, make_policy_version_info, windows_package_paths
+
+    info = make_policy_version_info(version)
     if version.product == "host":
-        return (f"HomeworkHelper_v{version.version}_Setup.exe", f"HomeworkHelper_v{version.version}_Portable.zip")
-    return (f"HomeworkHelperRemote_v{version.version}.pkg",)
+        return tuple(path.name for path in windows_package_paths(info))
+    return (macos_pkg_path(info).name,)
 
 
 def release_title(version: BuildVersion) -> str:
@@ -135,6 +138,11 @@ class ReleaseCommand:
         self.require_main_checkout(published)
         if commit != published or self.git("rev-parse", "HEAD") != commit:
             raise ValueError("시작 태그에는 로컬과 GitHub main이 가리키는 동일한 전체 커밋 SHA를 지정하세요.")
+        try:
+            for product, version in START_VERSIONS.items():
+                release_assets(BuildVersion(product, version, commit, version))
+        except ImportError as error:
+            raise ValueError("두 제품의 새 버전 빌드를 main에 반영한 뒤 시작 태그를 등록하세요.") from error
         tags = self.product_tags()
         expected = set(START_TAGS.values())
         existing = {tag for tag, target in tags.items() if target == commit}

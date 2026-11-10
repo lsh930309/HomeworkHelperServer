@@ -30,7 +30,8 @@ README는 앱 소개다. 이 문서는 개발·진단·검증·배포를 시작�
 - 대시보드: [package.json](../src/api/dashboard/frontend/package.json).
 - `tools/`: 공용 실행 자산, `tests/`: 사용자 계약 자동 검증.
 - `docs/`: 현재 운영·제품 계약, `artifacts/`: Git에 포함하지 않는 실행 증거.
-- `release/`와 로컬 `build.version.json`: `build.py`가 관리하는 산출물·버전 상태.
+- `version.ledger.json`: 맥이 관리하는 제품별 버전 원장. Windows에는 선택한 빌드의 버전과 커밋을
+  `build.version.json`으로 전달한다. 각 환경의 `build.py`는 산출물을 `release/`에 둔다.
 
 Windows 개발 실행:
 

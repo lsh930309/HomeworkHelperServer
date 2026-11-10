@@ -1,5 +1,6 @@
-import json
+import subprocess
 import sys
+from datetime import datetime
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -8,16 +9,7 @@ import pytest
 import build
 from tools import ensure_macos_local_codesign_identity
 from tools import package_macos_remote_app
-
-
-def _config():
-    return {
-        "schema": 1,
-        "targets": {
-            "windows-host": {"version": "1.1.9", "build": 11},
-            "macos-client": {"version": "0.2.0", "build": 3},
-        },
-    }
+from tools.version_policy import BuildVersion, VersionLedger
 
 
 def test_select_build_target_maps_host_os_to_release_target():
@@ -48,7 +40,7 @@ def test_windows_bootstrap_creates_venv_and_delegates_before_installing(tmp_path
         return SimpleNamespace(returncode=0)
 
     exit_code = build.bootstrap_windows_build_runtime(
-        ["--no-gui"],
+        ["--no-prune-archives"],
         system_name="Windows",
         project_root=tmp_path,
         python_executable="C:/Python314/python.exe",
@@ -59,7 +51,7 @@ def test_windows_bootstrap_creates_venv_and_delegates_before_installing(tmp_path
 
     assert exit_code == 0
     assert calls[0][0][-2:] == ["venv", str(tmp_path / ".venv")]
-    assert calls[1][0] == [str(managed_python), str(tmp_path / "build.py"), "--no-gui"]
+    assert calls[1][0] == [str(managed_python), str(tmp_path / "build.py"), "--no-prune-archives"]
 
 
 def test_windows_bootstrap_reuses_managed_venv_without_activation(tmp_path):
@@ -154,34 +146,22 @@ def test_windows_runtime_rejects_old_python_or_mixed_qt_bindings():
         )
 
 
-def test_make_version_info_uses_git_hash_and_dirty_suffix():
-    info = build.make_version_info("windows-host", _config(), git_hash="21080f2", dirty=False)
-
-    assert info["version"] == "1.1.9"
-    assert info["build"] == 11
-    assert info["target"] == "windows-host"
-    assert info["string"] == "v1.1.9_b11_g21080f2"
-
-    dirty = build.make_version_info("macos-client", _config(), git_hash="abcdef0", dirty=True)
-    assert dirty["string"] == "v0.2.0_b3_gabcdef0_dirty"
-
-
-def test_release_filenames_use_commit_based_release_id():
-    info = build.make_version_info("windows-host", _config(), git_hash="21080f2", dirty=False)
-
-    assert build.release_filename("HomeworkHelper", info, "Portable", "zip") == (
-        "HomeworkHelper_v1.1.9_b11_g21080f2_Portable.zip"
-    )
-    assert build.windows_installer_output_base(info) == "HomeworkHelper_v1.1.9_b11_g21080f2_Setup"
-    assert build.target_release_tag(info) == "hh-windows-host-v1.1.9-b11"
+@pytest.mark.parametrize(
+    "version, release_id", [("1.6.0", "v1.6.0"), ("dev.12", "dev.12")],
+)
+def test_windows_filenames_use_issued_version(version, release_id):
+    info = build.make_policy_version_info(BuildVersion("host", version, "a" * 40, "1.6.0"))
+    setup, portable = build.windows_package_paths(info)
+    assert setup.name == f"HomeworkHelper_{release_id}_Setup.exe"
+    assert portable.name == f"HomeworkHelper_{release_id}_Portable.zip"
 
 
 def test_inno_setup_command_injects_version_without_rewriting_script():
-    info = build.make_version_info("windows-host", _config(), git_hash="21080f2", dirty=False)
+    info = build.make_policy_version_info(BuildVersion("host", "1.6.0", "a" * 40, "1.6.0"))
     command = build.create_inno_setup_command(info)
 
-    assert "/DMyAppVersion=1.1.9" in command
-    assert "/DMyAppOutputBaseFilename=HomeworkHelper_v1.1.9_b11_g21080f2_Setup" in command
+    assert "/DMyAppVersion=1.6.0" in command
+    assert "/DMyAppOutputBaseFilename=HomeworkHelper_v1.6.0_Setup" in command
 
     installer = Path("installer.iss").read_text(encoding="utf-8")
     assert "#ifndef MyAppVersion" in installer
@@ -189,11 +169,11 @@ def test_inno_setup_command_injects_version_without_rewriting_script():
 
 
 def test_macos_pkgbuild_command_and_path_use_same_release_id():
-    info = build.make_version_info("macos-client", _config(), git_hash="abcdef0", dirty=False)
+    info = build.make_policy_version_info(BuildVersion("client", "dev.12", "a" * 40, "1.0.0"))
     app = Path("dist/macos/HomeworkHelperRemote.app")
     pkg = build.macos_pkg_path(info)
 
-    assert pkg.name == "HomeworkHelperRemote_v0.2.0_b3_gabcdef0.pkg"
+    assert pkg.name == "HomeworkHelperRemote_dev.12.pkg"
     assert build.create_pkgbuild_command(app, pkg) == [
         "pkgbuild",
         "--component",
@@ -214,7 +194,7 @@ def test_macos_codesign_identity_defaults_to_local_personal_identity():
 
 
 def test_macos_app_bundle_command_passes_codesign_identity():
-    info = build.make_version_info("macos-client", _config(), git_hash="abcdef0", dirty=False)
+    info = build.make_policy_version_info(BuildVersion("client", "dev.12", "a" * 40, "1.0.0"))
     command = build.create_macos_app_bundle_command(
         info,
         Path("dist/macos"),
@@ -224,7 +204,10 @@ def test_macos_app_bundle_command_passes_codesign_identity():
     assert command[:3] == [sys.executable, str(build.MACOS_PACKAGE_TOOL), "--output-dir"]
     assert "--codesign-identity" in command
     assert command[command.index("--codesign-identity") + 1] == "HomeworkHelperRemote Local Code Signing"
-    assert "--dirty" not in command
+    assert command[command.index("--version") + 1] == "1.0.0"
+    assert command[command.index("--build") + 1] == "1.0.0"
+    assert command[command.index("--release-id") + 1] == "dev.12"
+    assert command[command.index("--git-hash") + 1] == "a" * 40
 
 
 def test_macos_local_codesign_helper_uses_ephemeral_self_signed_identity():
@@ -244,79 +227,67 @@ def test_parallel_jobs_are_bounded_by_available_cpu():
     assert build.determine_parallel_jobs(64) == 12
 
 
-def test_version_config_is_local_state_and_example_removed():
-    assert not Path("build.version.example.json").exists()
-
-    gitignore = Path(".gitignore").read_text(encoding="utf-8")
-    assert "build.version.json" in gitignore
-
-    config_path = Path("build.version.json")
-    if not config_path.exists():
-        return
-
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    assert config["schema"] == 1
-    assert {"windows-host", "macos-client"} <= set(config["targets"])
-    for payload in config["targets"].values():
-        assert isinstance(payload["version"], str)
-        assert isinstance(payload["build"], int)
-        assert payload["build"] >= 1
+@pytest.mark.parametrize(
+    "option", [["--no-gui"], ["--bump", "minor"], ["--version-file", "other.json"], ["--publish-release"]],
+)
+def test_builder_rejects_removed_options_before_any_build(option):
+    with pytest.raises(SystemExit) as error:
+        build.main(option)
+    assert error.value.code == 2
 
 
-def test_version_bump_policy_updates_only_candidate_config():
-    config = _config()
+@pytest.mark.skipif(sys.platform != "darwin", reason="Version ledger writes are Mac only")
+def test_macos_cli_uses_committed_client_version_for_dev_and_release(tmp_path, monkeypatch):
+    # All Git refs and the ledger live in this test's disposable repository.
+    def git(*args):
+        return subprocess.run(
+            ["git", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false",
+             "-c", f"core.hooksPath={tmp_path / 'empty-hooks'}", *args],
+            cwd=tmp_path, text=True, capture_output=True, check=True,
+        ).stdout.strip()
 
-    build_bump = build.bump_target_version_config(config, "windows-host", "build")
-    assert build_bump["targets"]["windows-host"] == {"version": "1.1.9", "build": 12}
-    assert config["targets"]["windows-host"] == {"version": "1.1.9", "build": 11}
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "Isolated Test")
+    git("config", "user.email", "test@example.invalid")
+    (tmp_path / ".gitignore").write_text("version.ledger.json\nversion.ledger.lock\n")
+    git("add", ".gitignore")
+    git("commit", "-qm", "start")
+    git("tag", "H/v1.6.0")
+    git("tag", "C/v1.0.0")
+    assert build.load_macos_version_info(tmp_path)["version"] == "1.0.0"
 
-    patch_bump = build.bump_target_version_config(config, "windows-host", "patch")
-    assert patch_bump["targets"]["windows-host"] == {"version": "1.1.10", "build": 1}
+    git("switch", "-qc", "client-work")
+    source = tmp_path / "clients/macos/Sources/client.swift"
+    source.parent.mkdir(parents=True)
+    source.write_text("let sample = 1")
+    git("add", "clients")
+    git("commit", "-qm", "client change")
+    dev = build.load_macos_version_info(tmp_path)
+    assert build.macos_pkg_path(dev).name == "HomeworkHelperRemote_dev.1.pkg"
+    assert build.load_macos_version_info(tmp_path) == dev
 
-    minor_bump = build.bump_target_version_config(config, "windows-host", "minor")
-    assert minor_bump["targets"]["windows-host"] == {"version": "1.2.0", "build": 1}
+    source.write_text("let sample = 2")
+    with pytest.raises(build.BuildConfigError, match="커밋되지 않은 변경"):
+        build.load_macos_version_info(tmp_path)
+    git("restore", "clients")
+    git("switch", "-q", "main")
+    git("merge", "--no-ff", "-qm", "merge fixture", "-m", "HomeworkHelper-Release: PR #1 client minor", "client-work")
+    merge = git("rev-parse", "HEAD")
+    VersionLedger(tmp_path).record_main(merge, event="minor", expected_product="client")
+    git("switch", "--detach", "-q", merge)
+    release = build.load_macos_version_info(tmp_path)
+    assert build.macos_pkg_path(release).name == "HomeworkHelperRemote_v1.1.0.pkg"
 
-    major_bump = build.bump_target_version_config(config, "windows-host", "major")
-    assert major_bump["targets"]["windows-host"] == {"version": "2.0.0", "build": 1}
+    monkeypatch.setattr(build, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(build.platform, "system", lambda: "Darwin")
+    compiled = []
+    def build_fixture(_console, info, **_options):
+        compiled.append(info)
+        return True
 
-
-@pytest.mark.parametrize("target", ["windows-host", "macos-client"])
-def test_gui_version_selector_is_shared_by_windows_and_macos_targets(monkeypatch, target):
-    calls = []
-
-    class FakeSelector:
-        def __init__(self, target_name, current_payload, candidate_payload, _theme, font_family):
-            calls.append(
-                {
-                    "target": target_name,
-                    "current": current_payload,
-                    "candidate": candidate_payload,
-                    "font": font_family,
-                }
-            )
-
-        def show(self):
-            return {"version": "9.8.7", "build": 42}
-
-    monkeypatch.setattr(build, "tk", object())
-    monkeypatch.setattr(build, "load_custom_font", lambda: "TestFont")
-    monkeypatch.setattr(build, "is_dark_mode", lambda: False)
-    monkeypatch.setattr(build, "BuildVersionSelectorGUI", FakeSelector)
-
-    candidate = build.create_candidate_version_config(target, _config(), bump="build", no_gui=False)
-
-    assert candidate["targets"][target] == {"version": "9.8.7", "build": 42}
-    assert calls == [
-        {
-            "target": target,
-            "current": build.target_version_payload(_config(), target),
-            "candidate": build.target_version_payload(
-                build.bump_target_version_config(_config(), target, "build"),
-                target,
-            ),
-            "font": "TestFont",
-        }
-    ]
+    monkeypatch.setattr(build, "run_build_process", build_fixture)
+    assert build.main([]) == 0
+    assert compiled == [release]
 
 
 def test_installer_shutdown_policy_requests_normal_quit_after_prerequisites():
@@ -402,7 +373,7 @@ def test_release_archive_moves_root_artifacts_into_target_type_buckets(tmp_path,
         (release_dir / filename).write_text("artifact", encoding="utf-8")
     (release_dir / "notes.txt").write_text("keep", encoding="utf-8")
 
-    build.archive_old_files(_DummyGui(), {"target": "windows-host"}, prune_archives=False)
+    build.archive_old_files(_DummyGui(), prune_archives=False)
 
     archived = sorted(path.relative_to(archives_dir).as_posix() for path in archives_dir.rglob("*") if path.is_file())
     assert len(archived) == 3
@@ -424,6 +395,33 @@ def test_release_archive_moves_root_artifacts_into_target_type_buckets(tmp_path,
     assert (release_dir / "notes.txt").exists()
 
 
+def test_rebuilding_same_version_on_another_day_keeps_one_archive_per_package(tmp_path, monkeypatch):
+    class Clock(datetime):
+        day = 1
+
+        @classmethod
+        def now(cls):
+            return datetime(2026, 1, cls.day)
+
+    monkeypatch.setattr(build, "datetime", Clock)
+    release = tmp_path / "release"
+    release.mkdir()
+    archive = release / "archives"
+    monkeypatch.setattr(build, "RELEASE_DIR", release)
+    monkeypatch.setattr(build, "ARCHIVES_DIR", archive)
+    filenames = ["HomeworkHelper_dev.12_Setup.exe", "HomeworkHelper_dev.12_Portable.zip", "HomeworkHelperRemote_v1.0.0.pkg"]
+    for day in (1, 2):
+        Clock.day = day
+        for filename in filenames:
+            (release / filename).write_text(str(day), encoding="utf-8")
+        build.archive_old_files(_DummyGui(), prune_archives=False)
+
+    for filename in filenames:
+        found = list(archive.rglob(filename))
+        assert len(found) == 1
+        assert found[0].read_text(encoding="utf-8") == "2"
+
+
 def test_sha256_file_reports_file_digest(tmp_path):
     target = tmp_path / "artifact.bin"
     target.write_bytes(b"homework-helper")
@@ -434,17 +432,16 @@ def test_sha256_file_reports_file_digest(tmp_path):
 def test_macos_packager_plist_accepts_build_versions_and_release_metadata():
     plist = package_macos_remote_app._info_plist(
         "1.2.3",
-        "45",
-        release_id="v1.2.3_b45_gabcdef0_dirty",
-        git_hash="abcdef0",
-        dirty=True,
+        "1.2.3",
+        release_id="dev.45",
+        git_hash="a" * 40,
     )
 
     assert plist["CFBundleShortVersionString"] == "1.2.3"
-    assert plist["CFBundleVersion"] == "45"
-    assert plist["HHRemoteReleaseID"] == "v1.2.3_b45_gabcdef0_dirty"
-    assert plist["HHRemoteGitHash"] == "abcdef0"
-    assert plist["HHRemoteGitDirty"] is True
+    assert plist["CFBundleVersion"] == "1.2.3"
+    assert plist["HHRemoteReleaseID"] == "dev.45"
+    assert plist["HHRemoteGitHash"] == "a" * 40
+    assert plist["HHRemoteGitDirty"] is False
     assert plist["CFBundlePackageType"] == "APPL"
     assert plist["LSMinimumSystemVersion"] == "26.0"
     assert plist["NSHighResolutionCapable"] is True

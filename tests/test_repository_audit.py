@@ -45,6 +45,8 @@ def test_artifact_suffix_never_means_reusable_or_approved_for_preservation():
         assert audit.category(Path("artifacts") / name, False) == "work_artifact"
     assert audit.category(Path("tests/.pytest_cache/README.md"), False) == "generated_build_or_cache"
     assert audit.category(Path("build.version.json"), False) == "local_build_state"
+    assert audit.category(Path("version.ledger.json"), False) == "local_build_state"
+    assert audit.category(Path("version.ledger.lock"), False) == "local_build_state"
 
 
 def test_external_file_and_directory_links_are_recorded_without_loading_target(tmp_path):
