@@ -175,7 +175,7 @@ def snapshot(repo: Path, appdata: Path, install: Path) -> dict:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("inspect", "logs", "preflight", "release", "payload", "backup", "build"))
+    p.add_argument("command", choices=("inspect", "logs", "preflight", "release", "payload", "backup", "build", "prepare-runtime"))
     p.add_argument("--repo", type=Path, required=True)
     p.add_argument("--appdata", type=Path, required=True)
     p.add_argument("--install", type=Path, required=True)
@@ -193,6 +193,14 @@ def main(argv=None) -> int:
         from build import load_version_config, make_version_info
         version = make_version_info("windows-host", load_version_config(args.repo / "build.version.json"))
         result = {"release_id": version["string"]}
+    elif args.command == "prepare-runtime":
+        import subprocess
+        log = args.repo / "artifacts/media-qa-requirements.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("wb") as stream:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
+                           cwd=args.repo, stdout=stream, stderr=subprocess.STDOUT, check=True)
+        result = {"requirements_log": str(log)}
     elif args.command == "build":
         import subprocess
         log = args.repo / "artifacts/host-operations-build.log"

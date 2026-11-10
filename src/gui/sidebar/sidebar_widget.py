@@ -1,32 +1,38 @@
-"""게임 실행 중 우측에서 슬라이드인하는 사이드바 위젯.
-
-QPropertyAnimation 으로 부드러운 슬라이드 효과를 제공하며,
-실행 중인 게임별 클러스터(아이콘/플레이타임/종료버튼)와
-전체 볼륨 조절 섹션을 포함합니다.
-"""
+"""등록 게임·음량과 하단 미디어 갤러리를 하나로 보여주는 Acrylic 사이드바."""
 import logging
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+import psutil
 from PySide6.QtCore import (
-    Qt, QObject, QPropertyAnimation, QEasingCurve,
-    QRect, QTimer, QRunnable, QThreadPool, Signal, Slot,
+    Qt, QObject, QPropertyAnimation, QEasingCurve, QSize,
+    QEvent, QPointF, QRect, QTimer, QRunnable, QThreadPool, QSignalBlocker, Signal, Slot,
 )
-from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
+from PySide6.QtGui import QScreen, QColor, QFontMetricsF, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QStyle, QVBoxLayout, QWidget,
+    QLayout, QPushButton, QScrollArea, QSizePolicy, QStyle, QTabBar, QVBoxLayout, QWidget,
 )
 
 from src.data.data_models import ManagedProcess
+from src.core.game_focus import WindowsGameFocusNative
 from src.core.process_monitor import terminate_managed_process
+from src.core.launcher import Launcher
+from src.core.launch_target import resolve_launch_args
 from src.utils import audio_control
-from src.utils.windows import get_visible_taskbar_work_area
+from src.utils.windows import get_visible_taskbar_work_area, focus_managed_process_window
+from src.gui.sidebar.controls import SidebarClockFace, SidebarDivider, VolumeDial
+from src.gui.sidebar.media_panel import MediaCenterPanel
+from src.gui.sidebar.win32_effects import ACRYLIC_TINT
 from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
-from src.gui.widgets_style import apply_sidebar_widgets_style
+from src.gui.widgets_style import (
+    CapsuleProgressBar, GameIconLabel, apply_sidebar_widgets_style,
+    calculate_game_progress, progress_bar_format,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +43,13 @@ _ANIM_DURATION_MS = 220
 # 자동 숨김 타이머 기본값 (ms) — SidebarController 가 override 함
 _DEFAULT_AUTO_HIDE_MS = 3000
 
-# 스크린샷/녹화 썸네일 크기 (px)
-_THUMB_W = 76
-_THUMB_H = 57
+# 갤러리 셀은 가용 너비에서 계산한다. 디코딩 해상도는 배치 치수와 독립이다.
 _THUMB_COLS = 3
-_THUMB_MAX_CELLS = _THUMB_COLS * 3  # 최대 9셀 (마지막 1셀은 폴더 버튼)
+_THUMB_MAX_ROWS = 2
 
 # 고화질 썸네일 로드 크기 (hover 확대 시 선명도 확보)
-_THUMB_HIRES_W = _THUMB_W * 2   # 152px
-_THUMB_HIRES_H = _THUMB_H * 2   # 114px
+_THUMB_HIRES_W = 152
+_THUMB_HIRES_H = 114
 
 
 class _ThumbnailLoadSignals(QObject):
@@ -54,6 +58,74 @@ class _ThumbnailLoadSignals(QObject):
 
 class _ProcessStopSignals(QObject):
     completed = Signal()
+
+
+class _ProcessLaunchTask(QRunnable):
+    """화면에서 확정한 실행 정책을 소비하며 운영 앱 종료 후 대기 실행을 취소한다."""
+
+    def __init__(self, process_id, target, mode, args, run_as_admin, shutdown_event):
+        super().__init__()
+        self._process_id, self._target, self._mode = process_id, target, mode
+        self._args, self._run_as_admin = args, run_as_admin
+        self._shutdown_event = shutdown_event
+
+    def run(self) -> None:
+        launcher = Launcher(run_as_admin=self._run_as_admin)
+        com = None
+        try:
+            if os.name == "nt":
+                import pythoncom
+                pythoncom.CoInitialize()
+                com = pythoncom
+            accepted = launcher.launch_process(
+                self._target, args=self._args, managed_process_id=self._process_id,
+                launch_mode=self._mode, cancelled=self._shutdown_event.is_set,
+            )
+            log = logger.info if accepted else logger.warning
+            log("사이드바 게임 실행 요청: 등록=%s 모드=%s 수락=%s 결과=%s",
+                self._process_id, self._mode, accepted, launcher.last_error or "실행 요청 수락")
+        except Exception:
+            logger.exception("사이드바 게임 실행 요청 실패: 등록=%s", self._process_id)
+        finally:
+            if com is not None:
+                com.CoUninitialize()
+
+
+class _IconLoadSignals(QObject):
+    loaded = Signal(str, str, object)
+
+
+class _IconLoadTask(QRunnable):
+    """기존 아이콘 캐시를 공유하고 작업 스레드에는 QImage만 생성한다."""
+
+    def __init__(self, process_id: str, path: str, signals: _IconLoadSignals):
+        super().__init__()
+        self._process_id, self._path, self._signals = process_id, path, signals
+
+    def run(self) -> None:
+        image = None
+        com = None
+        try:
+            if os.name == "nt":
+                import pythoncom
+                pythoncom.CoInitialize()
+                com = pythoncom
+            from src.api.dashboard.icons import get_icon_for_size, extract_icon_from_exe, safe_icon_cache_key
+            key = safe_icon_cache_key(self._process_id)
+            path = get_icon_for_size(key, 48)
+            if path is None and os.path.isfile(self._path):
+                extract_icon_from_exe(self._path, key)
+                path = get_icon_for_size(key, 48)
+            if path is not None:
+                candidate = QImage(str(path))
+                if not candidate.isNull():
+                    image = candidate
+        except Exception:
+            logger.debug("게임 아이콘 로드 실패: %s", self._path, exc_info=True)
+        finally:
+            if com is not None:
+                com.CoUninitialize()
+        self._signals.loaded.emit(self._process_id, self._path, image)
 
 
 class _ProcessStopTask(QRunnable):
@@ -296,8 +368,6 @@ class _HoverThumbCell(QLabel):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self._base_w = base_w
-        self._base_h = base_h
         self._on_click = on_click
         self._on_right_click = on_right_click
         self._hi_pixmap: Optional[QPixmap] = None
@@ -312,13 +382,18 @@ class _HoverThumbCell(QLabel):
         """고화질 픽셀맵을 저장하고 기본 크기로 표시합니다."""
         self._hi_pixmap = pixmap
         lo = pixmap.scaled(
-            self._base_w, self._base_h,
+            self.width(), self.height(),
             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
             Qt.TransformationMode.SmoothTransformation,
         )
-        x_off = max(0, (lo.width() - self._base_w) // 2)
-        y_off = max(0, (lo.height() - self._base_h) // 2)
-        self.setPixmap(lo.copy(x_off, y_off, self._base_w, self._base_h))
+        x_off = max(0, (lo.width() - self.width()) // 2)
+        y_off = max(0, (lo.height() - self.height()) // 2)
+        self.setPixmap(lo.copy(x_off, y_off, self.width(), self.height()))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._hi_pixmap is not None:
+            self.set_hi_pixmap(self._hi_pixmap)
 
     def enterEvent(self, event) -> None:
         super().enterEvent(event)
@@ -336,60 +411,46 @@ class _HoverThumbCell(QLabel):
         super().mousePressEvent(event)
 
 
-def _tint_icon_white(icon) -> "QIcon":
-    """아이콘 픽셀을 흰색으로 틴팅합니다 (다크 배경 전용).
+class _GameNameLabel(QLabel):
+    """한 줄 안에서 실제 글자 윤곽을 가운데 맞추고 긴 이름은 가로로 맞춘다."""
 
-    devicePixelRatio 를 원본에서 그대로 복사해야 HiDPI 환경에서
-    논리 픽셀 크기가 보존됩니다.
-    """
-    from PySide6.QtGui import QPainter, QColor, QPixmap
-    from PySide6.QtCore import Qt as _Qt
-    pixmap = icon.pixmap(16, 16)
-    if pixmap.isNull():
-        return icon
-    result = QPixmap(pixmap.size())
-    result.setDevicePixelRatio(pixmap.devicePixelRatio())
-    result.fill(_Qt.GlobalColor.transparent)
-    painter = QPainter(result)
-    painter.drawPixmap(0, 0, pixmap)
-    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-    painter.fillRect(result.rect(), QColor("white"))
-    painter.end()
-    from PySide6.QtGui import QIcon
-    return QIcon(result)
+    def paintEvent(self, event) -> None:
+        text = self.text()
+        rect = self.contentsRect()
+        if not text or rect.isEmpty():
+            return
+        font = self.font()
+        metrics = QFontMetricsF(font, self)
+        bounds = metrics.tightBoundingRect(text)
+        if bounds.isEmpty():
+            return
+        left = min(0.0, bounds.left())
+        width = max(metrics.horizontalAdvance(text), bounds.right()) - left
+
+        painter = QPainter(self)
+        painter.setClipRect(rect)
+        painter.setFont(font)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.translate(rect.left(), rect.top() + rect.height() / 2)
+        painter.scale(min(1.0, rect.width() / width), min(1.0, rect.height() / bounds.height()))
+        painter.drawText(QPointF(-left, -bounds.center().y()), text)
 
 
-# 슬라이더 스타일
-_SLIDER_STYLE = """
-QSlider::groove:horizontal {
-    height: 4px;
-    background: rgba(255,255,255,28);
-    border-radius: 2px;
-}
-QSlider::sub-page:horizontal {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(100,160,255,200), stop:1 rgba(140,190,255,220));
-    border-radius: 2px;
-}
-QSlider::handle:horizontal {
-    background: rgba(220,230,255,240);
-    border: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 6px;
-    margin: -4px 0;
-}
-QSlider::handle:horizontal:hover {
-    background: white;
-}
-"""
+class _GameRowSurface(QPushButton):
+    """이름과 게이지를 포함하는 게임 창 전환 영역."""
+
+    def sizeHint(self) -> QSize:
+        return self.layout().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        return self.layout().minimumSize()
+
 
 class SidebarWidget(QWidget):
     """게임 오버레이 사이드바 위젯.
 
     화면 우측에서 슬라이드인하며, 포커스를 빼앗지 않습니다.
-    실행 중인 게임마다 클러스터(아이콘·이름, 플레이타임, 게임종료)를 표시하고,
-    하단에 전체 등록 게임 볼륨 조절 섹션을 배치합니다.
+    모든 등록 게임에 창 전환·실행/종료·음량을 한 행으로 표시합니다.
     """
 
     def __init__(
@@ -402,6 +463,11 @@ class SidebarWidget(QWidget):
         get_recording_elapsed: Optional[Callable[[], int]] = None,
         on_hidden: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
+        on_audio_change: Optional[Callable[..., bool]] = None,
+        audio_state: Optional[Callable] = None,
+        on_media_options: Optional[Callable] = None,
+        on_media_command: Optional[Callable] = None,
+        media_state: Optional[Callable] = None,
     ):
         super().__init__(
             parent,
@@ -416,13 +482,16 @@ class SidebarWidget(QWidget):
         self._reconnect_recording = reconnect_recording
         self._get_recording_elapsed = get_recording_elapsed
         self._on_hidden = on_hidden
+        self._on_audio_change = on_audio_change
+        self._audio_state = audio_state
+        self._on_media_options = on_media_options
+        self._on_media_command = on_media_command
+        self._media_state = media_state
         self._start_recording_callback: Optional[Callable[[], None]] = None
         self._rec_state = "obs_offline"
         self._rec_elapsed_sec = 0
         self._recording_output_dir: str = ""
 
-        # {process_id: (QLabel, start_timestamp)} — 플레이타임 레이블 트래킹
-        self._playtime_labels: dict = {}
         self._thumb_buttons: dict[str, _HoverThumbCell] = {}
         self._thumb_request_id = 0
         self._thumb_cache: dict[str, tuple[float, "QPixmap"]] = {}  # path → (mtime, pixmap)
@@ -439,16 +508,14 @@ class SidebarWidget(QWidget):
         # 내부 프레임 (반투명 배경 + 무테두리 서랍)
         self._frame = QFrame(self)
         self._frame.setObjectName("SidebarFrame")
-        self._frame.setStyleSheet("""
-            QFrame#SidebarFrame {
-                background-color: rgba(12, 12, 16, 240);
-                border: none;
-                border-radius: 0px;
-            }
-        """)
+        self._blur_applied = False
+        self._set_frame_background()
         frame_layout = QVBoxLayout(self._frame)
-        frame_layout.setContentsMargins(12, 16, 12, 12)
-        frame_layout.setSpacing(8)
+        # 부모 창보다 큰 최소 높이를 강제하지 않고 가운데 스크롤이 부족한 공간을 맡는다.
+        frame_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        padding = round(self.width() * 0.043)
+        frame_layout.setContentsMargins(padding, padding, padding, padding)
+        frame_layout.setSpacing(round(self.width() * 0.024))
 
         self._build_ui(frame_layout)
         apply_sidebar_widgets_style(self, dark=True)
@@ -457,20 +524,23 @@ class SidebarWidget(QWidget):
         self._anim = QPropertyAnimation(self, b"geometry")
         self._anim.setDuration(_ANIM_DURATION_MS)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.finished.connect(self._on_slide_finished)
 
         # 자동 숨김 타이머
         self._auto_hide_timer = QTimer(self)
         self._auto_hide_timer.setSingleShot(True)
         self._auto_hide_timer.timeout.connect(self.slide_out)
 
-        # 플레이 시간 갱신 타이머 (1초)
-        self._playtime_timer = QTimer(self)
-        self._playtime_timer.setInterval(1000)
-        self._playtime_timer.timeout.connect(self._refresh_playtime)
+        # 표시 중에만 게임 자원과 현재 창을 갱신한다.
+        self._game_rows_timer = QTimer(self)
+        self._game_rows_timer.setInterval(1000)
+        self._game_rows_timer.timeout.connect(self._refresh_game_row_displays)
 
-        # 현재 시간 갱신 타이머 (1초)
+        # 실제 시각의 0.5초 경계에 맞춰 기존 시계 타이머를 다시 예약한다.
         self._clock_timer = QTimer(self)
-        self._clock_timer.setInterval(1000)
+        self._clock_timer.setSingleShot(True)
+        self._clock_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._clock_timer.setInterval(500)
         self._clock_timer.timeout.connect(self._update_clock)
 
         # 녹화 상태 갱신 타이머 (1초)
@@ -493,6 +563,8 @@ class SidebarWidget(QWidget):
         self._thumb_pool.setMaxThreadCount(2)
         self._thumb_signals = _ThumbnailLoadSignals()
         self._thumb_signals.loaded.connect(self._apply_thumbnail_result)
+        self._icon_signals = _IconLoadSignals()
+        self._icon_signals.loaded.connect(self._apply_game_icon)
 
         # 녹화 썸네일 디코딩용 스레드풀 (별도)
         self._rec_thumb_pool = QThreadPool()
@@ -506,29 +578,34 @@ class SidebarWidget(QWidget):
         # Win32 외부 클릭 감지 상태
         self._lbutton_was_down: bool = False
 
-        # Win32 블러 효과 (최초 show 후 적용)
-        self._blur_applied = False
-
     # ------------------------------------------------------------------
     # UI 구성
     # ------------------------------------------------------------------
 
     def _build_ui(self, layout: QVBoxLayout) -> None:
         """사이드바 내부 위젯을 구성합니다."""
-        # 메인 스크롤 영역 (세로 스크롤 허용, 가로 스크롤 없음)
+        gap = round(self.width() * 0.024)
+        # 시계와 닫기는 휠로 내용이 이동해도 화면 양 끝에 남는다.
+        self._clock_widget = QWidget()
+        clock_layout = QVBoxLayout(self._clock_widget)
+        clock_layout.setContentsMargins(0, round(self.width() * 0.012), 0, gap)
+        clock_layout.setSpacing(round(self.width() * 0.012))
+        self._clock_face = SidebarClockFace(self.width())
+        self._clock_date_label = QLabel()
+        self._clock_date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._clock_date_label.setProperty("hhRole", "sidebarSecondary")
+        clock_layout.addWidget(self._clock_face)
+        clock_layout.addWidget(self._clock_date_label)
+        layout.addWidget(self._clock_widget)
+
+        # 내용이 넘치면 휠로 이동하되 스크롤바와 예약 공간은 만들지 않는다.
         self._main_scroll = QScrollArea()
         self._main_scroll.setWidgetResizable(True)
         self._main_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._main_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._main_scroll.setStyleSheet("""
             QScrollArea { border: none; background: transparent; }
             QWidget#scroll_content { background: transparent; }
-            QScrollBar:vertical {
-                width: 4px; background: transparent; border-radius: 2px;
-            }
-            QScrollBar::handle:vertical {
-                background: rgba(255,255,255,60); border-radius: 2px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         """)
 
         self._scroll_content = QWidget()
@@ -537,58 +614,88 @@ class SidebarWidget(QWidget):
         self._scroll_layout.setContentsMargins(0, 0, 0, 0)
         self._scroll_layout.setSpacing(0)
 
-        # 현재 시간 섹션 (최상단)
-        self._clock_widget = QWidget()
-        self._clock_widget.setStyleSheet("background: transparent;")
-        clock_layout = QVBoxLayout(self._clock_widget)
-        clock_layout.setContentsMargins(0, 0, 0, 8)
-        clock_layout.setSpacing(2)
-        self._clock_label = QLabel()
-        self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._clock_label.setStyleSheet("color: rgba(220,230,255,240); font-size: 28px; font-weight: 300; letter-spacing: 2px; background: transparent;")
-        clock_layout.addWidget(self._clock_label)
-        self._scroll_layout.insertWidget(0, self._clock_widget)
+        self._top_section = QWidget()
+        top_layout = QVBoxLayout(self._top_section)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(gap)
 
-        # 실행 중 게임 클러스터 영역 (동적으로 채워짐)
-        self._active_clusters_layout = QVBoxLayout()
-        self._active_clusters_layout.setSpacing(10)
-        self._scroll_layout.addLayout(self._active_clusters_layout)
+        top_layout.addWidget(self._section_divider())
+        heading = QHBoxLayout()
+        row_padding = round(self.width() * 0.015)
+        heading.setContentsMargins(0, 0, row_padding, 0)
+        heading.setSpacing(round(self.width() * 0.02))
+        heading.addWidget(self._media_icon("game"))
+        title = QLabel("게임")
+        title.setProperty("hhRole", "sidebarSectionTitle")
+        heading.addWidget(title)
+        heading.addStretch()
+        self._volume_heading = QLabel("음량")
+        self._volume_heading.setProperty("hhRole", "sidebarSecondary")
+        self._volume_heading.setFixedWidth(round(self.width() * 0.114))
+        self._volume_heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        heading.addWidget(self._volume_heading)
+        top_layout.addLayout(heading)
+        self._games_list_layout = QVBoxLayout()
+        self._games_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._games_list_layout.setSpacing(round(self.width() * 0.01))
+        top_layout.addLayout(self._games_list_layout)
+        self._scroll_layout.addWidget(self._top_section)
+        self._scroll_layout.addStretch(1)
 
-        # 볼륨 섹션 (항상 하단에 고정)
-        self._vol_section = QWidget()
-        vol_section_layout = QVBoxLayout(self._vol_section)
-        vol_section_layout.setContentsMargins(0, 10, 0, 0)
-        vol_section_layout.setSpacing(4)
-
-        vol_title = QLabel("볼륨")
-        vol_title.setStyleSheet("color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;")
-        vol_section_layout.addWidget(vol_title)
-
-        self._vol_list_container = QWidget()
-        self._vol_list_layout = QVBoxLayout(self._vol_list_container)
-        self._vol_list_layout.setContentsMargins(0, 0, 0, 0)
-        self._vol_list_layout.setSpacing(4)
-        vol_section_layout.addWidget(self._vol_list_container)
-
-        self._scroll_layout.addWidget(self._vol_section)
+        self._media_section = QWidget()
+        media_layout = QVBoxLayout(self._media_section)
+        media_layout.setContentsMargins(0, gap, 0, 0)
+        media_layout.setSpacing(gap)
+        media_layout.addWidget(self._section_divider())
+        self._media_center_panel = MediaCenterPanel(
+            self.width(), on_options=self._on_media_options,
+            on_command=self._on_media_command, parent=self._media_section,
+        )
+        media_layout.addWidget(self._media_center_panel)
+        media_layout.addWidget(self._section_divider())
 
         # 스크린샷 섹션
         self._screenshot_section = self._build_screenshot_section()
-        self._scroll_layout.addWidget(self._screenshot_section)
+        media_layout.addWidget(self._screenshot_section)
 
         # 녹화 섹션
         self._recording_section = self._build_recording_section()
-        self._scroll_layout.addWidget(self._recording_section)
-        self._scroll_layout.addStretch(1)
+        media_layout.addWidget(self._recording_section)
+
+        # 파일 종류만 전환한다. 촬영·녹화 조작부는 선택과 독립이다.
+        self._gallery_tabs = QTabBar()
+        self._gallery_tabs.setExpanding(True)
+        self._gallery_tabs.setUsesScrollButtons(False)
+        self._gallery_tabs.setDrawBase(False)
+        self._gallery_tabs.currentChanged.connect(self._refresh_gallery)
+        media_layout.addWidget(self._gallery_tabs)
+
+        self._gallery = QWidget()
+        self._gallery.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._gallery_layout = QGridLayout(self._gallery)
+        self._gallery_layout.setContentsMargins(0, 0, 0, 0)
+        self._gallery_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # 현재 행의 최소 크기가 다음 높이 감소를 막지 않게 한다.
+        self._gallery_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self._gallery.setFixedHeight(0)
+        self._gallery.installEventFilter(self)
+        media_layout.addWidget(self._gallery)
+        self._scroll_layout.addWidget(self._media_section)
+        self._sync_gallery_sources()
 
         self._main_scroll.setWidget(self._scroll_content)
+        self._main_scroll.viewport().installEventFilter(self)
+        self._scroll_content.installEventFilter(self)
         layout.addWidget(self._main_scroll, 1)
 
         # 닫기 버튼 (스크롤 영역 밖, 항상 하단 고정)
-        close_btn = QPushButton("닫기")
-        close_btn.setFixedHeight(28)
-        close_btn.clicked.connect(self.slide_out)
-        layout.addWidget(close_btn)
+        self._close_btn = QPushButton("닫기")
+        self._close_btn.setIcon(self._action_icon("close"))
+        self._close_btn.clicked.connect(self.slide_out)
+        layout.addWidget(self._close_btn)
+
+    def _section_divider(self) -> SidebarDivider:
+        return SidebarDivider(self.width())
 
     # ------------------------------------------------------------------
     # 공개 API
@@ -608,14 +715,47 @@ class SidebarWidget(QWidget):
         self._auto_hide_ms = ms
 
     def refresh_content(self) -> None:
-        """게임 클러스터와 볼륨 목록을 모두 갱신합니다."""
+        """등록 게임과 기존 미디어 투영을 갱신하며 실행 상태를 만들어 쓰지 않는다."""
         self._update_clock()
-        self._refresh_active_sections()
-        self._refresh_volumes_list()
+        self._refresh_games()
         self._refresh_screenshot_section()
-        self._refresh_screenshot_thumbnails()
         self._refresh_recording_section()
-        self._refresh_recording_thumbnails()
+        self._refresh_gallery()
+        if self._media_state is not None:
+            self.update_media_state(self._media_state())
+
+    def refresh_game_rows(self) -> None:
+        """열려 있는 목록을 감시가 확인한 실행 변경에 맞춰 갱신한다."""
+        if self.isVisible():
+            self._refresh_games()
+
+    def update_media_state(self, snapshot) -> None:
+        """관측을 투영할 뿐 시작·설정 변경·오디오 native 조회를 수행하지 않는다."""
+        self._media_center_panel.update_snapshot(snapshot)
+        if snapshot is None or not self.isVisible():
+            return
+        observations = {item.target.process_id: item for item in snapshot.game_audio}
+        processes = {process.id: process for process in self._data_manager.managed_processes}
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            process_id = row.property("processId")
+            process = processes.get(process_id)
+            dial = row.findChild(VolumeDial)
+            observation = observations.get(process_id)
+            if process is None or dial is None:
+                continue
+            with QSignalBlocker(dial):
+                # 자신의 휠 입력을 worker의 이전 관측값으로 되감지 않는다.
+                pending = self._volume_save_timers.get(process_id)
+                if (observation is not None and observation.available
+                        and observation.volume is not None
+                        and not (pending is not None and pending.isActive())):
+                    dial.setValue(round(observation.volume * 100 / 5) * 5)
+                dial.setChecked(process.default_muted)
+            dial._describe_value()
+            dial.setToolTip("백그라운드 자동 음소거 · 클릭은 사용자 음소거 설정 변경"
+                            if observation is not None and observation.policy_muted
+                            else "휠로 5% 조절 · 클릭으로 음소거")
 
     def slide_in(self) -> None:
         """사이드바를 화면 우측에서 슬라이드인합니다."""
@@ -638,7 +778,7 @@ class SidebarWidget(QWidget):
 
         self._is_shown = True
         self.refresh_content()
-        self._playtime_timer.start()
+        self._game_rows_timer.start()
         self._clock_timer.start()
         self._cursor_poll_timer.start()
         self._rec_timer.start()
@@ -652,7 +792,8 @@ class SidebarWidget(QWidget):
             return
 
         self._auto_hide_timer.stop()
-        self._playtime_timer.stop()
+        self._media_center_panel.close_options()
+        self._game_rows_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
         self._rec_timer.stop()
@@ -661,12 +802,6 @@ class SidebarWidget(QWidget):
         end = QRect(geo.x() + _SIDEBAR_WIDTH, geo.y(), geo.width(), geo.height())
         self._anim.setStartValue(geo)
         self._anim.setEndValue(end)
-        # 중복 연결 방지
-        try:
-            self._anim.finished.disconnect(self._on_slide_out_finished)
-        except (RuntimeError, TypeError):
-            pass
-        self._anim.finished.connect(self._on_slide_out_finished)
         self._anim.start()
 
         self._is_shown = False
@@ -674,13 +809,17 @@ class SidebarWidget(QWidget):
 
     def cleanup(self, deadline_ms: int = 2000) -> bool:
         """타이머와 애니메이션을 정리합니다."""
+        self._media_center_panel.close_options()
+        self._gallery.removeEventFilter(self)
+        self._main_scroll.viewport().removeEventFilter(self)
+        self._scroll_content.removeEventFilter(self)
         for timer in self._volume_save_timers.values():
             if timer.isActive():
                 timer.stop()
                 timer.timeout.emit()
         self._volume_save_timers.clear()
         self._auto_hide_timer.stop()
-        self._playtime_timer.stop()
+        self._game_rows_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
         self._rec_timer.stop()
@@ -688,6 +827,7 @@ class SidebarWidget(QWidget):
         for signals, receiver in (
             (self._thumb_signals, self._apply_thumbnail_result),
             (self._rec_thumb_signals, self._apply_rec_thumbnail_result),
+            (self._icon_signals, self._apply_game_icon),
         ):
             try:
                 signals.loaded.disconnect(receiver)
@@ -711,115 +851,211 @@ class SidebarWidget(QWidget):
         super().resizeEvent(event)
         self._frame.setGeometry(0, 0, self.width(), self.height())
 
+    def eventFilter(self, watched, event) -> bool:
+        if watched is getattr(self, "_gallery", None) and event.type() == QEvent.Type.Resize:
+            self._layout_gallery()
+        elif (watched is self._main_scroll.viewport() and event.type() == QEvent.Type.Resize
+              or watched is self._scroll_content and event.type() == QEvent.Type.LayoutRequest):
+            self._fit_gallery_height()
+        return super().eventFilter(watched, event)
+
+    def _fit_gallery_height(self) -> None:
+        """필수 내용 뒤의 가용 높이만 사용하며, 여유 공간은 상·하단 사이에 둔다."""
+        height = 0
+        viewport = self._main_scroll.viewport()
+        width = viewport.width()
+        _, cell_height, gap = self._gallery_cell_size(width)
+        media_controls_height = (self._media_section.sizeHint().height()
+                                 - self._gallery.minimumHeight())
+        gallery_minimum = cell_height if not self._gallery.isHidden() else 0
+        top_height = self._fit_game_row_padding(viewport.height() - media_controls_height - gallery_minimum)
+        if not self._gallery.isHidden() and self._gallery_layout.count():
+            available = viewport.height() - top_height - media_controls_height
+            available_rows = max(1, (available + gap) // (cell_height + gap))
+            cell_count = len(self._thumb_buttons) + len(self._rec_thumb_buttons) + 1
+            rows = min(_THUMB_MAX_ROWS, available_rows, (cell_count + _THUMB_COLS - 1) // _THUMB_COLS)
+            height = rows * cell_height + (rows - 1) * gap
+        if self._gallery.minimumHeight() != height:
+            self._gallery.setFixedHeight(height)
+
+    def _fit_game_row_padding(self, available_height: int) -> int:
+        """실제 콘텐츠가 필요한 높이를 유지하고 남는 높이만 게임 행 여백에 쓴다."""
+        top_height = self._top_section.layout().totalSizeHint().height()
+        row_layouts = []
+        for index in range(self._games_list_layout.count()):
+            layout = self._games_list_layout.itemAt(index).widget().layout()
+            if layout is not None:
+                row_layouts.append(layout)
+        if not row_layouts:
+            return top_height
+        content_height = top_height - sum(layout.contentsMargins().top() + layout.contentsMargins().bottom()
+                                          for layout in row_layouts)
+        edges = len(row_layouts) * 2
+        normal_padding = round(self.width() * 0.015)
+        padding = max(0, min(normal_padding, (available_height - content_height) // edges))
+        for layout in row_layouts:
+            margins = layout.contentsMargins()
+            if margins.top() != padding or margins.bottom() != padding:
+                layout.setContentsMargins(margins.left(), padding, margins.right(), padding)
+        return content_height + edges * padding
+
     # ------------------------------------------------------------------
     # 내부 메서드 — 레이아웃
     # ------------------------------------------------------------------
 
-    def _refresh_active_sections(self) -> None:
-        """실행 중인 게임 클러스터를 재구성합니다."""
-        self._playtime_labels.clear()
-        while self._active_clusters_layout.count() > 0:
-            item = self._active_clusters_layout.takeAt(0)
-            if item:
-                w = item.widget()
-                if w:
-                    w.deleteLater()
-
-        active_games = self._get_active_games()
-        for process, pid, start_ts in active_games:
-            cluster = self._make_game_cluster(process, pid, start_ts)
-            self._active_clusters_layout.addWidget(cluster)
-
-    def _get_active_games(self) -> list:
-        """실행 중인 게임을 시작 시간 순으로 반환합니다.
-
-        Returns:
-            list of (ManagedProcess, pid, start_timestamp)
-        """
+    def _refresh_games(self) -> None:
+        """기존 등록 목록과 한 번의 감시 스냅샷으로 게임·음량 행을 만든다."""
         from src.gui.main_window import MainWindow
-        if not MainWindow.INSTANCE:
-            return []
-        # cache는 GUI thread가 소유합니다. 버튼에는 PID와 생성 시각을 값으로 캡처합니다.
-        active = MainWindow.INSTANCE.process_monitor.active_monitored_processes
-        managed = getattr(self._data_manager, 'managed_processes', [])
-        managed_map = {p.id: p for p in managed}
+        while self._games_list_layout.count():
+            item = self._games_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+        window = MainWindow.INSTANCE
+        active = dict(window.process_monitor.active_monitored_processes) if window else {}
+        games = sorted(self._data_manager.managed_processes, key=ManagedProcess.name_sort_key)
+        settings = self._data_manager.global_settings
+        self._volume_heading.setVisible(getattr(settings, 'sidebar_volume_section_enabled', True))
+        for process in games:
+            self._games_list_layout.addWidget(self._make_game_row(process, active.get(process.id)))
+        if not games:
+            label = QLabel("등록된 게임 없음")
+            label.setProperty("hhRole", "sidebarSecondary")
+            self._games_list_layout.addWidget(label)
+        self._refresh_game_row_displays(active)
 
-        result = []
-        for proc_id, entry in active.items():
-            process = managed_map.get(proc_id)
-            if process:
-                pid = entry.get('pid')
-                start_ts = entry.get('start_time_approx') or 0.0
-                result.append((process, pid, start_ts))
-        result.sort(key=lambda x: x[2])
-        return result
+    def _make_game_row(self, process: ManagedProcess, runtime: Optional[dict]) -> QFrame:
+        running = runtime is not None
+        pid = runtime.get("pid") if running else None
+        created = float(runtime.get("start_time_approx") or 0.0) if running else 0.0
+        can_switch = bool(pid and created > 0)
+        padding = round(self.width() * 0.015)
+        action_size = round(self.width() * 0.114)
 
-    def _make_game_cluster(
-        self,
-        process: ManagedProcess,
-        pid: Optional[int],
-        start_ts: float,
-    ) -> QWidget:
-        """단일 실행 게임의 클러스터 위젯을 생성합니다.
+        row = QFrame(self._top_section)
+        row.setProperty("hhRole", "sidebarGameRow")
+        row.setProperty("hhRunning", running)
+        row.setProperty("hhFocused", False)
+        row.setProperty("processId", process.id)
+        row.setProperty("monitoringPath", process.monitoring_path)
+        row.setProperty("gamePid", pid)
+        row.setProperty("gameStartTime", created)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(padding, padding, padding, padding)
+        layout.setSpacing(padding)
 
-        구성: [아이콘 + 이름] / [오늘 플레이타임] / [게임 종료 버튼]
-        """
-        cluster = QFrame()
-        cluster.setProperty("hhRole", "sidebarGroup")
-        layout = QVBoxLayout(cluster)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(7)
+        surface = _GameRowSurface()
+        surface.setObjectName("gameRowSurface")
+        surface.setProperty("hhRole", "sidebarGameSurface")
+        surface.setProperty("hhRunning", running)
+        surface.setProperty("hhFocused", False)
+        surface.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        surface.setFocusPolicy(Qt.FocusPolicy.StrongFocus if can_switch else Qt.FocusPolicy.NoFocus)
+        surface.setEnabled(can_switch)
+        surface.setAccessibleName(f"{process.name} 창 바로가기" if can_switch else process.name)
+        if can_switch:
+            surface.setCursor(Qt.CursorShape.PointingHandCursor)
+            surface.clicked.connect(
+                lambda _=False, key=process.id, path=process.monitoring_path, target=pid, stamp=created:
+                self._focus_process(key, path, target, stamp))
+        surface_layout = QHBoxLayout(surface)
+        inset = round(self.width() * 0.007)
+        surface_layout.setContentsMargins(inset, inset, padding, inset)
+        surface_layout.setSpacing(padding)
+        layout.addWidget(surface, 1)
 
-        # ── 헤더: 아이콘 + 이름 ──
-        header = QHBoxLayout()
-        header.setSpacing(8)
+        icon_size = round(self.width() * 0.107)
+        icon = GameIconLabel(icon_size)
+        icon.setText(process.name[:1] or "?")
+        icon.setObjectName("gameIcon")
+        icon.setFixedSize(icon_size, icon_size)
+        icon.setProperty("hhRunning", running)
+        surface_layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._load_icon_async(process)
 
-        icon_label = QLabel()
-        icon_label.setFixedSize(40, 40)
-        icon_label.setStyleSheet("background: rgba(255,255,255,8); border: none; border-radius: 10px;")
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_label.setScaledContents(True)
-        header.addWidget(icon_label)
+        name_height = icon_size // 2
+        gauge_zone = icon_size - name_height
+        gauge_gap = round(gauge_zone * 4 / 15)
+        text = QVBoxLayout()
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(gauge_gap)
+        name = _GameNameLabel(" ".join(process.name.splitlines()))
+        name.setObjectName("gameName")
+        name.setProperty("hhRole", "sidebarGameName")
+        name.setTextFormat(Qt.TextFormat.PlainText)
+        name.setToolTip(process.name)
+        name.setAccessibleDescription(process.name)
+        name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        name.setFixedHeight(name_height)
+        text.addWidget(name)
 
-        name_label = QLabel(process.name)
-        name_label.setStyleSheet(
-            "color: rgba(235,240,255,240); font-weight: 600; font-size: 13px; background: transparent;"
-        )
-        name_label.setWordWrap(True)
-        name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        header.addWidget(name_label, 1)
-        layout.addLayout(header)
+        bar = CapsuleProgressBar()
+        bar.setObjectName("gameProgressBar")
+        bar.setAccessibleName(f"{process.name} 진행률")
+        bar.setTextVisible(True)
+        bar.setFixedHeight(gauge_zone - gauge_gap)
+        text.addWidget(bar)
+        surface_layout.addLayout(text, 1)
+        surface_layout.setAlignment(text, Qt.AlignmentFlag.AlignVCenter)
 
-        # 아이콘 비동기 로드
-        self._load_icon_async(process, icon_label)
+        for child in (icon, name, bar):
+            child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-        # ── 플레이타임 ──
-        gs = getattr(self._data_manager, 'global_settings', None)
-        playtime_enabled = getattr(gs, 'sidebar_playtime_enabled', True) if gs else True
-        playtime_prefix = getattr(gs, 'sidebar_playtime_prefix', '오늘 플레이 시간') if gs else '오늘 플레이 시간'
-        playtime_label = QLabel("0분")
-        playtime_label.setWordWrap(True)
-        playtime_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        playtime_label.setStyleSheet(
-            "color: rgba(160,180,220,200); font-size: 11px; background: transparent;"
-        )
-        playtime_label.setVisible(playtime_enabled)
-        layout.addWidget(playtime_label)
-        self._playtime_labels[process.id] = (playtime_label, start_ts, playtime_prefix)
-        self._update_playtime_label(playtime_label, start_ts, playtime_prefix)
+        action = QPushButton()
+        action.setObjectName("gameAction")
+        action.setProperty("hhRole", "sidebarIconAction")
+        action.setProperty("hhDanger", running)
+        action.setFixedSize(action_size, action_size)
+        action.setIcon(self._action_icon("stop" if running else "launch"))
+        action.setIconSize(QSize(round(self.width() * 0.046), round(self.width() * 0.046)))
+        action.setAccessibleName(f"{process.name} {'종료' if running else '실행'}")
+        action.setToolTip("게임 종료" if running else "게임 실행")
+        if running:
+            action.setEnabled(can_switch)
+            action.clicked.connect(
+                lambda _=False, key=process.id, path=process.monitoring_path, target=pid, stamp=created:
+                self._kill_process(key, path, target, stamp))
+        else:
+            action.clicked.connect(
+                lambda _=False, key=process.id, path=process.monitoring_path: self._launch_process(key, path))
+        layout.addWidget(action)
+        dial = self._make_volume_dial(process, pid)
+        layout.addWidget(dial)
+        # 부모 없는 조작부를 먼저 show하면 잠깐 독립 네이티브 창으로 나타난다.
+        dial.setVisible(getattr(self._data_manager.global_settings, 'sidebar_volume_section_enabled', True))
+        return row
 
-        # ── 게임 종료 버튼 ──
-        kill_btn = QPushButton("게임 종료")
-        kill_btn.setFixedHeight(28)
-        kill_btn.setProperty("hhRole", "danger")
-        kill_btn.setEnabled(pid is not None and start_ts > 0)
-        kill_btn.clicked.connect(
-            lambda _=False, process_id=process.id, path=process.monitoring_path,
-            target_pid=pid, created=start_ts: self._kill_process(process_id, path, target_pid, created)
-        )
-        layout.addWidget(kill_btn)
+    def _launch_process(self, process_id: str, monitoring_path: str) -> None:
+        from src.gui.main_window import MainWindow
+        window = MainWindow.INSTANCE
+        process = next((p for p in self._data_manager.managed_processes
+                        if p.id == process_id and p.monitoring_path == monitoring_path), None)
+        if (process is None or window is None or window._shutting_down
+                or window._beholder_restore_runtime_suspended):
+            logger.warning("사이드바 실행 취소: 등록 대상 또는 앱 준비 상태 변경 (등록=%s)", process_id)
+            return
+        target, mode = window._resolve_process_launch_target(process)
+        if not target:
+            logger.warning("사이드바 실행 경로 없음: 등록=%s", process_id)
+            return
+        args = resolve_launch_args(process, mode, target)
+        QThreadPool.globalInstance().start(_ProcessLaunchTask(
+            process_id, target, mode, args,
+            bool(self._data_manager.global_settings.run_as_admin), window._lifecycle_shutdown_event,
+        ))
+        self._reset_auto_hide()
 
-        return cluster
+    def _focus_process(self, process_id: str, monitoring_path: str, pid: Optional[int], create_time: float) -> None:
+        process = next((p for p in self._data_manager.managed_processes
+                        if p.id == process_id and p.monitoring_path == monitoring_path), None)
+        if process is None or pid is None or create_time <= 0:
+            logger.warning("사이드바 창 전환 취소: 등록 대상 또는 실행 정보 변경 (등록=%s)", process_id)
+            return
+        if focus_managed_process_window(pid, create_time, monitoring_path):
+            self.slide_out()
+        else:
+            logger.warning("사이드바 창 전환 실패: 등록=%s PID=%s", process_id, pid)
+            self._reset_auto_hide()
 
     def _kill_process(self, process_id: str, monitoring_path: str,
                       pid: Optional[int], create_time: float) -> None:
@@ -846,232 +1082,123 @@ class SidebarWidget(QWidget):
         # existing process monitor removes the game when it actually disappears.
         self._reset_auto_hide()
 
-    # ------------------------------------------------------------------
-    # 내부 메서드 — 플레이타임
-    # ------------------------------------------------------------------
+    def _foreground_game_identity(self, active: dict) -> Optional[tuple[int, float]]:
+        if not active:
+            return None
+        try:
+            pid, hwnd = WindowsGameFocusNative().foreground()
+            if hwnd and pid and any(entry.get("pid") == pid for entry in active.values()):
+                return pid, psutil.Process(pid).create_time()
+        except Exception:
+            logger.debug("사이드바 전경 게임 관측 실패", exc_info=True)
+        return None
 
-    def _update_playtime_label(self, label: QLabel, start_ts: float, prefix: str = "오늘 플레이 시간") -> None:
-        """경과 시간을 계산해 레이블 텍스트를 갱신합니다."""
-        if not start_ts:
-            label.setText(f"{prefix}: 0분")
-            return
-        elapsed = int(time.time() - start_ts)
-        h = elapsed // 3600
-        m = (elapsed % 3600) // 60
-        if h > 0:
-            elapsed_text = f"{h}시간 {m:02d}분"
-        else:
-            elapsed_text = f"{m}분"
-        label.setText(f"{prefix}: {elapsed_text}")
+    def _refresh_game_row_displays(self, active: Optional[dict] = None) -> None:
+        """표시 중인 행은 유지하고 기존 진행률과 실제 전경 창만 투영한다."""
+        if active is None:
+            from src.gui.main_window import MainWindow
+            window = MainWindow.INSTANCE
+            active = dict(window.process_monitor.active_monitored_processes) if window else {}
+        foreground = self._foreground_game_identity(active)
+        processes = {process.id: process for process in self._data_manager.managed_processes}
+        now = datetime.now()
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            process = processes.get(row.property("processId"))
+            if process is None or process.monitoring_path != row.property("monitoringPath"):
+                continue
+            running = row.property("hhRunning")
+            runtime = active.get(process.id)
+            focused = bool(
+                foreground and runtime and foreground[0] == row.property("gamePid") == runtime.get("pid")
+                and abs(foreground[1] - row.property("gameStartTime")) <= 0.001
+                and row.property("gameStartTime") == float(runtime.get("start_time_approx") or 0.0)
+            )
+            surface = row.findChild(QPushButton, "gameRowSurface")
+            if row.property("hhFocused") != focused:
+                for widget in (row, surface):
+                    widget.setProperty("hhFocused", focused)
+                    widget.style().unpolish(widget)
+                    widget.style().polish(widget)
+                    widget.update()
 
-    def _refresh_playtime(self) -> None:
-        """1초 타이머마다 모든 실행 중 게임의 플레이타임 레이블을 갱신합니다."""
-        for entry in self._playtime_labels.values():
-            label, start_ts, prefix = entry
-            self._update_playtime_label(label, start_ts, prefix)
+            percentage, raw_text = calculate_game_progress(process, now)
+            available = raw_text not in ("기록 없음", "계산 오류")
+            display = progress_bar_format(percentage, raw_text) if available else raw_text
+            bar = row.findChild(CapsuleProgressBar, "gameProgressBar")
+            bar.set_progress(percentage if available else None, display)
+            if bar.accessibleDescription() != display:
+                bar.setAccessibleDescription(display)
+            state = "현재 창" if focused else "실행 중" if running else "꺼짐"
+            description = f"{process.name} · {state} · {display}"
+            if surface.accessibleDescription() != description:
+                surface.setAccessibleDescription(description)
+                surface.setToolTip(description)
 
     def _update_clock(self) -> None:
-        """현재 시간 레이블을 갱신합니다."""
-        import datetime
-        gs = getattr(self._data_manager, 'global_settings', None)
-        fmt = getattr(gs, 'sidebar_clock_format', '%H:%M:%S') if gs else '%H:%M:%S'
-        self._clock_label.setText(datetime.datetime.now().strftime(fmt))
-        enabled = getattr(gs, 'sidebar_clock_enabled', True) if gs else True
-        self._clock_widget.setVisible(enabled)
+        now = datetime.now()
+        self._clock_face.set_time(now)
+        weekday = ("월", "화", "수", "목", "금", "토", "일")[now.weekday()]
+        self._clock_date_label.setText(f"{now.month}월 {now.day}일 {weekday}요일")
+        self._clock_widget.setVisible(getattr(self._data_manager.global_settings, 'sidebar_clock_enabled', True))
+        if self._is_shown:
+            self._clock_timer.start(500 - (now.microsecond // 1000) % 500)
 
-    # ------------------------------------------------------------------
-    # 내부 메서드 — 아이콘 비동기 로드
-    # ------------------------------------------------------------------
+    def _load_icon_async(self, process: ManagedProcess) -> None:
+        self._thumb_pool.start(_IconLoadTask(process.id, process.monitoring_path, self._icon_signals))
 
-    def _load_icon_async(self, process: ManagedProcess, icon_label: QLabel) -> None:
-        """게임 아이콘을 백그라운드 스레드에서 추출해 icon_label 에 반영합니다."""
-        from PySide6.QtCore import QThread, Signal as Signal
-
-        class _IconLoader(QThread):
-            icon_loaded = Signal(object)
-
-            def __init__(self, path: str, parent=None):
-                super().__init__(parent)
-                self._path = path
-
-            def run(self):
-                try:
-                    from src.utils.process import get_qicon_for_file
-                    icon = get_qicon_for_file(self._path, icon_size=48)
-                    if icon and not icon.isNull():
-                        self.icon_loaded.emit(icon.pixmap(40, 40))
-                except Exception:
-                    logger.debug("아이콘 로드 실패: %s", self._path, exc_info=True)
-
-        loader = _IconLoader(process.monitoring_path, self)
-
-        def _on_icon(pixmap, lbl=icon_label):
-            try:
-                if not pixmap.isNull():
-                    lbl.setPixmap(pixmap)
-            except RuntimeError:
-                pass  # icon_label 이 이미 삭제된 경우 무시
-            loader.deleteLater()
-
-        loader.icon_loaded.connect(_on_icon)
-        loader.start()
-
-    # ------------------------------------------------------------------
-    # 내부 메서드 — 볼륨 섹션
-    # ------------------------------------------------------------------
-
-    def _refresh_volumes_list(self) -> None:
-        """모든 등록 게임에 대한 볼륨 행을 재구성합니다."""
-        gs = getattr(self._data_manager, 'global_settings', None)
-        vol_enabled = getattr(gs, 'sidebar_volume_section_enabled', True) if gs else True
-        self._vol_section.setVisible(vol_enabled)
-
-        while self._vol_list_layout.count() > 0:
-            item = self._vol_list_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-
-        processes = getattr(self._data_manager, 'managed_processes', [])
-        if not processes:
-            empty = QLabel("등록된 게임 없음")
-            empty.setStyleSheet("color: rgba(255,255,255,100); font-size: 11px;")
-            self._vol_list_layout.addWidget(empty)
+    @Slot(str, str, object)
+    def _apply_game_icon(self, process_id: str, path: str, image) -> None:
+        if image is None:
             return
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            if row.property("processId") == process_id and row.property("monitoringPath") == path:
+                label = row.findChild(QLabel, "gameIcon")
+                label.setPixmap(QPixmap.fromImage(image))
+                return
 
-        from src.gui.main_window import MainWindow
-        active_pids: dict = {}
-        if MainWindow.INSTANCE:
-            # dict 복사 - process_monitor 스레드가 동시에 수정할 수 있음
-            active_snapshot = dict(MainWindow.INSTANCE.process_monitor.active_monitored_processes)
-            active_pids = {
-                proc_id: entry.get('pid')
-                for proc_id, entry in active_snapshot.items()
-            }
-
-        for proc in processes:
-            self._vol_list_layout.addWidget(
-                self._make_vol_row(proc, active_pids.get(proc.id))
-            )
-
-    def _make_vol_row(self, process: ManagedProcess, pid: Optional[int]) -> QWidget:
-        """다크 테마 볼륨 행 (녹색 점 + 이름 + 음소거 버튼 + 슬라이더 + 값 레이블)."""
-        is_running = pid is not None
-        row = QWidget()
-        hl = QHBoxLayout(row)
-        hl.setContentsMargins(4, 2, 4, 2)
-        hl.setSpacing(4)
-
-        dot_lbl = QLabel("●")
-        dot_lbl.setFixedWidth(10)
-        dot_lbl.setStyleSheet(
-            "color: rgba(80,200,120,220); font-size: 7px;" if is_running
-            else "color: transparent; font-size: 7px;"
-        )
-        hl.addWidget(dot_lbl)
-
-        name_lbl = QLabel(process.name)
-        name_lbl.setStyleSheet("color: rgba(200,210,235,200); font-size: 11px;")
-        # 이름의 최소 너비가 스크롤 내용 전체를 넓혀 우측 컨트롤을 밀지 않게 한다.
-        name_lbl.setWordWrap(True)
-        name_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        hl.addWidget(name_lbl, 1)
-
-        mute_btn = QPushButton()
-        mute_btn.setCheckable(True)
-        mute_btn.setProperty("hhRole", "muteToggle")
-
-        style = QApplication.style()
-        if style:
-            icon_on = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
-            icon_off = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolumeMuted)
-            if not icon_on.isNull():
-                icon_on_w = _tint_icon_white(icon_on)
-                icon_off_w = _tint_icon_white(icon_off) if not icon_off.isNull() else icon_on_w
-                mute_btn.setIcon(icon_on_w)
-                mute_btn._icon_on = icon_on_w
-                mute_btn._icon_off = icon_off_w
-            else:
-                mute_btn.setText("🔊")
-                mute_btn._icon_on = None
-        else:
-            mute_btn.setText("🔊")
-            mute_btn._icon_on = None
-
-        if is_running:
-            try:
-                initial_muted = audio_control.is_muted(pid) or False
-            except Exception:
-                initial_muted = getattr(process, 'default_muted', False)
-        else:
-            initial_muted = getattr(process, 'default_muted', False)
-        if initial_muted:
-            mute_btn.blockSignals(True)
-            mute_btn.setChecked(True)
-            mute_btn.blockSignals(False)
-            if getattr(mute_btn, '_icon_on', None):
-                mute_btn.setIcon(mute_btn._icon_off)
-            else:
-                mute_btn.setText("🔇")
-
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setRange(0, 100)
-        slider.setSingleStep(5)
-        slider.setPageStep(5)
-        slider.setFixedWidth(80)
-        slider.setStyleSheet(_SLIDER_STYLE)
-        slider.enterEvent = lambda _e: self._reset_auto_hide()  # type: ignore[assignment]
-
-        val_lbl = QLabel()
-        val_lbl.setFixedWidth(28)
-        val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        val_lbl.setStyleSheet("color: rgba(160,180,220,180); font-size: 11px;")
-
-        vol = getattr(process, 'default_volume', None) or 100
-        if is_running:
+    def _make_volume_dial(self, process: ManagedProcess, pid: Optional[int]) -> VolumeDial:
+        dial = VolumeDial(round(self.width() * 0.114))
+        dial.setAccessibleName(f"{process.name} 음량")
+        value = process.default_volume if process.default_volume is not None else 100
+        muted = process.default_muted
+        policy_active, observation = self._audio_state(process.id) if self._audio_state else (False, None)
+        if policy_active:
+            if observation is not None and observation.available and observation.volume is not None:
+                value = round(observation.volume * 100 / 5) * 5
+            if observation is not None and observation.policy_muted:
+                dial.setToolTip("백그라운드 자동 음소거 · 클릭은 사용자 음소거 설정 변경")
+        elif pid is not None:
             try:
                 actual = audio_control.get_app_volume(pid)
+                actual_muted = audio_control.is_muted(pid)
                 if actual is not None:
-                    vol = round((actual * 100) / 5) * 5
+                    value = round(actual * 100 / 5) * 5
+                if actual_muted is not None:
+                    muted = actual_muted
             except Exception:
-                pass
-        vol = max(0, min(100, vol))
-        slider.blockSignals(True)
-        slider.setValue(vol)
-        slider.blockSignals(False)
-        val_lbl.setText(str(vol))
+                logger.debug("게임 음량 조회 실패: 등록=%s PID=%s", process.id, pid, exc_info=True)
+        dial.setValue(value)
+        dial.setChecked(muted)
+        dial.valueChanged.connect(lambda value, p=process, target=pid: self._set_game_volume(value, p, target))
+        dial.toggled.connect(lambda muted, p=process, target=pid: self._set_game_muted(muted, p, target))
+        dial.interacted.connect(self._reset_auto_hide)
+        return dial
 
-        def on_mute_toggled(checked, p=process, pid_ref=pid, btn=mute_btn):
-            if getattr(btn, '_icon_on', None):
-                btn.setIcon(btn._icon_off if checked else btn._icon_on)
-            else:
-                btn.setText("🔇" if checked else "🔊")
-            p.default_muted = checked
-            self._schedule_volume_save(p)
-            if pid_ref is not None:
-                audio_control.set_mute(pid_ref, checked)
-            self._reset_auto_hide()
-
-        def on_changed(v, p=process, pid_ref=pid, lbl=val_lbl, s=slider):
-            snapped = round(v / 5) * 5
-            snapped = max(0, min(100, snapped))
-            if snapped != v:
-                s.blockSignals(True)
-                s.setValue(snapped)
-                s.blockSignals(False)
-            lbl.setText(str(snapped))
-            self._on_vol_list_changed(snapped, p, pid_ref)
-
-        mute_btn.toggled.connect(on_mute_toggled)
-        slider.valueChanged.connect(on_changed)
-        hl.addWidget(mute_btn)
-        hl.addWidget(slider)
-        hl.addWidget(val_lbl)
-        return row
-
-    def _on_vol_list_changed(self, value: int, process: ManagedProcess, pid: Optional[int]) -> None:
-        if pid is not None:
-            audio_control.set_app_volume(pid, value / 100.0)
+    def _set_game_volume(self, value: int, process: ManagedProcess, pid: Optional[int]) -> None:
         process.default_volume = value
+        handled = bool(self._on_audio_change and self._on_audio_change(process, apply_volume=True))
+        if pid is not None and not handled:
+            audio_control.set_app_volume(pid, value / 100.0)
+        self._schedule_volume_save(process)
+        self._reset_auto_hide()
+
+    def _set_game_muted(self, muted: bool, process: ManagedProcess, pid: Optional[int]) -> None:
+        process.default_muted = muted
+        handled = bool(self._on_audio_change and self._on_audio_change(process))
+        if pid is not None and not handled:
+            audio_control.set_mute(pid, muted)
         self._schedule_volume_save(process)
         self._reset_auto_hide()
 
@@ -1144,12 +1271,20 @@ class SidebarWidget(QWidget):
 
     def apply_visual_settings(self) -> None:
         """투명도·geometry 설정을 즉시 반영합니다."""
-        gs = getattr(self._data_manager, 'global_settings', None)
-        opacity = max(0.1, min(1.0, getattr(gs, 'sidebar_opacity', 0.85) if gs else 0.85))
-        self.setWindowOpacity(opacity)
+        self.setWindowOpacity(1.0)
         if self._is_shown:
             geo = self._compute_geometry()
             self.setGeometry(geo)
+
+    def _set_frame_background(self) -> None:
+        red, green, blue, alpha = ACRYLIC_TINT
+        if self._blur_applied:
+            alpha = 1  # 완전히 투명한 픽셀에서 Windows가 아래 창으로 입력을 넘기지 않도록 한다.
+        background = QColor(red, green, blue, alpha).name(QColor.NameFormat.HexArgb)
+        self._frame.setStyleSheet(
+            f"QFrame#SidebarFrame {{ background-color: {background};"
+            " border: none; border-radius: 0px; }"
+        )
 
     def _reset_auto_hide(self) -> None:
         if self._auto_hide_ms > 0:
@@ -1157,12 +1292,18 @@ class SidebarWidget(QWidget):
 
     def _poll_cursor(self) -> None:
         from PySide6.QtGui import QCursor
-        if self._is_shown and self._anim.state() != QPropertyAnimation.State.Running:
+        # 열기·닫기 전환의 화면 밖 좌표를 사용자 이탈로 판단하지 않는다.
+        if self._anim.state() == QPropertyAnimation.State.Running:
+            return
+        if self._is_shown:
             geo = self._compute_geometry()
             if self.geometry() != geo:
                 self.setGeometry(geo)
         cursor_pos = QCursor.pos()
         inside = self.rect().contains(self.mapFromGlobal(cursor_pos))
+        if self._media_center_panel.options_open:
+            self._auto_hide_timer.stop()
+            return
 
         # 자동 숨김 타이머 관리
         if inside:
@@ -1198,84 +1339,108 @@ class SidebarWidget(QWidget):
     def _build_screenshot_section(self) -> QWidget:
         """스크린샷 섹션 위젯을 구성합니다."""
         section = QWidget()
-        section.setStyleSheet("background: transparent;")
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(4)
-
-        # 헤더 행
-        header = QHBoxLayout()
+        section.setMinimumHeight(round(self.width() * 0.1))
+        header = QHBoxLayout(section)
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(round(self.width() * 0.02))
         title = QLabel("스크린샷")
-        title.setStyleSheet(
-            "color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;"
-        )
+        title.setProperty("hhRole", "sidebarSectionTitle")
         self._capture_now_btn = QPushButton("지금 촬영")
-        self._capture_now_btn.setFixedHeight(28)
         self._capture_now_btn.clicked.connect(self._on_capture_now_clicked)
+        header.addWidget(self._media_icon("screenshot"))
         header.addWidget(title)
         header.addStretch()
         header.addWidget(self._capture_now_btn)
-        layout.addLayout(header)
-
-        # 썸네일 그리드
-        self._thumb_grid_container = QWidget()
-        self._thumb_grid_container.setStyleSheet("background: transparent;")
-        self._thumb_grid_layout = QGridLayout(self._thumb_grid_container)
-        self._thumb_grid_layout.setSpacing(3)
-        self._thumb_grid_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._thumb_grid_container)
-
         return section
 
     def _build_recording_section(self) -> QWidget:
         """녹화 상태 섹션 위젯을 구성합니다."""
         section = QWidget()
-        section.setStyleSheet("background: transparent;")
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(4)
-
-        # 헤더 행: 제목 + [지금 녹화] 버튼
-        header = QHBoxLayout()
+        section.setMinimumHeight(round(self.width() * 0.1))
+        header = QHBoxLayout(section)
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(round(self.width() * 0.02))
         title = QLabel("녹화")
-        title.setStyleSheet(
-            "color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;"
-        )
-        self._rec_start_btn = QPushButton("지금 녹화")
-        self._rec_start_btn.setFixedHeight(28)
-        self._rec_start_btn.setProperty("hhRole", "danger")
-        self._rec_start_btn.clicked.connect(self._on_rec_start_clicked)
-        self._rec_start_btn.hide()
+        title.setProperty("hhRole", "sidebarSectionTitle")
+        header.addWidget(self._media_icon("recording"))
         header.addWidget(title)
         header.addStretch()
-        header.addWidget(self._rec_start_btn)
-        layout.addLayout(header)
 
-        self._rec_status_label = QLabel("OBS 오프라인")
+        self._rec_status_label = QLabel("연결 안 됨")
+        self._rec_status_label.setProperty("hhRole", "sidebarSecondary")
         self._rec_status_label.setProperty("hhState", "default")
-        layout.addWidget(self._rec_status_label)
+        header.addWidget(self._rec_status_label)
+
+        self._rec_start_btn = QPushButton("녹화 시작")
+        self._rec_start_btn.clicked.connect(self._on_rec_start_clicked)
+        self._rec_start_btn.hide()
+        header.addWidget(self._rec_start_btn)
 
         self._rec_stop_btn = QPushButton("녹화 종료")
-        self._rec_stop_btn.setFixedHeight(28)
         self._rec_stop_btn.setProperty("hhRole", "danger")
         self._rec_stop_btn.clicked.connect(self._on_rec_stop_clicked)
         self._rec_stop_btn.hide()
-        layout.addWidget(self._rec_stop_btn)
+        header.addWidget(self._rec_stop_btn)
 
         # OBS 재연결 버튼 (obs_offline 상태에서만 표시)
-        self._rec_connect_btn = QPushButton("OBS 재연결")
+        self._rec_connect_btn = QPushButton("재연결")
         self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
-        layout.addWidget(self._rec_connect_btn)
-
-        # 녹화 썸네일 그리드
-        self._rec_thumb_grid_container = QWidget()
-        self._rec_thumb_grid_container.setStyleSheet("background: transparent;")
-        self._rec_thumb_grid_layout = QGridLayout(self._rec_thumb_grid_container)
-        self._rec_thumb_grid_layout.setSpacing(3)
-        self._rec_thumb_grid_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._rec_thumb_grid_container)
+        header.addWidget(self._rec_connect_btn)
 
         return section
+
+    def _media_icon(self, kind: str) -> QLabel:
+        """같은 선 굵기의 섹션 아이콘을 표시한다."""
+        size = round(self.width() * 0.05)
+        label = QLabel()
+        label.setFixedSize(size, size)
+        label.setPixmap(self._action_icon(kind).pixmap(size, size))
+        return label
+
+    def _action_icon(self, kind: str) -> QIcon:
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QPainter, QPainterPath, QPen
+        size = round(self.width() * 0.05)
+        pixmap = QPixmap(size * 2, size * 2)
+        pixmap.setDevicePixelRatio(2)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.scale(size / 16, size / 16)
+        painter.setPen(QPen(QColor("#e8a7b1" if kind == "stop" else "#f5f5f6"), 1.2))
+        if kind == "screenshot":
+            painter.drawRoundedRect(QRectF(1, 4, 14, 10), 1.5, 1.5)
+            painter.drawEllipse(QRectF(5, 6, 6, 6))
+            painter.drawRect(QRectF(5, 2, 6, 2))
+        elif kind == "recording":
+            painter.drawRoundedRect(QRectF(1, 4, 9, 8), 1.5, 1.5)
+            path = QPainterPath()
+            path.moveTo(10, 6)
+            path.lineTo(15, 3)
+            path.lineTo(15, 13)
+            path.lineTo(10, 10)
+            painter.drawPath(path)
+        elif kind == "game":
+            painter.drawRoundedRect(QRectF(1, 4, 14, 9), 2.5, 2.5)
+            painter.drawLine(3, 8, 7, 8)
+            painter.drawLine(5, 6, 5, 10)
+            painter.drawEllipse(QRectF(10, 7, 1, 1))
+            painter.drawEllipse(QRectF(12, 9, 1, 1))
+        elif kind == "launch":
+            path = QPainterPath()
+            path.moveTo(4, 2)
+            path.lineTo(13, 8)
+            path.lineTo(4, 14)
+            path.closeSubpath()
+            painter.drawPath(path)
+        elif kind == "stop":
+            painter.drawArc(QRectF(2, 3, 12, 12), 135 * 16, 270 * 16)
+            painter.drawLine(8, 1, 8, 8)
+        elif kind == "close":
+            painter.drawLine(6, 3, 11, 8)
+            painter.drawLine(11, 8, 6, 13)
+        painter.end()
+        return QIcon(pixmap)
 
     def set_on_stop_recording(self, fn) -> None:
         """녹화 종료 버튼 클릭 시 호출될 콜백을 등록합니다."""
@@ -1290,7 +1455,7 @@ class SidebarWidget(QWidget):
         self._get_recording_elapsed = fn
 
     def set_on_start_recording(self, fn: Optional[Callable[[], None]]) -> None:
-        """[지금 녹화] 버튼 클릭 시 호출될 콜백을 등록합니다."""
+        """[녹화 시작] 버튼 클릭 시 호출될 콜백을 등록합니다."""
         self._start_recording_callback = fn
 
     def set_recording_output_dir(self, path: str) -> None:
@@ -1317,7 +1482,7 @@ class SidebarWidget(QWidget):
                 self._rec_elapsed_sec = elapsed
             mins, secs = divmod(elapsed, 60)
             hrs, mins = divmod(mins, 60)
-            self._rec_status_label.setText(f"REC  {hrs:02d}:{mins:02d}:{secs:02d}")
+            self._rec_status_label.setText(f"{hrs:02d}:{mins:02d}:{secs:02d}")
             status_style = "error"
             self._rec_stop_btn.setVisible(control_enabled)
             self._rec_start_btn.hide()
@@ -1359,7 +1524,7 @@ class SidebarWidget(QWidget):
             self._reconnect_recording()
 
     def _on_rec_start_clicked(self) -> None:
-        """[지금 녹화] 버튼 클릭 — 카운트다운 콜백을 호출합니다."""
+        """[녹화 시작] 버튼 클릭 — 카운트다운 콜백을 호출합니다."""
         if self._start_recording_callback:
             self._start_recording_callback()
 
@@ -1369,8 +1534,8 @@ class SidebarWidget(QWidget):
         enabled = getattr(gs, 'recording_enabled', False) if gs else False
         files_enabled = getattr(gs, 'obs_watch_output_dir', True) if gs else False
         self._recording_section.setVisible(enabled or files_enabled)
-        self._rec_thumb_grid_container.setVisible(files_enabled)
         self._update_rec_ui()
+        self._sync_gallery_sources()
 
     def _refresh_screenshot_section(self) -> None:
         """스크린샷 섹션 표시 여부를 설정에 따라 갱신합니다."""
@@ -1379,77 +1544,147 @@ class SidebarWidget(QWidget):
         self._screenshot_section.setVisible(enabled)
         # 캡처 버튼 활성화 여부 (ScreenshotManager 참조는 MainWindow에 있으므로 항상 활성)
         self._capture_now_btn.setEnabled(True)
+        self._sync_gallery_sources()
+
+    def _sync_gallery_sources(self) -> None:
+        """설정에서 허용한 파일 종류만 표시하고 가능한 기존 선택을 유지한다."""
+        gs = getattr(self._data_manager, "global_settings", None)
+        choices = []
+        if getattr(gs, "screenshot_enabled", True):
+            choices.append(("screenshot", "스크린샷"))
+        if gs and getattr(gs, "obs_watch_output_dir", True):
+            choices.append(("recording", "녹화"))
+        tabs = self._gallery_tabs
+        current = tabs.tabData(tabs.currentIndex())
+        if [tabs.tabData(index) for index in range(tabs.count())] != [key for key, _ in choices]:
+            tabs.blockSignals(True)
+            while tabs.count():
+                tabs.removeTab(0)
+            for key, label in choices:
+                tabs.setTabData(tabs.addTab(label), key)
+            selected = next((index for index, (key, _) in enumerate(choices) if key == current), 0)
+            tabs.setCurrentIndex(selected)
+            tabs.blockSignals(False)
+            self._refresh_gallery()
+        tabs.setVisible(bool(choices))
+        self._gallery.setVisible(bool(choices))
+
+    def _gallery_cell_size(self, width: Optional[int] = None) -> tuple[int, int, int]:
+        """3열·4:3 셀과 간격을 현재 공용 영역 너비로 계산한다."""
+        if width is None:
+            width = self._gallery.width()
+        gap = max(1, round(width / 80))
+        cell_width = max(1, (width - gap * (_THUMB_COLS - 1)) // _THUMB_COLS)
+        return cell_width, max(1, round(cell_width * 0.75)), gap
+
+    def _refresh_gallery(self, _index: int = -1) -> None:
+        """콘텐츠 진입점에서만 파일을 읽고 최대 5개 미리보기를 준비한다."""
+        if not hasattr(self, "_thumb_pool"):
+            return  # UI 구성 중에는 디코딩 작업을 등록하지 않는다.
+        self._thumb_request_id += 1
+        self._rec_thumb_request_id += 1
+        for cell in self._gallery.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
+            cell.hide()
+            cell.deleteLater()
+        self._thumb_buttons.clear()
+        self._rec_thumb_buttons.clear()
+        while self._gallery_layout.count():
+            self._gallery_layout.takeAt(0)
+
+        kind = self._gallery_tabs.tabData(self._gallery_tabs.currentIndex())
+        if kind is None:
+            self._fit_gallery_height()
+            return
+        cell_width, cell_height, gap = self._gallery_cell_size()
+        self._fit_gallery_height()
+        self._gallery_layout.setSpacing(gap)
+
+        if kind == "screenshot":
+            gs = getattr(self._data_manager, "global_settings", None)
+            output_dir = getattr(gs, "screenshot_save_dir", "")
+            if not output_dir:
+                from src.screenshot.capture import _DEFAULT_SAVE_DIR
+                output_dir = str(_DEFAULT_SAVE_DIR)
+            extensions = (".png", ".jpg", ".jpeg", ".bmp")
+            make_cell = self._make_thumb_cell
+            request_id = self._thumb_request_id
+            cache = self._thumb_cache
+            folder_tip = "스크린샷 폴더 열기"
+        else:
+            output_dir = self._recording_output_dir
+            extensions = (".mp4",)
+            make_cell = self._make_rec_thumb_cell
+            request_id = self._rec_thumb_request_id
+            cache = self._rec_thumb_cache
+            folder_tip = "녹화 폴더 열기"
+        if not output_dir:
+            return
+        folder = Path(output_dir)
+        try:
+            if not folder.is_dir():
+                return
+            files = sorted((path for path in folder.iterdir() if path.suffix.lower() in extensions and path.is_file()),
+                           key=lambda path: path.stat().st_mtime, reverse=True)
+        except OSError:
+            logger.exception("갤러리 파일 조회 실패: %s", output_dir)
+            return
+
+        shown = files[:_THUMB_MAX_ROWS * _THUMB_COLS - 1]
+        for index, path in enumerate(shown):
+            self._gallery_layout.addWidget(make_cell(path, request_id), *divmod(index, _THUMB_COLS))
+        remaining = len(files) - len(shown)
+        folder_btn = QPushButton(f"+{remaining}" if remaining else "")
+        folder_btn.setFixedSize(cell_width, cell_height)
+        folder_btn.setToolTip(folder_tip)
+        folder_btn.setProperty("hhRole", "folderAction")
+        if not remaining:
+            folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+
+        def open_folder() -> None:
+            if folder.is_dir():
+                os.startfile(str(folder))
+            else:
+                logger.warning("갤러리 폴더가 존재하지 않습니다: %s", folder)
+
+        folder_btn.clicked.connect(open_folder)
+        self._gallery_layout.addWidget(folder_btn, *divmod(len(shown), _THUMB_COLS))
+        self._fit_gallery_height()
+        self._layout_gallery(file_count=len(files))
+        shown_paths = {str(path) for path in shown}
+        for path in list(cache):
+            if path not in shown_paths:
+                del cache[path]
+
+    def _layout_gallery(self, *, file_count: Optional[int] = None) -> None:
+        """크기 변경은 기존 셀만 재배치한다. 파일 조회·디코딩·요청 갱신 없음."""
+        if not self._gallery_layout.count():
+            return
+        cells = list(self._thumb_buttons.values()) + list(self._rec_thumb_buttons.values())
+        folder = self._gallery_layout.itemAt(self._gallery_layout.count() - 1).widget()
+        if file_count is None:
+            omitted = int(folder.text()[1:]) if folder.text().startswith("+") else 0
+            file_count = omitted + sum(not cell.isHidden() for cell in cells)
+        width, height, gap = self._gallery_cell_size()
+        self._gallery_layout.setSpacing(gap)
+        rows = min(_THUMB_MAX_ROWS, max(1, (self._gallery.height() + gap) // (height + gap)))
+        shown_count = min(len(cells), rows * _THUMB_COLS - 1)
+        while self._gallery_layout.count():
+            self._gallery_layout.takeAt(0)
+        for index, cell in enumerate(cells):
+            cell.setFixedSize(width, height)
+            cell.setVisible(index < shown_count)
+            if index < shown_count:
+                self._gallery_layout.addWidget(cell, *divmod(index, _THUMB_COLS))
+        folder.setFixedSize(width, height)
+        remaining = file_count - shown_count
+        folder.setText(f"+{remaining}" if remaining else "")
+        folder.setIcon(QIcon() if remaining else self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+        self._gallery_layout.addWidget(folder, *divmod(shown_count, _THUMB_COLS))
 
     @Slot()
     def _refresh_screenshot_thumbnails(self) -> None:
-        """스크린샷 썸네일 그리드를 최신 파일로 갱신합니다."""
-        self._thumb_request_id += 1
-        request_id = self._thumb_request_id
-        self._thumb_buttons = {}
-
-        # 그리드 초기화
-        while self._thumb_grid_layout.count():
-            item = self._thumb_grid_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-
-        gs = getattr(self._data_manager, 'global_settings', None)
-        enabled = getattr(gs, 'screenshot_enabled', True) if gs else True
-        if not enabled:
-            return
-
-        save_dir_str = getattr(gs, 'screenshot_save_dir', '') if gs else ''
-        if not save_dir_str:
-            from src.screenshot.capture import _DEFAULT_SAVE_DIR
-            save_dir_str = str(_DEFAULT_SAVE_DIR)
-
-        from pathlib import Path
-        save_path = Path(save_dir_str)
-        if not save_path.exists():
-            return
-
-        # 최신 파일 목록 (png + jpg + bmp)
-        files = sorted(
-            [f for f in save_path.iterdir()
-             if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp') and f.is_file()],
-            key=lambda f: f.stat().st_mtime,
-            reverse=True,
-        )
-
-        max_shown = _THUMB_MAX_CELLS - 1  # 마지막 셀 = 폴더 버튼
-        shown = files[:max_shown]
-        remaining = max(0, len(files) - max_shown)
-
-        # 썸네일 셀 추가
-        for idx, fp in enumerate(shown):
-            row, col = divmod(idx, _THUMB_COLS)
-            cell = self._make_thumb_cell(fp, request_id)
-            self._thumb_grid_layout.addWidget(cell, row, col)
-
-        # 폴더 버튼 (마지막 셀)
-        folder_label = f"+{remaining}" if remaining > 0 else ""
-        folder_btn = QPushButton(folder_label)
-        folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
-        folder_btn.setToolTip("스크린샷 폴더 열기")
-        folder_btn.setProperty("hhRole", "folderAction")
-        if remaining == 0:
-            folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
-        _dir = save_dir_str
-
-        def _open_folder(d: str = _dir) -> None:
-            if Path(d).exists():
-                os.startfile(d)
-                return
-            logger.warning("스크린샷 폴더가 존재하지 않습니다: %s", d)
-
-        folder_btn.clicked.connect(lambda _checked=False: _open_folder())
-        next_idx = len(shown)
-        row, col = divmod(next_idx, _THUMB_COLS)
-        self._thumb_grid_layout.addWidget(folder_btn, row, col)
-
-        # 현재 표시 목록에 없는 캐시 항목 제거
-        shown_paths = {str(fp) for fp in shown}
-        self._thumb_cache = {k: v for k, v in self._thumb_cache.items() if k in shown_paths}
+        if self._gallery_tabs.tabData(self._gallery_tabs.currentIndex()) == "screenshot":
+            self._refresh_gallery()
 
     def _make_thumb_cell(self, filepath, request_id: int) -> _HoverThumbCell:
         """썸네일 셀 _HoverThumbCell을 반환합니다."""
@@ -1491,7 +1726,7 @@ class SidebarWidget(QWidget):
             )
 
         cell = _HoverThumbCell(
-            _THUMB_W, _THUMB_H,
+            *self._gallery_cell_size()[:2],
             popup_parent=self._frame,
             on_click=_open,
             on_right_click=_show_context_menu,
@@ -1566,18 +1801,26 @@ class SidebarWidget(QWidget):
 
     def _on_capture_now_clicked(self) -> None:
         """'지금 촬영' 버튼 클릭 핸들러."""
+        from PySide6.QtWidgets import QMessageBox
         from src.gui.main_window import MainWindow
+        from src.utils.app_paths import CapturePathError
         if MainWindow.INSTANCE and hasattr(MainWindow.INSTANCE, '_screenshot_manager'):
             mgr = MainWindow.INSTANCE._screenshot_manager
             if mgr:
                 self.hide()
 
                 def _capture() -> None:
-                    path = mgr.capture_now()
-                    self.show()
-                    if path:
-                        self._refresh_screenshot_thumbnails()
-                    self._reset_auto_hide()
+                    try:
+                        path = mgr.capture_now()
+                    except CapturePathError as error:
+                        self.show()
+                        QMessageBox.warning(self, "스크린샷 저장 경로", str(error))
+                    else:
+                        self.show()
+                        if path:
+                            self._refresh_screenshot_thumbnails()
+                    finally:
+                        self._reset_auto_hide()
 
                 QTimer.singleShot(100, _capture)
 
@@ -1591,64 +1834,8 @@ class SidebarWidget(QWidget):
 
     @Slot()
     def _refresh_recording_thumbnails(self) -> None:
-        """녹화 썸네일 그리드를 최신 MP4 파일로 갱신합니다."""
-        self._rec_thumb_request_id += 1
-        request_id = self._rec_thumb_request_id
-        self._rec_thumb_buttons = {}
-
-        # 그리드 초기화
-        while self._rec_thumb_grid_layout.count():
-            item = self._rec_thumb_grid_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-
-        output_dir = self._recording_output_dir
-        if not output_dir:
-            return
-
-        rec_path = Path(output_dir)
-        if not rec_path.exists():
-            return
-
-        # 최신 MP4 파일 목록
-        files = sorted(
-            [f for f in rec_path.iterdir() if f.suffix.lower() == '.mp4' and f.is_file()],
-            key=lambda f: f.stat().st_mtime,
-            reverse=True,
-        )
-
-        max_shown = _THUMB_MAX_CELLS - 1
-        shown = files[:max_shown]
-        remaining = max(0, len(files) - max_shown)
-
-        # 썸네일 셀 추가
-        for idx, fp in enumerate(shown):
-            row, col = divmod(idx, _THUMB_COLS)
-            cell = self._make_rec_thumb_cell(fp, request_id)
-            self._rec_thumb_grid_layout.addWidget(cell, row, col)
-
-        # 폴더 버튼 (마지막 셀)
-        folder_label = f"+{remaining}" if remaining > 0 else ""
-        folder_btn = QPushButton(folder_label)
-        folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
-        folder_btn.setToolTip("녹화 폴더 열기")
-        folder_btn.setProperty("hhRole", "folderAction")
-        if remaining == 0:
-            folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
-        _dir = output_dir
-
-        def _open_rec_folder(d: str = _dir) -> None:
-            if Path(d).exists():
-                os.startfile(d)
-
-        folder_btn.clicked.connect(lambda _checked=False: _open_rec_folder())
-        next_idx = len(shown)
-        row, col = divmod(next_idx, _THUMB_COLS)
-        self._rec_thumb_grid_layout.addWidget(folder_btn, row, col)
-
-        # 현재 표시 목록에 없는 캐시 항목 제거
-        rec_shown_paths = {str(fp) for fp in shown}
-        self._rec_thumb_cache = {k: v for k, v in self._rec_thumb_cache.items() if k in rec_shown_paths}
+        if self._gallery_tabs.tabData(self._gallery_tabs.currentIndex()) == "recording":
+            self._refresh_gallery()
 
     def _make_rec_thumb_cell(self, filepath, request_id: int) -> _HoverThumbCell:
         """녹화 썸네일 셀 _HoverThumbCell을 반환합니다."""
@@ -1681,7 +1868,7 @@ class SidebarWidget(QWidget):
                 )
 
         cell = _HoverThumbCell(
-            _THUMB_W, _THUMB_H,
+            *self._gallery_cell_size()[:2],
             popup_parent=self._frame,
             on_click=_open,
             on_right_click=_show_context_menu,
@@ -1726,11 +1913,10 @@ class SidebarWidget(QWidget):
         except Exception:
             logger.exception("녹화 썸네일 적용 실패: %s", filepath)
 
-    def _on_slide_out_finished(self) -> None:
-        try:
-            self._anim.finished.disconnect(self._on_slide_out_finished)
-        except (RuntimeError, TypeError):
-            pass
+    def _on_slide_finished(self) -> None:
+        # 같은 애니메이션의 완료는 현재의 열기/닫기 의도만 소비한다.
+        if self._is_shown:
+            return
         self.hide()
         if self._on_hidden is not None:
             try:
@@ -1742,9 +1928,9 @@ class SidebarWidget(QWidget):
         try:
             from src.gui.sidebar.win32_effects import apply_blur_effect
             hwnd = int(self.winId())
-            effect = "acrylic"
-            if self._data_manager and hasattr(self._data_manager, 'global_settings'):
-                effect = getattr(self._data_manager.global_settings, 'sidebar_effect', 'acrylic')
-            self._blur_applied = apply_blur_effect(hwnd, effect)
+            self._blur_applied = apply_blur_effect(hwnd)
+            self._set_frame_background()
+            if not self._blur_applied:
+                logger.warning("사이드바 Acrylic 적용 실패: 고정 반투명 배경 유지 (hwnd=%s)", hwnd)
         except Exception:
             logger.debug("사이드바 블러 효과 적용 실패", exc_info=True)

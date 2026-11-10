@@ -3,6 +3,7 @@ import os
 import logging
 import ctypes
 import ctypes.wintypes
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +12,78 @@ _DWMWA_CAPTION_COLOR = 35
 _DWMWA_TEXT_COLOR = 36
 _DWMWA_EXTENDED_FRAME_BOUNDS = 9
 _SWP_FRAME_MOVE_FLAGS = 0x0001 | 0x0004 | 0x0010
+_WINDOW_SNAP_DISTANCE_LOGICAL = 15
+
+
+def managed_process_window(pid: int, create_time: float, monitoring_path: str, *, hwnd: int | None = None) -> int | None:
+    """수동·자동 전환이 공유하는 현재 사용자 실행 identity와 창 선택 경계."""
+    if not is_windows():
+        return None
+    import psutil
+    import win32gui
+    import win32process
+    from src.core.process_monitor import _belongs_to_current_user_session, _normalize_process_path
+
+    process = psutil.Process(pid)
+
+    def matches_identity():
+        return (process.is_running() and abs(process.create_time() - create_time) <= 0.001
+                and _normalize_process_path(process.exe()) == _normalize_process_path(monitoring_path)
+                and _belongs_to_current_user_session(process))
+
+    if not matches_identity():
+        logger.warning("게임 창 전환 거부: 프로세스 identity 변경 PID=%s", pid)
+        return None
+    windows = []
+
+    def collect(handle, _extra):
+        try:
+            if not win32gui.IsWindowVisible(handle) or win32process.GetWindowThreadProcessId(handle)[1] != pid:
+                return
+            rect = win32gui.GetWindowPlacement(handle)[4] if win32gui.IsIconic(handle) else win32gui.GetWindowRect(handle)
+            area = max(0, rect[2] - rect[0]) * max(0, rect[3] - rect[1])
+            if area:
+                windows.append((area, handle))
+        except Exception:
+            logger.debug("사라진 게임 창 제외: hwnd=%s", handle, exc_info=True)
+
+    win32gui.EnumWindows(collect, None)
+    if not windows:
+        return None
+    if hwnd is None:
+        foreground = win32gui.GetForegroundWindow()
+        hwnd = next((handle for _area, handle in windows if handle == foreground), max(windows)[1])
+    elif not any(handle == hwnd for _area, handle in windows):
+        return None
+    if not matches_identity() or win32process.GetWindowThreadProcessId(hwnd)[1] != pid:
+        logger.warning("게임 창 전환 취소: 창 또는 PID 변경 PID=%s", pid)
+        return None
+    return int(hwnd)
+
+
+def focus_managed_process_window(
+    pid: int, create_time: float, monitoring_path: str, *, hwnd: int | None = None,
+) -> bool:
+    """선택된 동일 실행·창만 활성화한다. 창 교체 시 다른 창으로 재선택하지 않는다."""
+    try:
+        hwnd = managed_process_window(pid, create_time, monitoring_path, hwnd=hwnd)
+        if hwnd is None:
+            return False
+        import win32gui
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.ShowWindowAsync.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
+        user32.ShowWindowAsync.restype = ctypes.wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+        user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+        if win32gui.IsIconic(hwnd):
+            user32.ShowWindowAsync(ctypes.wintypes.HWND(hwnd), 9)  # SW_RESTORE
+        if not user32.SetForegroundWindow(ctypes.wintypes.HWND(hwnd)):
+            logger.warning("Windows가 게임 창 전환을 허용하지 않음: PID=%s hwnd=%s", pid, hwnd)
+            return False
+        return True
+    except Exception:
+        logger.warning("게임 창 전환 실패: PID=%s", pid, exc_info=True)
+        return False
 
 
 def _configure_window_geometry_api(user32) -> None:
@@ -147,8 +220,37 @@ def get_visible_taskbar_work_area(monitor_origin: tuple[int, int], ignored_hwnd:
         return None
 
 
-def position_windows_window_bottom_right(hwnd: int, monitor_origin: tuple[int, int]) -> bool:
-    """대상 모니터의 가시 작업 영역 우하단에 DWM 프레임을 맞춥니다."""
+def place_window_rect_in_work_area(
+    rect: tuple[int, int, int, int],
+    work_area: tuple[int, int, int, int],
+    *, placement: Literal["bottom_right", "snap", "contain"], threshold: int = _WINDOW_SNAP_DISTANCE_LOGICAL,
+) -> tuple[int, int, int, int]:
+    """표시·드래그·영역 보정의 서로 다른 의도를 현재 사각형만으로 계산한다."""
+    left, top, right, bottom = rect
+    work_left, work_top, work_right, work_bottom = work_area
+    width, height = right - left, bottom - top
+    if placement == "bottom_right":
+        left, top = work_right - width, work_bottom - height
+    elif placement == "contain":
+        left = max(work_left, min(left, work_right - width))
+        top = max(work_top, min(top, work_bottom - height))
+    else:  # snap: 기존 15 논리 픽셀 자석. 멀리 있는 경계로는 이동하지 않는다.
+        if abs(left - work_left) <= threshold:
+            left = work_left
+        elif abs(right - work_right) <= threshold:
+            left = work_right - width
+        if abs(top - work_top) <= threshold:
+            top = work_top
+        elif abs(bottom - work_bottom) <= threshold:
+            top = work_bottom - height
+    return left, top, left + width, top + height
+
+
+def position_windows_window_in_work_area(
+    hwnd: int, monitor_origin: tuple[int, int],
+    *, placement: Literal["bottom_right", "snap", "contain"],
+) -> bool:
+    """가시 작업 영역과 DWM 프레임을 공유하고 의도에 필요한 이동만 적용한다."""
     if not is_windows() or not hwnd:
         return False
     try:
@@ -162,8 +264,17 @@ def position_windows_window_bottom_right(hwnd: int, monitor_origin: tuple[int, i
         if frame_rects is None:
             return False
         outer, visible = frame_rects
-        dx = work_area[2] - visible.right
-        dy = work_area[3] - visible.bottom
+        threshold = _WINDOW_SNAP_DISTANCE_LOGICAL
+        if placement == "snap":
+            user32.GetDpiForWindow.argtypes = [ctypes.wintypes.HWND]
+            user32.GetDpiForWindow.restype = ctypes.wintypes.UINT
+            dpi = int(user32.GetDpiForWindow(ctypes.wintypes.HWND(hwnd)))
+            if not dpi:
+                return False
+            threshold = round(threshold * dpi / 96)
+        original = (visible.left, visible.top, visible.right, visible.bottom)
+        target = place_window_rect_in_work_area(original, work_area, placement=placement, threshold=threshold)
+        dx, dy = target[0] - visible.left, target[1] - visible.top
         if dx == 0 and dy == 0:
             return True
         return bool(user32.SetWindowPos(
@@ -171,12 +282,33 @@ def position_windows_window_bottom_right(hwnd: int, monitor_origin: tuple[int, i
             outer.left + dx, outer.top + dy, 0, 0, _SWP_FRAME_MOVE_FLAGS,
         ))
     except Exception as exc:
-        logger.debug("Windows 창 우하단 배치 실패: %s", exc)
+        logger.debug("Windows 창 작업 영역 배치 실패: 의도=%s 오류=%s", placement, exc)
         return False
 
 
 def is_windows() -> bool:
     return os.name == 'nt'
+
+
+def set_windows_taskbar_visible(hwnd: int, visible: bool) -> bool:
+    """GUI 스레드에서 Shell 버튼만 조작하고 창의 네이티브 최소화 상태는 유지한다."""
+    if not is_windows():
+        return False
+    try:
+        import pythoncom
+        from win32com.shell import shell
+        taskbar = pythoncom.CoCreateInstance(
+            shell.CLSID_TaskbarList, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_ITaskbarList,
+        )
+        taskbar.HrInit()
+        if visible:
+            taskbar.AddTab(hwnd)
+        else:
+            taskbar.DeleteTab(hwnd)
+        return True
+    except Exception:
+        logger.warning("Windows 작업 표시줄 버튼 변경 실패: 표시=%s", visible, exc_info=True)
+        return False
 
 def _to_colorref(rgb: tuple[int, int, int]) -> int:
     """(R, G, B)를 Windows COLORREF(0x00bbggrr) 정수로 변환합니다."""

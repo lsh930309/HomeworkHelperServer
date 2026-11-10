@@ -14,7 +14,17 @@ import zipfile
 import pytest
 
 from tools import host_operations as ops
+from tools import ssh_host_testbench as transport
 from tools import windows_host_probe as probe
+from src.core.tailscale import TailscalePeer, TailscaleSnapshot
+
+
+@pytest.mark.parametrize("scenario", ["spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-startup", "spotify-window-startup-close", "spotify-window-startup-delayed-close"])
+def test_spotify_window_observation_is_a_fixed_media_scenario(scenario):
+    args = ops.parser().parse_args(["media-qa", "--host", "test.invalid", "--scenario", scenario])
+    assert args.scenario == scenario
+    session_source = (ops.ROOT / "tools/windows_session_probe.py").read_text(encoding="utf-8")
+    assert f'"{scenario}"' in session_source
 
 
 @pytest.fixture
@@ -70,6 +80,58 @@ def test_inspect_never_requests_publication_or_host_changes(monkeypatch, tmp_pat
     assert json.loads(capsys.readouterr().out)["result"]["api"]["health"]["error"] == "URLError"
 
 
+def test_archived_install_selects_original_package_without_source_publication(monkeypatch, tmp_path, capsys):
+    calls = []
+    monkeypatch.setattr(ops, "published_commit", lambda _: pytest.fail("archived package must not require current source"))
+    def remote(config, script, *, timeout):
+        calls.append(script)
+        return subprocess.CompletedProcess([], 0, '{"ok":true,"release":"v1.4.0_b4_gfb92714"}', '')
+    monkeypatch.setattr(ops, "run_remote_powershell", remote)
+    assert ops.main(["install", "--host", "test.invalid", "--archived-release", "v1.4.0_b4_gfb92714",
+                     "--report-root", str(tmp_path)]) == 0
+    assert "-ArchivedRelease 'v1.4.0_b4_gfb92714'" in calls[0]
+    result = json.loads(capsys.readouterr().out)
+    assert result["commit"] is None and result["result"]["release"] == "v1.4.0_b4_gfb92714"
+
+
+@pytest.mark.parametrize("arguments", [
+    ["inspect", "--archived-release", "v1.4.0_b4_gfb92714"],
+    ["install", "--archived-release", "v1.4.0_b4_gfb92714", "--commit", "fb92714"],
+])
+def test_archived_selection_rejects_conflicting_operation_before_ssh(monkeypatch, tmp_path, arguments):
+    monkeypatch.setattr(ops, "run_remote_powershell", lambda *a, **kw: pytest.fail("must reject before SSH"))
+    with pytest.raises(SystemExit) as error:
+        ops.main(arguments + ["--host", "test.invalid", "--report-root", str(tmp_path)])
+    assert error.value.code == 2 and not list(tmp_path.iterdir())
+
+
+def test_named_inspect_uses_shared_peer_address_without_a_failed_first_ssh(monkeypatch, tmp_path, capsys):
+    peer = TailscalePeer("LSH_Desktop", "lsh-desktop.example.ts.net.", ("100.64.0.42",), True, "windows")
+    snapshot = TailscaleSnapshot(True, True, "Running", ("100.64.0.1",), "Mac", (peer,), "ready")
+    monkeypatch.setattr(transport, "tailscale_status", lambda: snapshot)
+    monkeypatch.setattr(ops, "source_state", lambda: {})
+    calls = []
+    def connected(command, **kwargs):
+        calls.append(command)
+        assert "HostName=100.64.0.42" in command
+        assert "tester@lsh-desktop" in command
+        assert "-Command 'inspect'" in kwargs["input"]
+        return subprocess.CompletedProcess(command, 0, '{"computer":"LSH_DESKTOP"}', '')
+    monkeypatch.setattr(transport.subprocess, "run", connected)
+    assert ops.main(["inspect", "--host", "lsh-desktop", "--user", "tester", "--report-root", str(tmp_path)]) == 0
+    assert len(calls) == 1 and json.loads(capsys.readouterr().out)["ok"]
+
+
+def test_missing_named_peer_records_failure_before_ssh(monkeypatch, tmp_path, capsys):
+    snapshot = TailscaleSnapshot(True, True, "Running", ("100.64.0.1",), "Mac", (), "ready")
+    monkeypatch.setattr(transport, "tailscale_status", lambda: snapshot)
+    monkeypatch.setattr(transport.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("No SSH or host changes"))
+    assert ops.main(["inspect", "--host", "lsh-desktop", "--report-root", str(tmp_path)]) == 1
+    result = json.loads(capsys.readouterr().err)
+    assert not result["ok"] and "0개" in result["error"]
+    assert not json.loads(next(tmp_path.glob("*/result.json")).read_text(encoding="utf-8"))["ok"]
+
+
 def test_remote_failure_is_recorded_without_a_followup_mutation(monkeypatch, tmp_path, capsys):
     calls = []
     def remote(*args, **kwargs):
@@ -81,6 +143,28 @@ def test_remote_failure_is_recorded_without_a_followup_mutation(monkeypatch, tmp
                      "--report-root", str(tmp_path)]) == 1
     assert len(calls) == 1
     assert "준비 실패" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["logs", "media-qa"])
+@pytest.mark.parametrize("stdout", ['{"누락":', 'null\n', '["잘못된 응답"]\n'])
+def test_invalid_remote_response_preserves_outputs_without_retry(monkeypatch, tmp_path, capsys, command, stdout):
+    calls = []
+    stderr = "원격 진단 메시지\n"
+
+    def remote(*args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess([], 0, stdout, stderr)
+
+    monkeypatch.setattr(ops, "published_commit", lambda _: ("a" * 40, "media-center"))
+    monkeypatch.setattr(ops, "run_remote_powershell", remote)
+    assert ops.main([command, "--host", "test.invalid", "--report-root", str(tmp_path)]) == 1
+
+    report = next(tmp_path.glob("*/result.json"))
+    failure = json.loads(report.read_text(encoding="utf-8"))
+    assert failure == json.loads(capsys.readouterr().err) and failure["ok"] is False
+    assert (report.parent / "stdout.log").read_bytes() == stdout.encode("utf-8")
+    assert (report.parent / "stderr.log").read_bytes() == stderr.encode("utf-8")
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("stdout,stderr", [
@@ -239,6 +323,8 @@ def test_build_invokes_single_authoritative_builder(monkeypatch, tmp_path, capsy
     ("setup", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup"]),
     ("service-account", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup"]),
     ("none", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
+    ("archive-missing", []), ("archive-duplicate", []), ("archive-invalid", []),
+    ("archive-ok", ["payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
 ])
 def test_windows_install_stops_before_mutation_on_preparation_failure(tmp_path, failure, expected):
     # Full PowerShell workflow, OS calls mocked in this disposable process only.
@@ -249,10 +335,19 @@ def test_windows_install_stops_before_mutation_on_preparation_failure(tmp_path, 
     python.parent.mkdir(parents=True)
     python.touch()
     (repo / "build.version.json").write_text('{"targets":{"windows-host":{"version":"1.0.0","build":1}}}')
+    archived_release = "v1.0.0_b1_gabc1234"
+    if failure in {"archive-ok", "archive-duplicate"}:
+        for folder in (["one", "two"] if failure == "archive-duplicate" else ["one"]):
+            archive = repo / "release/archives/windows-host" / folder
+            archive.mkdir(parents=True)
+            for suffix in ("Setup.exe", "Portable.zip"):
+                (archive / f"HomeworkHelper_{archived_release}_{suffix}").write_bytes(b"inert fixture")
+    elif failure.startswith("archive-"):
+        (repo / "release/archives/windows-host").mkdir(parents=True)
     source = (ops.ROOT / "tools/windows_host_operations.ps1").read_text(encoding="utf-8")
     stubs = r'''
 function Git-Checked($Arguments) {
- if ($Arguments[0] -eq 'status') {if ($global:Failure -eq 'dirty') {return 'M changed'}; return ''}
+ if ($Arguments[0] -eq 'status') {if ($global:Failure -in @('dirty','archive-ok')) {return 'M changed'}; return ''}
  if ($global:Failure -eq 'source') {return 'other'}; return 'commit'
 }
 function Require-InstallTime {}
@@ -283,6 +378,9 @@ function Invoke-RestMethod {return @{ok=$true;db_ready=$true;database_access=@{m
 '''
     source = source.replace("switch ($Command) {", stubs + "\nswitch ($Command) {")
     text = "$global:Events=[Collections.Generic.List[string]]::new()\n$global:Failed=$false\n$global:Failure=" + ops.ps_literal(failure) + "\ntry {\n& {\n" + source + "\n} -Command install -Repo " + ops.ps_literal(str(repo)) + " -Owner " + ops.ps_literal(getpass.getuser()) + " -ExpectedComputer $env:COMPUTERNAME -Commit commit\n} catch { $global:Failed=$true }\n@{events=@($global:Events.ToArray());failed=$global:Failed} | ConvertTo-Json -Compress"
+    if failure.startswith("archive-"):
+        selected = "../invalid" if failure == "archive-invalid" else archived_release
+        text = text.replace(" -Commit commit\n}", " -Commit commit -ArchivedRelease " + ops.ps_literal(selected) + "\n}")
     bootstrap = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))"
     environment = {key: value for key, value in os.environ.items() if not key.startswith("HH_")}
     result = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", base64.b64encode(bootstrap.encode("utf-16-le")).decode()],
@@ -292,4 +390,56 @@ function Invoke-RestMethod {return @{ok=$true;db_ready=$true;database_access=@{m
     tail = result.stdout.strip().splitlines()[-1]
     trace = json.loads(tail)
     assert trace["events"] == expected, result.stdout + result.stderr
-    assert trace["failed"] == (failure != "none"), result.stdout + result.stderr
+    assert trace["failed"] == (failure not in {"none", "archive-ok"}), result.stdout + result.stderr
+
+
+def test_media_preview_pixels_are_saved_once_and_cannot_escape_report(tmp_path):
+    pixels = b"\x89PNG\r\n\x1a\nfixture"
+    item = {"name": "sidebar-preview.png", "base64": base64.b64encode(pixels).decode()}
+    payload = {"images": [item]}
+    ops.save_preview_images(payload, tmp_path)
+    assert (tmp_path / "sidebar-preview.png").read_bytes() == pixels
+    assert item == {"name": "sidebar-preview.png", "path": str(tmp_path / "sidebar-preview.png")}
+    for name in ("../outside.png", "..\\outside.png", "/outside.png", "outside.jpg"):
+        with pytest.raises(ValueError):
+            ops.save_preview_images({"images": [{"name": name, "base64": base64.b64encode(pixels).decode()}]}, tmp_path)
+
+
+def test_media_qa_uses_published_canonical_source_and_explicit_interactive_scenario(monkeypatch, tmp_path, capsys):
+    selected, scripts = [], []
+    pixels = b"\x89PNG\r\n\x1a\nfixture"
+    payload = {"scenario": "preview", "ok": True,
+               "images": [{"name": "sidebar-preview.png", "base64": base64.b64encode(pixels).decode()}]}
+    monkeypatch.setattr(ops, "published_commit", lambda commit: selected.append(commit) or ("a" * 40, "media-center"))
+    monkeypatch.setattr(ops, "run_remote_powershell", lambda config, script, **kwargs: (
+        scripts.append(script) or subprocess.CompletedProcess([], 0, json.dumps(payload), '')))
+    assert ops.main(["media-qa", "--scenario", "preview", "--host", "test.invalid",
+                     "--report-root", str(tmp_path)]) == 0
+    assert selected == [None] and "-Scenario 'preview'" in scripts[0]
+    assert "'media-qa'" in scripts[0] and "Invoke-Session 'media-qa'" in scripts[0]
+    summary = json.loads(capsys.readouterr().out)
+    report = Path(summary["report"])
+    assert summary["result"]["scenario"] == "preview"
+    assert (report / "sidebar-preview.png").read_bytes() == pixels
+    assert json.loads((report / "stdout.log").read_text(encoding="utf-8")) == summary["result"]
+    assert "base64" not in summary["result"]["images"][0]
+
+
+def test_media_runtime_preparation_only_installs_declared_dependencies(monkeypatch, tmp_path, capsys):
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda args, **kw: calls.append((args, kw)))
+    assert probe.main(["prepare-runtime", "--repo", str(tmp_path),
+                       "--appdata", str(tmp_path / "roaming"), "--install", str(tmp_path / "installed")]) == 0
+    args, kwargs = calls[0]
+    assert args[1:] == ["-m", "pip", "install", "-r", "requirements.txt"]
+    assert kwargs["cwd"] == tmp_path and kwargs["check"] is True
+    assert kwargs["stderr"] == subprocess.STDOUT
+    assert "requirements_log" in json.loads(capsys.readouterr().out)
+
+
+def test_native_media_failure_is_not_ssh_success(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(ops, "published_commit", lambda _: ("a" * 40, "media-center"))
+    monkeypatch.setattr(ops, "run_remote_powershell", lambda *args, **kwargs:
+                        subprocess.CompletedProcess([], 0, '{"ok":false,"scenario":"bgm"}', ''))
+    assert ops.main(["media-qa", "--host", "test.invalid", "--report-root", str(tmp_path)]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False

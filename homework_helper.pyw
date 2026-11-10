@@ -782,6 +782,7 @@ def run_server_main(shutdown_event=None):
     from pydantic import BaseModel
     from sqlalchemy.orm import Session
     from src.data import crud, models, schemas, beholder
+    from src.utils.app_paths import CapturePathError
     from src.data.database import SessionLocal, engine, auto_migrate_database, backup_database
     from src.data.database_coordination import (
         DatabaseAccessUnavailable,
@@ -1370,6 +1371,10 @@ def run_server_main(shutdown_event=None):
                 "beholder_incident": beholder.incident_to_dict(exc.incident),
             },
         )
+
+    @app.exception_handler(CapturePathError)
+    async def capture_path_error_handler(request, exc):
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     @app.exception_handler(DatabaseAccessUnavailable)
     async def database_access_unavailable_handler(request, exc):
@@ -2581,8 +2586,12 @@ def start_main_application(instance_manager: SingleInstanceApplication):
     instance_manager.start_ipc_server(main_window_to_activate=main_window)
     main_window.show()
     exit_code = app.exec() # 애플리케이션 이벤트 루프 시작
+    logging.getLogger(__name__).info("GUI event loop returned: code=%s; stopping owned API child", exit_code)
     if not stop_api_server():
+        logging.getLogger(__name__).error("Owned API child shutdown failed")
         print("API 서버 종료에 실패했습니다.")
+    else:
+        logging.getLogger(__name__).info("Owned API child stopped")
     sys.exit(exit_code) # 종료 코드로 시스템 종료
 
 if __name__ == "__main__":

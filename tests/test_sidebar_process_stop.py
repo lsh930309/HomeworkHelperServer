@@ -19,7 +19,7 @@ def sidebar_state(monkeypatch):
     monkeypatch.setattr(MainWindow, "INSTANCE", None)
     app = QApplication.instance() or QApplication([])
     process = ManagedProcess(id="game", name="Game", monitoring_path="/games/game.exe", launch_path="/games/launcher.exe")
-    settings = SimpleNamespace(run_as_admin=True)
+    settings = SimpleNamespace(run_as_admin=True, screenshot_enabled=False, obs_watch_output_dir=False)
     sidebar = sidebar_module.SidebarWidget(SimpleNamespace(managed_processes=[process], global_settings=settings))
     # Contract tests execute a captured runnable synchronously; they should not
     # process pending GUI events or animate windows owned by unrelated tests.
@@ -107,7 +107,7 @@ def test_actual_stop_worker_delivers_product_slot_on_gui_thread_in_isolated_proc
         app = QApplication([])
         MainWindow.INSTANCE = None
         process = ManagedProcess(id='game', name='Game', monitoring_path='/game.exe', launch_path='/game.exe')
-        sidebar = module.SidebarWidget(SimpleNamespace(managed_processes=[process], global_settings=SimpleNamespace(run_as_admin=True)))
+        sidebar = module.SidebarWidget(SimpleNamespace(managed_processes=[process], global_settings=SimpleNamespace(run_as_admin=True, screenshot_enabled=False, obs_watch_output_dir=False)))
         worker_on_gui = []
         receiver_on_gui = []
         def stop(*args, **kwargs):

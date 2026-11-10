@@ -37,7 +37,12 @@ def desktop(repo: Path, duration: int) -> dict:
         try:
             return {"hwnd": int(hwnd), "pid": win32process.GetWindowThreadProcessId(hwnd)[1],
                     "class": win32gui.GetClassName(hwnd), "visible": bool(win32gui.IsWindowVisible(hwnd)),
-                    "rect": win32gui.GetWindowRect(hwnd)}
+                    "rect": win32gui.GetWindowRect(hwnd),
+                    "enabled": bool(win32gui.IsWindowEnabled(hwnd)),
+                    "minimized": bool(win32gui.IsIconic(hwnd)),
+                    "style": win32gui.GetWindowLong(hwnd, -16),
+                    "extended_style": win32gui.GetWindowLong(hwnd, -20),
+                    "dpi": int(user32.GetDpiForWindow(hwnd))}
         except (OSError, pywintypes.error):
             return {"hwnd": int(hwnd), "gone": True}
 
@@ -67,10 +72,14 @@ def desktop(repo: Path, duration: int) -> dict:
                 if not hwnd:
                     break
                 bars.append(window(hwnd))
+        cursor = win32gui.GetCursorPos()
         samples.append({"ms": round((time.monotonic() - start) * 1000, 2), "screens": screens,
+                        "cursor": cursor, "cursor_window": window(win32gui.WindowFromPoint(cursor)),
                         "foreground": window(win32gui.GetForegroundWindow()), "windows": windows, "taskbars": bars})
 
     user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetDpiForWindow.argtypes = [ctypes.c_void_p]
+    user32.GetDpiForWindow.restype = ctypes.c_uint
     callback_type = ctypes.WINFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
                                       ctypes.c_long, ctypes.c_long, ctypes.c_uint32, ctypes.c_uint32)
     def event(_hook, kind, hwnd, obj, child, _thread, timestamp):
@@ -86,7 +95,7 @@ def desktop(repo: Path, duration: int) -> dict:
     user32.UnhookWinEvent.argtypes = [ctypes.c_void_p]
     try:
         if duration:
-            for low, high in ((3, 3), (0x8000, 0x800B)):
+            for low, high in ((3, 3), (0x16, 0x17), (0x8000, 0x800B)):
                 handle = user32.SetWinEventHook(low, high, None, callback, 0, 0, 2)
                 if not handle:
                     raise ctypes.WinError(ctypes.get_last_error())
@@ -142,7 +151,8 @@ def close_obs(repo: Path, appdata: Path, pid: int, created: float, sid: str, ses
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("desktop", "close-obs"))
+    p.add_argument("command", choices=("desktop", "close-obs", "media-qa"))
+    p.add_argument("--scenario", choices=("observe", "preview", "audio", "focus", "focus-compare", "focus-uia", "focus-lifecycle", "bgm", "prepare-spotify", "triggers", "firefox", "spotify-window-observe", "spotify-window-open", "spotify-window-minimize", "spotify-window-close", "spotify-window-startup", "spotify-window-startup-close", "spotify-window-startup-delayed-close"), default="observe")
     p.add_argument("--repo", type=Path, required=True)
     p.add_argument("--appdata", type=Path, required=True)
     p.add_argument("--result", type=Path, required=True)
@@ -170,12 +180,24 @@ def main(argv=None) -> int:
                 raise ValueError("Interactive user/session changed")
         finally:
             token.Close()
-        result = desktop(args.repo, args.duration) if args.command == "desktop" else close_obs(
-            args.repo, args.appdata, args.pid, args.created, args.sid, args.session)
+        if args.command == "media-qa":
+            sys.path.insert(0, str(args.repo / "tools"))
+            from windows_media_probe import run
+            result = run(args.repo, args.appdata, args.result.parent, args.scenario)
+        elif args.command == "desktop":
+            result = desktop(args.repo, args.duration)
+        else:
+            result = close_obs(args.repo, args.appdata, args.pid, args.created, args.sid, args.session)
         publish({"ok": True, "result": result})
         return 0
     except Exception as error:
-        publish({"ok": False, "error": str(error) if isinstance(error, ValueError) else type(error).__name__})
+        failure = {"ok": False, "error": str(error) if isinstance(error, ValueError) else type(error).__name__}
+        if args.command == "media-qa":
+            import traceback
+            sys.path.insert(0, str(args.repo))
+            from src.gui.runtime_logging import redact_sensitive_text
+            failure["error"] = redact_sensitive_text(traceback.format_exc())
+        publish(failure)
         return 1
 
 

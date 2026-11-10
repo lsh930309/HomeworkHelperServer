@@ -528,6 +528,7 @@ def test_beholder_dialog_cannot_reenter_and_close_snoozes_for_current_run(monkey
 
     incident = {"id": 41, "status": "pending", "operation_kind": "runtime_stop"}
     opens: list[int] = []
+    restores: list[bool] = []
 
     class Dialog:
         action = None
@@ -548,9 +549,7 @@ def test_beholder_dialog_cannot_reenter_and_close_snoozes_for_current_run(monkey
         _beholder_seen_incidents=set(),
         data_manager=DataManager(),
         process_monitor=SimpleNamespace(),
-        showNormal=lambda: None,
-        raise_=lambda: None,
-        activateWindow=lambda: None,
+        activate_and_show=lambda: restores.append(True),
     )
     monkeypatch.setattr(main_window_module, "BeholderIncidentDialog", Dialog)
 
@@ -558,6 +557,7 @@ def test_beholder_dialog_cannot_reenter_and_close_snoozes_for_current_run(monkey
     MainWindow._apply_beholder_incidents(window, (incident,))
 
     assert len(opens) == 1
+    assert restores == [True]
     assert window._beholder_dialog_active is False
     assert window._beholder_seen_incidents == {41}
 

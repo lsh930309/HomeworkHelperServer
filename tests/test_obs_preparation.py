@@ -47,16 +47,20 @@ class FakeOBS:
 
 
 @pytest.fixture
-def isolated_obs(monkeypatch):
+def isolated_obs(monkeypatch, tmp_path):
     calls = []
+    directory = str(tmp_path / "obs-recordings")
+    monkeypatch.setenv("HH_TEST_APPDATA_DIR", str(tmp_path / "app-data"))
     monkeypatch.setattr(recording, "read_obs_connection", lambda:{"host":"localhost","port":1234,"password":"fixture"})
-    monkeypatch.setattr(recording, "read_obs_output_directory", lambda:"C:/Fixture/OBS")
+    monkeypatch.setattr(recording, "read_obs_output_directory", lambda: directory)
     monkeypatch.setattr(recording, "find_obs_executable", lambda:"C:/Fixture/obs64.exe")
     monkeypatch.setattr(recording, "OBSClient", FakeOBS)
     monkeypatch.setattr(recording.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(HostPrivilegeClient, "launch_obs",
                         lambda self:calls.append(get_ident()) or {"accepted":True,"pid":101,"already_running":True})
-    return recording.RecordingManager(), calls
+    manager = recording.RecordingManager()
+    manager._client.directory = directory
+    return manager, calls
 
 
 def settings(enabled):
@@ -400,27 +404,35 @@ def test_disable_from_completion_is_consumed_by_the_same_worker(isolated_obs):
     assert manager.get_state()=="obs_offline" and not manager._client.connected and len(launches)==1
 
 
-def test_real_directory_is_refreshed_before_each_record_request(isolated_obs):
+def test_real_directory_is_refreshed_before_each_record_request(isolated_obs, tmp_path):
     manager, launches = isolated_obs
     manager.prepare_for_startup(settings(True)); finish(manager)
-    assert manager.get_output_directory()=="C:/Fixture/OBS"
-    manager._client.directory="C:/Fixture/NewRecordings"
+    assert manager.get_output_directory() == str(tmp_path / "obs-recordings")
+    manager._client.directory = str(tmp_path / "new-recordings")
     seen=[]
     manager.set_on_info_changed(lambda:seen.append(manager.get_output_directory()))
     manager.start_recording(); finish(manager)
-    assert seen==["C:/Fixture/NewRecordings"]
+    assert seen == [str(tmp_path / "new-recordings")]
     assert manager.get_state()=="recording" and len(launches)==1
     assert manager._client.calls[-1]==("record",)
 
 
-def test_directory_failure_does_not_interrupt_recording_control(isolated_obs):
-    manager, launches = isolated_obs
+@pytest.mark.parametrize("folder", ["unknown", "app-data"])
+def test_recording_requires_confirmed_output_outside_app_data(isolated_obs, tmp_path, folder):
+    manager, _ = isolated_obs
     manager.prepare_for_startup(settings(True)); finish(manager)
-    manager._client.directory=None
+    valid = manager._client.directory
+    protected = tmp_path / "app-data" / "captures"
+    manager._client.directory = None if folder == "unknown" else str(protected)
     manager.start_recording(); finish(manager)
-    assert manager._client.calls[-1]==("record",)
-    assert manager.get_state()=="recording" and manager._client.is_connected()
-    assert manager.get_output_directory()=="" and manager.get_obs_info()["error"]
+    assert ("record",) not in manager._client.calls
+    assert manager.get_state() == "idle" and manager._client.is_connected()
+    assert manager.get_obs_info()["error"] and not protected.exists()
+
+    manager._client.directory = valid
+    manager.start_recording(); finish(manager)
+    assert manager.get_state() == "recording" and manager._client.calls.count(("record",)) == 1
+    assert not manager.get_obs_info()["error"]
 
 
 @pytest.mark.parametrize("failure", ["launch", "config", "connect", "status"])
@@ -438,7 +450,7 @@ def test_startup_control_failure_keeps_existing_file_directory(isolated_obs,monk
         monkeypatch.setattr(manager._client,"get_record_status",lambda:None)
     manager.prepare_for_startup(settings(True)); finish(manager)
     assert manager.get_state()=="obs_offline" and manager.get_last_error()
-    assert manager.get_output_directory()=="C:/Fixture/OBS"
+    assert manager.get_output_directory() == manager._client.directory
     assert not any(call[0]=="record" for call in manager._client.calls)
 
 
@@ -448,13 +460,13 @@ def test_startup_file_lookup_failure_does_not_block_connection(isolated_obs,monk
     monkeypatch.setattr(recording,"read_obs_output_directory",fail)
     manager.prepare_for_startup(settings(True)); finish(manager)
     assert manager.get_state()=="idle" and len(launches)==1
-    assert manager.get_output_directory()=="C:/Fixture/OBS" and not manager.get_obs_info()["error"]
+    assert manager.get_output_directory() == manager._client.directory and not manager.get_obs_info()["error"]
 
 
 def test_disabled_recording_still_reads_files_without_reconnect(isolated_obs):
     manager,launches=isolated_obs
     manager.prepare_for_startup(settings(False)); finish(manager)
-    assert manager.get_output_directory()=="C:/Fixture/OBS" and len(launches)==1
+    assert manager.get_output_directory() == manager._client.directory and len(launches) == 1
     manager.reconnect(); finish(manager)
     assert len(launches)==1 and manager.get_state()=="obs_offline"
     assert not any(call[0]=="connect" for call in manager._client.calls)
@@ -495,22 +507,21 @@ def test_sidebar_file_visibility_is_independent_of_recording_control(control,fil
     from PySide6.QtWidgets import QApplication
     from src.gui.sidebar.sidebar_widget import SidebarWidget
     app=QApplication.instance() or QApplication([])
-    choices=SimpleNamespace(recording_enabled=control,obs_watch_output_dir=files)
-    view=SimpleNamespace(_data_manager=SimpleNamespace(global_settings=choices),
-        _rec_state="obs_offline",_get_recording_elapsed=None,
-        _on_rec_start_clicked=lambda:None,_on_rec_stop_clicked=lambda:None,_on_rec_connect_clicked=lambda:None)
-    view._recording_section=SidebarWidget._build_recording_section(view)
-    view._update_rec_ui=lambda:SidebarWidget._update_rec_ui(view)
-    SidebarWidget._refresh_recording_section(view)
-    assert view._recording_section.isHidden() is not (control or files)
-    assert view._rec_thumb_grid_container.isHidden() is not files
-    assert view._rec_status_label.isHidden() is not control
-    assert view._rec_connect_btn.isHidden() is not control
-    view._rec_state="idle"; view._update_rec_ui()
-    assert view._rec_start_btn.isHidden() is not control
-    assert view._rec_connect_btn.isHidden()
-    view._recording_section.deleteLater()
-    app.processEvents()
+    choices=SimpleNamespace(screenshot_enabled=False,recording_enabled=control,obs_watch_output_dir=files)
+    view=SidebarWidget(SimpleNamespace(global_settings=choices))
+    try:
+        view._refresh_recording_section()
+        assert view._recording_section.isHidden() is not (control or files)
+        assert ("recording" in [view._gallery_tabs.tabData(index) for index in range(view._gallery_tabs.count())]) is files
+        assert view._rec_status_label.isHidden() is not control
+        assert view._rec_connect_btn.isHidden() is not control
+        view._rec_state="idle"; view._update_rec_ui()
+        assert view._rec_start_btn.isHidden() is not control
+        assert view._rec_connect_btn.isHidden()
+    finally:
+        assert view.cleanup(deadline_ms=200)
+        view.close()
+        app.processEvents()
 
 
 def test_viewing_settings_only_reads_and_does_not_reopen_obs(isolated_obs):
@@ -518,7 +529,7 @@ def test_viewing_settings_only_reads_and_does_not_reopen_obs(isolated_obs):
     manager.apply_settings(settings(False)); finish(manager)
     manager.refresh_info(); finish(manager)
     assert not launches and not any(call[0]=="connect" for call in manager._client.calls)
-    assert manager.get_obs_info()["output_dir"]=="C:/Fixture/OBS"
+    assert manager.get_obs_info()["output_dir"] == manager._client.directory
     assert manager.get_state()=="obs_offline"
 
 

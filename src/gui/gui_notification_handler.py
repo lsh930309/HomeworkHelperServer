@@ -36,12 +36,7 @@ class GuiNotificationHandler(QObject):
                     sidebar.slide_in()
                     return
 
-            if self.main_window.isMinimized():
-                self.main_window.showNormal()
-            else:
-                self.main_window.show()
-            self.main_window.activateWindow()
-            self.main_window.raise_()
+            self.main_window.activate_and_show()
 
         except Exception as e:
             print(f"[알림 콜백 예외] {e}")

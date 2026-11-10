@@ -3,7 +3,7 @@ import os
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
     QDoubleSpinBox, QSpinBox, QLineEdit, QGroupBox,
-    QDialogButtonBox, QFormLayout, QComboBox, QPushButton, QFileDialog,
+    QDialogButtonBox, QFormLayout, QComboBox, QPushButton, QFileDialog, QMessageBox,
 )
 from PySide6.QtCore import Qt, QMetaObject, Slot, Q_ARG
 
@@ -14,6 +14,7 @@ from src.data.data_models import (
     SIDEBAR_MODE_DISABLED,
     normalize_sidebar_mode,
 )
+from src.utils.app_paths import CapturePathError, validate_capture_output_path
 
 
 class SidebarSettingsDialog(QDialog):
@@ -73,12 +74,7 @@ class SidebarSettingsDialog(QDialog):
         self._height_spin.setToolTip("화면 세로 길이 대비 사이드바 높이 비율 (최소 0.30 = 30%)")
         basic_form.addRow("높이 비율 (0.30~1.00)", self._height_spin)
 
-        self._opacity_spin = QDoubleSpinBox()
-        self._opacity_spin.setRange(0.1, 1.0)
-        self._opacity_spin.setSingleStep(0.05)
-        self._opacity_spin.setDecimals(2)
-        self._opacity_spin.setValue(self._settings.sidebar_opacity)
-        basic_form.addRow("투명도 (0.10~1.00)", self._opacity_spin)
+        basic_form.addRow("배경", QLabel("검은 Acrylic · 고정 투명도"))
 
         self._auto_hide_spin = QSpinBox()
         self._auto_hide_spin.setRange(0, 60000)
@@ -129,13 +125,9 @@ class SidebarSettingsDialog(QDialog):
         self._clock_enabled_cb.setChecked(self._settings.sidebar_clock_enabled)
         section_form.addRow("현재 시간 표시", self._clock_enabled_cb)
 
-        self._playtime_enabled_cb = QCheckBox()
-        self._playtime_enabled_cb.setChecked(self._settings.sidebar_playtime_enabled)
-        section_form.addRow("플레이타임 표시", self._playtime_enabled_cb)
-
         self._vol_enabled_cb = QCheckBox()
         self._vol_enabled_cb.setChecked(self._settings.sidebar_volume_section_enabled)
-        section_form.addRow("볼륨 섹션 표시", self._vol_enabled_cb)
+        section_form.addRow("게임별 음량 조절 표시", self._vol_enabled_cb)
 
         left_col.addWidget(section_group)
 
@@ -143,22 +135,10 @@ class SidebarSettingsDialog(QDialog):
         clock_group = QGroupBox("현재 시간 섹션")
         clock_form = QFormLayout(clock_group)
 
-        self._clock_format_edit = QLineEdit(self._settings.sidebar_clock_format)
-        self._clock_format_edit.setToolTip(
-            "strftime 형식 문자열\n예: %H:%M:%S (24시), %I:%M %p (12시), %Y-%m-%d %H:%M"
-        )
-        clock_form.addRow("시간 포맷", self._clock_format_edit)
+        clock_form.addRow("표시 형식", QLabel("HH:MM + 작은 초 · 0.5초 점멸"))
 
         left_col.addWidget(clock_group)
 
-        # ── 플레이타임 설정 ──
-        pt_group = QGroupBox("플레이타임 섹션")
-        pt_form = QFormLayout(pt_group)
-
-        self._playtime_prefix_edit = QLineEdit(self._settings.sidebar_playtime_prefix)
-        pt_form.addRow("접두어 텍스트", self._playtime_prefix_edit)
-
-        left_col.addWidget(pt_group)
         left_col.addStretch()
 
         # ════════════════ 오른쪽 컬럼 ════════════════
@@ -175,6 +155,7 @@ class SidebarSettingsDialog(QDialog):
         save_dir_row = QHBoxLayout()
         self._ss_save_dir_edit = QLineEdit(self._settings.screenshot_save_dir)
         self._ss_save_dir_edit.setPlaceholderText("비워두면 기본 경로 사용 (~/Pictures/GameCaptures)")
+        self._ss_save_dir_edit.setToolTip("호스트 앱 데이터 폴더 밖에 스크린샷을 저장합니다.")
         browse_btn = QPushButton("찾기...")
         browse_btn.setFixedWidth(60)
         browse_btn.clicked.connect(self._browse_screenshot_dir)
@@ -294,8 +275,22 @@ class SidebarSettingsDialog(QDialog):
             __import__('pathlib').Path.home() / "Pictures"
         )
         chosen = QFileDialog.getExistingDirectory(self, "스크린샷 저장 폴더 선택", start)
-        if chosen:
+        if chosen and self._check_screenshot_directory(chosen):
             self._ss_save_dir_edit.setText(chosen)
+
+    def _check_screenshot_directory(self, path: str) -> bool:
+        try:
+            validate_capture_output_path(path)
+        except CapturePathError as error:
+            QMessageBox.warning(self, "스크린샷 저장 경로", str(error))
+            return False
+        return True
+
+    def accept(self) -> None:
+        path = self._ss_save_dir_edit.text().strip()
+        if path and path != self._settings.screenshot_save_dir and not self._check_screenshot_directory(path):
+            return
+        super().accept()
 
     @Slot()
     def refresh_obs_info(self, *_args) -> None:
@@ -359,7 +354,6 @@ class SidebarSettingsDialog(QDialog):
         gs.sidebar_mode = self._mode_combo.currentData()
         gs.sidebar_enabled = gs.sidebar_mode != SIDEBAR_MODE_DISABLED
         gs.sidebar_height_ratio = self._height_spin.value()
-        gs.sidebar_opacity = self._opacity_spin.value()
         gs.sidebar_auto_hide_ms = self._auto_hide_spin.value()
         gs.sidebar_edge_width_px = self._edge_width_spin.value()
         y_start = self._trigger_y_start_spin.value()
@@ -368,9 +362,6 @@ class SidebarSettingsDialog(QDialog):
         gs.sidebar_trigger_y_end = max(y_start, y_end)
         gs.sidebar_handle_auto_hide = self._handle_auto_hide_cb.isChecked()
         gs.sidebar_clock_enabled = self._clock_enabled_cb.isChecked()
-        gs.sidebar_clock_format = self._clock_format_edit.text().strip() or "%H:%M:%S"
-        gs.sidebar_playtime_enabled = self._playtime_enabled_cb.isChecked()
-        gs.sidebar_playtime_prefix = self._playtime_prefix_edit.text().strip()
         gs.sidebar_volume_section_enabled = self._vol_enabled_cb.isChecked()
         gs.screenshot_enabled = self._ss_enabled_cb.isChecked()
         gs.screenshot_save_dir = self._ss_save_dir_edit.text().strip()

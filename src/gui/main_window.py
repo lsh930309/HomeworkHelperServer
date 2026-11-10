@@ -10,7 +10,7 @@ import logging
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QMenuBar, QCheckBox,
-    QLabel, QProgressBar, QSlider, QToolButton, QDialog, QLineEdit,
+    QLabel, QSlider, QToolButton, QDialog, QLineEdit,
 )
 from PySide6.QtCore import (
     Qt, QTimer, Signal, Slot, QUrl, QEvent, QThread, QSettings, QPoint, QSize,
@@ -47,9 +47,14 @@ from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.process import get_qicon_for_file
 from src.utils.windows import (
     apply_windows_title_bar_color,
-    position_windows_window_bottom_right,
+    is_windows,
+    place_window_rect_in_work_area,
+    position_windows_window_in_work_area,
+    set_windows_taskbar_visible,
 )
 from src.core.launcher import Launcher
+from src.core.game_audio import GameAudioTarget
+from src.core.media_center import MediaCenterRuntime, MediaCenterSnapshot, MediaOptions
 from src.core.launch_target import (
     launcher_candidates, preset_launcher_patterns, resolve_launch_mode,
     resolve_launch_target, resolve_launch_args,
@@ -74,9 +79,12 @@ from src.gui.sidebar.sidebar_controller import SidebarController
 from src.gui.power_events import DesiredTimerRegistry, PowerResumeEvent, WindowsPowerEventFilter
 from src.gui.work_coordinator import GuiWorkCoordinator, WorkError, WorkResult
 from src.gui.widgets_style import (
+    GameIconLabel,
     CapsuleProgressBar,
     apply_modern_widgets_style,
     apply_widgets_palette,
+    calculate_game_progress,
+    progress_bar_format,
     tint_icon,
     widgets_theme_tokens,
 )
@@ -140,9 +148,8 @@ class MainWindow(QMainWindow):
     _recording_info_sig = Signal()
     _recording_state_sig = Signal(str)        # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
     _gamepad_countdown_sig = Signal()         # 게임패드 롱프레스 → 메인 스레드 릴레이
+    _media_center_sig = Signal(object)
 
-    _PROGRESS_BAR_SCALE = 10
-    _PROGRESS_BAR_MAX = 100 * _PROGRESS_BAR_SCALE
     _UI_REFRESH_INTERVAL_MS = 1000
     _WEB_BUTTON_REFRESH_INTERVAL_TICKS = 60
     _MIN_WINDOW_WIDTH = 320
@@ -244,6 +251,11 @@ class MainWindow(QMainWindow):
         self._wake_recovery_in_progress = False
         self._mute_retry_tokens: dict[str, int] = {}
         self._volume_retry_tokens: dict[str, int] = {}
+        # 정상 초기화 뒤 첫 감시 결과가 준비되면 한 번만 미디어 기능을 시작한다.
+        self._media_startup_pending = True
+        self._media_center = None
+        self._media_center_snapshot = None
+        self._media_center_sig.connect(self._on_media_center_snapshot)
         self._beholder_seen_incidents: set[int] = set()
         self._beholder_restore_runtime_suspended = False
 
@@ -265,7 +277,9 @@ class MainWindow(QMainWindow):
         # 볼륨 패널 상태
         self._volume_applied_pids: dict[str, int] = {}  # process_id -> 적용 완료 PID (PID 변경 재실행 감지)
         self._volume_panel: VolumePopoverPanel = VolumePopoverPanel(
-            self.data_manager, on_hide=self._on_volume_panel_hidden
+            self.data_manager, on_hide=self._on_volume_panel_hidden,
+            on_audio_change=self._on_game_audio_preferences_changed,
+            audio_state=self._media_game_audio_state,
         )
 
         # 사이드바 컨트롤러 초기화
@@ -462,7 +476,7 @@ class MainWindow(QMainWindow):
 
         app_instance = QApplication.instance()
         if app_instance is not None:
-            app_instance.primaryScreenChanged.connect(self._position_window_bottom_right)
+            app_instance.primaryScreenChanged.connect(self._position_window_in_work_area)
         self._apply_widgets_presentation()
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
@@ -824,9 +838,7 @@ class MainWindow(QMainWindow):
             if incident_id is not None:
                 self._beholder_seen_incidents.add(incident_id)
             self._beholder_dialog_active = True
-            self.showNormal()
-            self.raise_()
-            self.activateWindow()
+            self.activate_and_show()
             dialog = BeholderIncidentDialog(item, self)
             try:
                 accepted = bool(dialog.exec())
@@ -913,12 +925,13 @@ class MainWindow(QMainWindow):
         def remaining_ms():
             return max(0, int((deadline - time.monotonic()) * 1000))
 
+        media = self._stop_media_center(remaining_ms())
         # 아직 외부 응답을 기다리는 writer가 있으면 복구 POST를 허용하지 않는다.
         hoyo = self._hoyolab_reconcile.shutdown(remaining_ms())
         nikke = self._nikke_resource_reconcile.shutdown(remaining_ms())
         checkin = self._daily_checkin.shutdown(remaining_ms())
         work = self._work_coordinator.shutdown(deadline_seconds=remaining_ms() / 1000.0)
-        return hoyo and nikke and checkin and work
+        return media and hoyo and nikke and checkin and work
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -953,9 +966,9 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
 
     def moveEvent(self, event):
-        """이동이 끝난 뒤 같은 모니터의 작업 영역 우하단에 맞춥니다."""
+        """사용자 이동을 유지하며 가까운 작업 영역 경계에만 붙입니다."""
         super().moveEvent(event)
-        QTimer.singleShot(0, self._position_window_bottom_right)
+        self._position_window_in_work_area(placement="snap")
 
     def _on_monitor_timer_tick(self):
         """타이머 지연을 기록하고 다음 process snapshot을 요청합니다."""
@@ -1004,7 +1017,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_status_columns()
         self._refresh_progress_bars()
-        self._position_window_bottom_right()
+        self._position_window_in_work_area()
 
         if self._ui_refresh_tick_count % self._WEB_BUTTON_REFRESH_INTERVAL_TICKS == 0:
             self._refresh_web_button_states()
@@ -1028,6 +1041,8 @@ class MainWindow(QMainWindow):
 
     def activate_and_show(self):
         """IPC 등을 통해 외부에서 창을 활성화하고 표시하도록 요청받았을 때 호출됩니다."""
+        if is_windows() and self.isMinimized():
+            set_windows_taskbar_visible(int(self.winId()), True)
         self.showNormal() # 창을 보통 크기로 표시 (최소화/숨김 상태에서 복원)
         self.activateWindow() # 창 활성화 (포커스 가져오기)
         self.raise_() # 창을 최상단으로 올림
@@ -1317,10 +1332,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "저장 실패", "항상 위 설정 저장이 차단되었거나 실패해 변경을 적용하지 않았습니다.")
             self._poll_beholder_incidents()
             self._load_always_on_top_setting()
-            self.show()
+            self.activate_and_show()
             return
         self._load_always_on_top_setting()
-        self.show()
+        self.activate_and_show()
 
     def _apply_theme(self, theme: str = "system"):
         """테마를 적용합니다. theme: 'system' | 'light' | 'dark'"""
@@ -1399,7 +1414,7 @@ class MainWindow(QMainWindow):
             self._load_always_on_top_setting()
             # 테마 설정 즉시 적용
             self._apply_theme(getattr(upd_gs, 'theme', 'system'))
-            self.show() # 창 플래그 변경을 적용하기 위해 show() 호출
+            self.activate_and_show() # 창 플래그 적용과 공통 복원 경계를 함께 사용
 
             self._record_status_event("전역 설정 저장됨.", 3000)
             self.apply_startup_setting() # 시작 프로그램 설정 적용
@@ -1522,7 +1537,16 @@ class MainWindow(QMainWindow):
         if changed:
             self._record_status_event("프로세스 상태 변경 감지됨.", 2000)
             self.update_process_statuses_only()
+            controller = getattr(self, "_sidebar_controller", None)
+            if controller is not None:
+                controller.refresh_game_rows()
         self._check_and_toggle_game_mode()
+
+        self._publish_media_targets()
+        if self._media_startup_pending:
+            self._media_startup_pending = False
+            if is_windows():
+                self.configure_media_center(MediaOptions(auto_bgm=self.data_manager.global_settings.media_auto_bgm))
 
     def _check_and_toggle_game_mode(self):
         """실행 중인 게임이 있는지 확인하고, 그에 따라 창을 숨기거나 표시합니다."""
@@ -1637,7 +1661,7 @@ class MainWindow(QMainWindow):
     def _create_centered_app_icon_cell(self, icon: QIcon) -> QLabel:
         """아이콘 전용 셀 안에 앱 아이콘을 중앙 정렬합니다."""
         icon_size = self._TABLE_ICON_LOGICAL_SIZE
-        label = QLabel()
+        label = GameIconLabel(icon_size)
         label.setObjectName("gameAppIcon")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setContentsMargins(0, 0, 0, 0)
@@ -1691,7 +1715,7 @@ class MainWindow(QMainWindow):
         self.process_table.setSortingEnabled(False)
         processes = sorted(
             self.data_manager.managed_processes,
-            key=lambda process: ((process.name or "").casefold(), process.id or ""),
+            key=ManagedProcess.name_sort_key,
         )
         self.process_table.setRowCount(len(processes))
         now_dt = datetime.datetime.now()
@@ -1717,7 +1741,7 @@ class MainWindow(QMainWindow):
             name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
             self.process_table.setItem(row, self.COL_NAME, name_item)
 
-            percentage, time_str = self._calculate_progress_percentage(p, now_dt)
+            percentage, time_str = calculate_game_progress(p, now_dt)
             progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
             self.process_table.setCellWidget(row, self.COL_LAST_PLAYED, progress_widget)
 
@@ -2171,10 +2195,12 @@ class MainWindow(QMainWindow):
     def _position_on_cursor_screen_bottom_right(self) -> None:
         """창을 열 때 커서가 있는 모니터를 선택합니다."""
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
-        self._position_window_bottom_right(screen)
+        self._position_window_in_work_area(screen, placement="bottom_right")
 
-    def _position_window_bottom_right(self, screen=None) -> None:
-        """표시 중인 창의 가시 프레임 우하단을 같은 작업 영역에 맞춥니다."""
+    def _position_window_in_work_area(
+        self, screen=None, *, placement: Literal["bottom_right", "snap", "contain"] = "contain",
+    ) -> None:
+        """표시는 우하단, 이동은 근접 스냅, 갱신은 영역 밖 부분만 보정합니다."""
         if not self.isVisible() or self.isMinimized():
             return
         try:
@@ -2182,17 +2208,21 @@ class MainWindow(QMainWindow):
             if screen is None:
                 return
             origin = screen.geometry().topLeft()
-            if position_windows_window_bottom_right(int(self.winId()), (origin.x(), origin.y())):
+            if position_windows_window_in_work_area(int(self.winId()), (origin.x(), origin.y()), placement=placement):
                 return
             available = screen.availableGeometry()
             frame = self.frameGeometry()
-            target = QPoint(available.right() - frame.width() + 1,
-                            available.bottom() - frame.height() + 1)
+            placed = place_window_rect_in_work_area(
+                (frame.left(), frame.top(), frame.right() + 1, frame.bottom() + 1),
+                (available.left(), available.top(), available.right() + 1, available.bottom() + 1),
+                placement=placement,
+            )
+            target = QPoint(placed[0], placed[1])
             if frame.topLeft() != target:
                 # QWidget.move의 창 좌표는 프레임을 포함한다.
                 self.move(target)
         except Exception:
-            logger.debug("메인 창 우하단 배치 실패", exc_info=True)
+            logger.debug("메인 창 작업 영역 배치 실패: 의도=%s", placement, exc_info=True)
 
     def closeEvent(self, event: QEvent):
         """창 닫기 이벤트를 처리합니다. 트레이 관리자가 있으면 트레이로 숨깁니다."""
@@ -2215,6 +2245,7 @@ class MainWindow(QMainWindow):
         heartbeat_prepared = self._timer_registry.is_enabled("heartbeat") and not self._beholder_restore_runtime_suspended
         self._timer_registry.shutdown()
         self._lifecycle_shutdown_event.set()
+        self._stop_media_center(remaining_ms())
         app_instance = QApplication.instance()
         if app_instance is not None and sys.platform == "win32":
             try:
@@ -2270,10 +2301,13 @@ class MainWindow(QMainWindow):
         # 3-3. Game Bar 설정 복원
         self._restore_gamebar_setting()
 
-        # 4. QApplication 종료
+        # 정리가 끝난 명시적 앱 종료는 창 닫기의 트레이 숨김 정책이
+        # 거부할 수 있는 quit 요청과 구분한다. GUI 루프가 반환되어야
+        # entrypoint의 기존 API child 종료 절차가 실행된다.
         app_instance = QApplication.instance()
         if app_instance:
-            app_instance.quit()
+            logger.info("GUI cleanup completed; exiting application event loop")
+            app_instance.exit(0)
 
     def _cell_content_width(self, row: int, column: int) -> int:
         if column == self.COL_ICON:
@@ -2364,9 +2398,144 @@ class MainWindow(QMainWindow):
             self._pending_bottom_right_placement = False
             QTimer.singleShot(0, self._position_on_cursor_screen_bottom_right)
         else:
-            QTimer.singleShot(0, self._position_window_bottom_right)
+            QTimer.singleShot(0, self._position_window_in_work_area)
 
     # ───────── 볼륨 패널 ─────────
+
+    def _on_media_options_changed(self, options: MediaOptions) -> bool:
+        if self._shutting_down or self._beholder_restore_runtime_suspended or self._media_center is None:
+            return False
+        current = self.data_manager.global_settings
+        if options.auto_bgm != current.media_auto_bgm:
+            updated = GlobalSettings.from_dict(current.to_dict())
+            updated.media_auto_bgm = options.auto_bgm
+            saved = self.data_manager.save_global_settings(updated, actor="media_bgm_toggle")
+            if not saved or self.data_manager.global_settings.media_auto_bgm != options.auto_bgm:
+                logger.warning("BGM 자동 재생 설정을 저장하지 못했습니다.")
+                return False
+        return self.configure_media_center(options)
+
+    def configure_media_center(self, options: MediaOptions | None) -> bool:
+        """미디어 기능을 시작하거나 현재 실행에 옵션을 적용한다."""
+        if self._shutting_down or self._beholder_restore_runtime_suspended:
+            return False
+        # 먼저 사용자가 고른 옵션을 이후 초기화의 기본값으로 덮지 않는다.
+        self._media_startup_pending = False
+        if options is None:
+            return self._stop_media_center()
+        if not is_windows():
+            logger.warning("미디어 센터는 Windows 사용자 세션에서만 사용할 수 있습니다.")
+            return False
+        if self._media_center is None:
+            runtime = MediaCenterRuntime(
+                on_change=lambda snapshot: self._media_center_sig.emit((runtime, snapshot)))
+            self._media_center = runtime
+            self._publish_media_targets()
+            if not runtime.start(options):
+                logger.warning("미디어 센터 시작 실패: %s", runtime.snapshot.error)
+                self._media_center = None
+                self._media_center_snapshot = runtime.snapshot
+                self._sidebar_controller.dispatch_media_state(self.media_center_state())
+                return False
+        else:
+            if not self._media_center.configure(options):
+                logger.warning("종료 또는 정리 중인 미디어 센터의 설정은 변경할 수 없습니다.")
+                return False
+        # 이전 단독 writer의 준비 지연 재시도가 자동 정책을 뒤늦게 덮지 못하게 한다.
+        for process in self.data_manager.managed_processes:
+            self._mute_retry_tokens[process.id] = self._mute_retry_tokens.get(process.id, 0) + 1
+            self._volume_retry_tokens[process.id] = self._volume_retry_tokens.get(process.id, 0) + 1
+        return True
+
+    def request_media_command(self, action: str, session_id: str | None = None, *, value=None) -> bool:
+        if self._shutting_down or self._beholder_restore_runtime_suspended:
+            return False
+        runtime = self._media_center
+        return bool(runtime is not None and runtime.request(action, session_id, value=value))
+
+    def media_center_state(self) -> MediaCenterSnapshot | None:
+        """사이드바에 최신 저장 선택과 미디어 관측을 함께 전달한다."""
+        snapshot = self._media_center_snapshot
+        if snapshot is None:
+            return None
+        auto_bgm = self.data_manager.global_settings.media_auto_bgm
+        if snapshot.options.auto_bgm == auto_bgm:
+            return snapshot
+        return replace(snapshot, options=replace(snapshot.options, auto_bgm=auto_bgm))
+
+    @Slot(object)
+    def _on_media_center_snapshot(self, event) -> None:
+        if self._shutting_down or self._beholder_restore_runtime_suspended or self._media_center is None:
+            return
+        owner, snapshot = event
+        if owner is not self._media_center:
+            return
+        if snapshot.audio_released:
+            self._release_media_center(snapshot)
+            for process in self.data_manager.managed_processes:
+                self._sync_default_volume_state(process, self._get_active_pid(process.id))
+            return
+        self._media_center_snapshot = snapshot
+        self._sidebar_controller.dispatch_media_state(self.media_center_state())
+
+    def _publish_media_targets(self, changed_process: ManagedProcess | None = None, *,
+                               apply_volume: bool = False) -> None:
+        runtime = getattr(self, "_media_center", None)
+        if runtime is None:
+            return
+        active = self.process_monitor.active_monitored_processes
+        targets = []
+        volume_change = None
+        for process in self.data_manager.managed_processes:
+            if changed_process is not None and changed_process.id == process.id:
+                process = changed_process
+            entry = active.get(process.id)
+            if entry is None:
+                continue
+            target = GameAudioTarget(
+                process.id, int(entry["pid"]), float(entry["start_time_approx"]),
+                str(entry.get("exe") or process.monitoring_path),
+                bool(process.default_muted), process.default_volume,
+            )
+            targets.append(target)
+            if apply_volume and process is changed_process:
+                volume_change = target
+        if volume_change is None:
+            runtime.update_targets(tuple(targets))
+        else:
+            runtime.update_targets(tuple(targets), volume_change=volume_change)
+
+    def _media_game_audio_state(self, process_id: str):
+        active = self._media_center is not None
+        snapshot = self._media_center_snapshot
+        observation = next((item for item in getattr(snapshot, "game_audio", ())
+                            if item.target.process_id == process_id), None)
+        return active, observation
+
+    def _on_game_audio_preferences_changed(self, process: ManagedProcess, *,
+                                           apply_volume: bool = False) -> bool:
+        if self._media_center is None or self._media_center.snapshot.audio_released:
+            return False
+        self._publish_media_targets(process, apply_volume=apply_volume)
+        return True
+
+    def _stop_media_center(self, deadline_ms: int = 2000) -> bool:
+        runtime = getattr(self, "_media_center", None)
+        if runtime is None:
+            return True
+        stopped = runtime.stop(timeout_seconds=max(0, deadline_ms) / 1000.0)
+        if stopped:
+            self._release_media_center()
+        else:
+            logger.warning("미디어 센터 종료 또는 사용자 음소거 복원이 완료되지 않았습니다.")
+        return stopped
+
+    def _release_media_center(self, snapshot: MediaCenterSnapshot | None = None) -> None:
+        """정리 완료 후 기존 음량 처리에 소유권을 돌려준다."""
+        self._media_center = None
+        self._media_center_snapshot = snapshot
+        self._volume_applied_pids.clear()
+        self._sidebar_controller.dispatch_media_state(self.media_center_state())
 
     def _toggle_volume_panel(self):
         """볼륨 팝오버 패널을 토글합니다."""
@@ -2395,6 +2564,12 @@ class MainWindow(QMainWindow):
 
     def _sync_default_volume_state(self, process: ManagedProcess, pid: Optional[int]) -> None:
         """프로세스의 기본 볼륨을 시스템에 적용하거나 추적 상태를 정리합니다."""
+        runtime = getattr(self, "_media_center", None)
+        if runtime is not None and not runtime.snapshot.audio_released:
+            self._mute_retry_tokens[process.id] = self._mute_retry_tokens.get(process.id, 0) + 1
+            self._volume_retry_tokens[process.id] = self._volume_retry_tokens.get(process.id, 0) + 1
+            self._publish_media_targets()
+            return
         if not pid:
             self._volume_applied_pids.pop(process.id, None)
             self._volume_retry_tokens.pop(process.id, None)
@@ -2730,73 +2905,6 @@ class MainWindow(QMainWindow):
 
     # ─────────────────────────────
 
-    def _calculate_progress_percentage(self, process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:
-        """마지막 실행 시각을 기준으로 다음 접속까지의 진행률을 계산합니다.
-
-        호요버스 게임의 경우 스태미나 기반으로 계산합니다.
-        """
-        # 범용 외부 리소스 추적이 활성화된 경우 리소스 기반 계산
-        if getattr(process, 'resource_tracking_enabled', False) and getattr(process, 'resource_provider', None):
-            resource_percentage = process.get_resource_percentage() if hasattr(process, 'get_resource_percentage') else getattr(process, 'resource_percent', None)
-            if resource_percentage is not None:
-                label = getattr(process, 'resource_label', None) or "리소스"
-                result = f"RESOURCE:{getattr(process, 'resource_key', '')}:{label}:{float(resource_percentage):.1f}%"
-                return float(resource_percentage), result
-
-        # 스태미나 자동 추적이 활성화된 경우 스태미나 기반 계산
-        stamina_tracking_enabled = getattr(process, 'stamina_tracking_enabled', False)
-        hoyolab_game_id = getattr(process, 'hoyolab_game_id', None)
-
-        if stamina_tracking_enabled and hoyolab_game_id:
-            stamina_info = process.get_predicted_stamina()
-            if stamina_info:
-                predicted, max_stamina = stamina_info
-                percentage = (predicted / max_stamina) * 100 if max_stamina > 0 else 0
-                # 특수 포맷: "STAMINA:game_id:current/max" (아이콘 표시용)
-                result = f"STAMINA:{hoyolab_game_id}:{predicted}/{max_stamina}"
-                return percentage, result
-
-        # 기존 시간 기반 계산
-        if not process.last_played_timestamp or not process.user_cycle_hours:
-            return 0.0, "기록 없음"
-
-        try:
-            last_played_dt = datetime.datetime.fromtimestamp(process.last_played_timestamp)
-            cycle_hours = process.user_cycle_hours
-
-            # 경과 시간 계산 (시간 단위)
-            elapsed_hours = (current_dt - last_played_dt).total_seconds() / 3600
-
-            # 진행률 계산 (0.0 ~ 1.0)
-            progress = min(elapsed_hours / cycle_hours, 1.0)
-
-            # 백분율로 변환
-            percentage = progress * 100
-
-            # 남은 시간 계산
-            remaining_hours = max(cycle_hours - elapsed_hours, 0)
-
-            if remaining_hours >= 24:
-                remaining_days = int(remaining_hours // 24)
-                remaining_hours_remainder = remaining_hours % 24
-                if remaining_hours_remainder > 0:
-                    time_str = f"{remaining_days}일 {int(remaining_hours_remainder)}시간"
-                else:
-                    time_str = f"{remaining_days}일"
-            elif remaining_hours >= 1:
-                time_str = f"{int(remaining_hours)}시간"
-            else:
-                remaining_minutes = int(remaining_hours * 60)
-                time_str = f"{remaining_minutes}분"
-
-            return percentage, time_str
-
-
-        except Exception as e:
-            logger.error(f"진행률 계산 중 오류: {e}")
-            return 0.0, "계산 오류"
-
-
     def _create_progress_bar_widget(self, process, percentage: float, time_str: str) -> QWidget:
         """우측 값 행과 셀 전체 폭의 얇은 트랙을 가진 진행률 위젯을 생성합니다."""
         container = QWidget()
@@ -2814,7 +2922,7 @@ class MainWindow(QMainWindow):
         value_layout.addStretch(1)
 
         expects_bar = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
-        display_text = self._get_progress_bar_format(percentage, time_str) if expects_bar else time_str
+        display_text = progress_bar_format(percentage, time_str) if expects_bar else time_str
         text_label = QLabel(display_text, value_row)
         text_label.setObjectName("progressText")
         text_label.setProperty("hhRole", "muted")
@@ -2823,7 +2931,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(value_row)
 
         if expects_bar:
-            layout.addWidget(self._create_styled_progress_bar(percentage, display_text))
+            progress_bar = CapsuleProgressBar(container)
+            progress_bar.set_progress(percentage, display_text)
+            layout.addWidget(progress_bar)
 
         return container
 
@@ -2847,42 +2957,6 @@ class MainWindow(QMainWindow):
 
         return resolve_preset_icon_path(icon_path, icon_type)
 
-    def _create_styled_progress_bar(self, percentage: float, format_text: str) -> QProgressBar:
-        """공통 테마가 그리는 얇은 QProgressBar를 생성합니다."""
-        progress_bar = CapsuleProgressBar()
-        progress_bar.setValue(self._progress_bar_value(percentage))
-        progress_bar.setMaximum(self._PROGRESS_BAR_MAX)
-        progress_bar.setMinimum(0)
-
-        progress_bar.setTextVisible(False)
-        progress_bar.setFormat(format_text)
-        progress_bar.setProperty("color_bucket", self._progress_color_bucket(percentage))
-        self._apply_progress_bar_style(progress_bar, percentage)
-
-        return progress_bar
-
-    def _progress_bar_value(self, percentage: float) -> int:
-        """진행률 백분율을 ProgressBar 내부 값으로 변환합니다."""
-        clamped = max(0.0, min(percentage, 100.0))
-        return round(clamped * self._PROGRESS_BAR_SCALE)
-
-    def _progress_color_bucket(self, percentage: float) -> int:
-        """진행률에 따른 색상 구간을 반환합니다."""
-        if percentage >= 100:
-            return 3
-        if percentage >= 80:
-            return 2
-        if percentage >= 50:
-            return 1
-        return 0
-
-    def _apply_progress_bar_style(self, progress_bar: QProgressBar, percentage: float) -> None:
-        """진행률 구간을 공통 QSS가 소비하는 semantic 속성으로 적용합니다."""
-        bucket = ("low", "medium", "high", "full")[self._progress_color_bucket(percentage)]
-        progress_bar.setProperty("hhBucket", bucket)
-        progress_bar.style().unpolish(progress_bar)
-        progress_bar.style().polish(progress_bar)
-
     def _refresh_progress_bars(self):
         """표의 진행률 셀을 값이 바뀐 경우에만 갱신합니다."""
         start_time = time.time()
@@ -2901,8 +2975,8 @@ class MainWindow(QMainWindow):
             current_widget = self.process_table.cellWidget(row, self.COL_LAST_PLAYED)
             if not current_widget:
                 continue
-            percentage, time_str = self._calculate_progress_percentage(process, now_dt)
-            progress_bar = current_widget.findChild(QProgressBar)
+            percentage, time_str = calculate_game_progress(process, now_dt)
+            progress_bar = current_widget.findChild(CapsuleProgressBar)
             expects_progress_widget = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
             if expects_progress_widget != (progress_bar is not None):
                 replacement = self._create_progress_bar_widget(process, percentage, time_str)
@@ -2910,28 +2984,14 @@ class MainWindow(QMainWindow):
                 updated_count += 1
                 continue
 
-            new_format = self._get_progress_bar_format(percentage, time_str) if expects_progress_widget else time_str
+            new_format = progress_bar_format(percentage, time_str) if expects_progress_widget else time_str
             text_label = current_widget.findChild(QLabel, "progressText")
             if text_label is not None and text_label.text() != new_format:
                 text_label.setText(new_format)
                 updated_count += 1
 
-            if progress_bar:
-                new_value = self._progress_bar_value(percentage)
-                new_bucket = self._progress_color_bucket(percentage)
-
-                if progress_bar.value() != new_value:
-                    progress_bar.setValue(new_value)
-                    updated_count += 1
-
-                if progress_bar.format() != new_format:
-                    progress_bar.setFormat(new_format)
-                    updated_count += 1
-
-                if progress_bar.property("color_bucket") != new_bucket:
-                    progress_bar.setProperty("color_bucket", new_bucket)
-                    self._apply_progress_bar_style(progress_bar, percentage)
-                    updated_count += 1
+            if progress_bar is not None and progress_bar.set_progress(percentage, new_format):
+                updated_count += 1
 
         if updated_count > 0:
             self.process_table.viewport().update()
@@ -2941,34 +3001,6 @@ class MainWindow(QMainWindow):
         execution_time = (time.time() - start_time) * 1000
         if execution_time > 100:
             logger.warning(f"_refresh_progress_bars 실행 시간 초과: {execution_time:.1f}ms (업데이트: {updated_count}개)")
-
-    def _get_progress_bar_format(self, percentage: float, time_str: str) -> str:
-        """ProgressBar 표시 문자열을 반환합니다."""
-        if time_str.startswith("RESOURCE:"):
-            try:
-                parts = time_str.split(":", 3)
-                if len(parts) >= 4:
-                    return parts[3]
-            except (AttributeError, IndexError, TypeError, ValueError) as exc:
-                logger.debug(
-                    "ProgressBar 리소스 포맷 파싱 실패: time_str=%r, percentage=%.1f, error=%s",
-                    time_str,
-                    percentage,
-                    exc,
-                )
-        if time_str.startswith("STAMINA:"):
-            try:
-                parts = time_str.split(":")
-                if len(parts) >= 3:
-                    return parts[2]
-            except (AttributeError, IndexError, TypeError, ValueError) as exc:
-                logger.debug(
-                    "ProgressBar 포맷 파싱 실패: time_str=%r, percentage=%.1f, error=%s",
-                    time_str,
-                    percentage,
-                    exc,
-                )
-        return f"{percentage:.1f}%"
 
     def _on_launcher_restart_request(self, launcher_name: str) -> bool:
         """

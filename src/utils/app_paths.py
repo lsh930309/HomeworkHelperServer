@@ -21,6 +21,10 @@ DEFAULT_APP_NAME = "HomeworkHelper"
 DEFAULT_SERVER_MUTEX_NAME = r"Local\HomeworkHelperDBServerMutex"
 
 
+class CapturePathError(ValueError):
+    """A capture destination cannot be used safely."""
+
+
 def sanitize_runtime_token(value: str | None, *, fallback: str = "session") -> str:
     """Return a path/mutex safe short token for generated runtime identities."""
     raw = (value or "").strip()
@@ -41,25 +45,35 @@ def is_testbench_mode() -> bool:
     return bool(os.environ.get(TEST_APPDATA_ENV) or os.environ.get(TESTBENCH_SESSION_ENV))
 
 
-def get_app_data_dir(app_name: str = DEFAULT_APP_NAME) -> str:
-    """Return the application state directory and create it if needed.
-
-    ``HH_TEST_APPDATA_DIR`` is intentionally interpreted as the final app state
-    directory, not as a roaming-profile root.  This lets each remote test session
-    use a unique disposable root such as ``%TEMP%\\HHHostTestbench\\...\\appdata``.
-    """
+def _app_data_path(app_name: str) -> Path:
+    # A test override is the final app directory, not a roaming-profile root.
     override = os.environ.get(TEST_APPDATA_ENV)
     if override:
-        app_dir = Path(override).expanduser()
-    else:
-        if os.name == "nt":
-            base = os.getenv("APPDATA") or os.path.expanduser("~")
-        else:
-            base = os.path.expanduser("~/.config")
-        app_dir = Path(base) / app_name
+        return Path(override).expanduser()
+    base = (os.getenv("APPDATA") or os.path.expanduser("~")) if os.name == "nt" else os.path.expanduser("~/.config")
+    return Path(base) / app_name
 
+
+def get_app_data_dir(app_name: str = DEFAULT_APP_NAME) -> str:
+    """Return the application state directory and create it if needed."""
+    app_dir = _app_data_path(app_name)
     app_dir.mkdir(parents=True, exist_ok=True)
     return str(app_dir)
+
+
+def validate_capture_output_path(path: str | Path) -> Path:
+    """Resolve a capture destination outside the host data tree, without creating it."""
+    try:
+        target = Path(path).expanduser()
+        app_data = _app_data_path(DEFAULT_APP_NAME)
+        resolved = Path(os.path.realpath(target, strict=os.path.ALLOW_MISSING))
+        resolved_data = Path(os.path.realpath(app_data, strict=os.path.ALLOW_MISSING))
+        declared_in_data = Path(os.path.abspath(target)).is_relative_to(Path(os.path.abspath(app_data)))
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        raise CapturePathError("캡처 저장 경로를 확인할 수 없습니다. 접근 가능한 다른 폴더를 선택해 주세요.") from error
+    if declared_in_data or resolved.is_relative_to(resolved_data):
+        raise CapturePathError("호스트 앱 데이터 폴더에는 스크린샷이나 녹화를 저장할 수 없습니다. 다른 폴더를 선택해 주세요.")
+    return resolved
 
 
 def get_server_mutex_name(default: str = DEFAULT_SERVER_MUTEX_NAME) -> str:

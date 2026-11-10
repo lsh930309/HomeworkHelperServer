@@ -57,6 +57,7 @@ a = Analysis(
         
         # Windows
         'win32api', 'win32security', 'win32process', 'win32con', 'win32com.client',
+        'win32com.shell.shell', 'pythoncom',
         'winshell', 'psutil',
         
         # Network
@@ -68,6 +69,10 @@ a = Analysis(
 
         # Audio (pycaw - Windows WASAPI)
         'pycaw', 'pycaw.pycaw',
+        'winrt.windows.media.control',
+        'winrt.runtime', 'winrt.system',
+        'winrt.windows.foundation', 'winrt.windows.foundation.collections',
+        'winrt.windows.media', 'winrt.windows.storage.streams',
         'comtypes', 'comtypes.client',
     ],
     hookspath=[],

@@ -1,10 +1,10 @@
 param(
-    [ValidateSet('inspect','logs','prepare-source','build','install','desktop','verify')][string]$Command,
+    [ValidateSet('inspect','logs','prepare-source','build','install','desktop','verify','media-qa')][string]$Command,
     [string]$Repo, [string]$Owner, [string]$ExpectedComputer,
-    [string]$Commit, [string]$Branch, [string]$Bump,
+    [string]$Commit, [string]$Branch, [string]$Bump, [string]$ArchivedRelease,
     [string]$ProbeSource, [string]$SessionSource, [string]$VerifySource,
     [int]$LogLines = 80, [string]$Contains = '',
-    [int]$Duration = 0, [switch]$AllowProtectedTime
+    [int]$Duration = 0, [string]$Scenario = 'observe', [switch]$PrepareRuntime, [switch]$AllowProtectedTime
 )
 $ErrorActionPreference = 'Stop'
 $env:PYTHONUTF8 = '1'
@@ -89,6 +89,7 @@ function Invoke-Session([string]$Kind, $Status, $Obs = $null) {
     [IO.File]::WriteAllText($CodeFile,(Decode-Source $SessionSource),[Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $Root 'windows_host_probe.py'),(Decode-Source $ProbeSource),[Text.UTF8Encoding]::new($false))
     $Arguments = '"'+$CodeFile+'" '+$Kind+' --repo "'+$Repo+'" --appdata "'+$AppData+'" --result "'+$ResultFile+'" --sid '+$Sid+' --session '+$Session+' --duration '+$Duration
+    if ($Kind -eq 'media-qa') { $Arguments += ' --scenario '+$Scenario }
     if ($Obs) { $Arguments += ' --pid '+$Obs.pid+' --created '+([double]$Obs.created).ToString('R',[Globalization.CultureInfo]::InvariantCulture) }
     $Scheduler = New-Object -ComObject 'Schedule.Service'
     $Scheduler.Connect()
@@ -101,11 +102,13 @@ function Invoke-Session([string]$Kind, $Status, $Obs = $null) {
     try {
         $Registered = $Folder.RegisterTaskDefinition($Name,$Task,6,$Sid,$null,3)
         $null = $Registered.Run($null)
-        $Deadline = (Get-Date).AddSeconds([Math]::Max($Duration+15,40))
+        $WaitSeconds = if ($Kind -eq 'media-qa' -and $Scenario -eq 'focus-lifecycle') {170} elseif ($Kind -eq 'media-qa') {120} else {[Math]::Max($Duration+15,40)}
+        $Deadline = (Get-Date).AddSeconds($WaitSeconds)
         while (!(Test-Path $ResultFile) -and (Get-Date) -lt $Deadline) { Start-Sleep -Milliseconds 200 }
         if (!(Test-Path $ResultFile)) { throw ('사용자 세션 작업 결과 없음. 자동 재시도하지 않음: '+$Root) }
         $Result = Get-Content $ResultFile -Raw -Encoding UTF8 | ConvertFrom-Json
-        $Completed = $true
+        # native 검수 실패에는 미종료 fixture가 있을 수 있어 진단 root를 보존한다.
+        $Completed = $Result.ok -and ($Kind -ne 'media-qa' -or $Result.result.ok)
         if (!$Result.ok) { throw ('사용자 세션 작업 실패: '+$Result.error) }
         return $Result.result
     } finally {
@@ -188,13 +191,34 @@ switch ($Command) {
         $Result = Invoke-Session 'desktop' (Service-Status)
         $Result | ConvertTo-Json -Depth 14
     }
-    'install' {
+    'media-qa' {
         Require-Source
+        if ($PrepareRuntime) {
+            # pip 하위 프로세스를 만드는 준비는 stdin 코드 파이프가 아닌 고정 소스 파일로 실행한다.
+            $null = & $Python (Join-Path $Repo 'tools/windows_host_probe.py') prepare-runtime --repo $Repo --appdata $AppData --install $Install
+            if ($LASTEXITCODE -ne 0) { throw 'Windows 미디어 검수 의존성 준비 실패' }
+        }
+        $Result = Invoke-Session 'media-qa' (Service-Status)
+        $Result | ConvertTo-Json -Depth 20
+    }
+    'install' {
+        if (!$ArchivedRelease) { Require-Source }
         Require-ProductionEnvironment
         Require-InstallTime
-        $Release = (Invoke-Probe 'release').release_id
-        $Setup = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Setup.exe')
-        $Portable = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Portable.zip')
+        if ($ArchivedRelease) {
+            if ($ArchivedRelease -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+_b[1-9][0-9]*_g[0-9a-f]{4,40}$') { throw '보관 릴리스 ID 형식 오류' }
+            $Release = $ArchivedRelease
+            $Archive = Join-Path $Repo 'release\archives\windows-host'
+            $Setups = @(Get-ChildItem $Archive -File -Recurse -Filter ('HomeworkHelper_'+$Release+'_Setup.exe'))
+            $Portables = @(Get-ChildItem $Archive -File -Recurse -Filter ('HomeworkHelper_'+$Release+'_Portable.zip'))
+            if ($Setups.Count -ne 1 -or $Portables.Count -ne 1) { throw '보관 패키지가 없거나 중복됨: '+$Release }
+            $Setup = $Setups[0].FullName
+            $Portable = $Portables[0].FullName
+        } else {
+            $Release = (Invoke-Probe 'release').release_id
+            $Setup = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Setup.exe')
+            $Portable = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Portable.zip')
+        }
         if ((Get-AuthenticodeSignature $Setup).Status -ne 'Valid') { throw 'Setup 서명 오류' }
         $Expected = Invoke-Probe 'payload' $Portable
         $Before = Invoke-Probe 'preflight'

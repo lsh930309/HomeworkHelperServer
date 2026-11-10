@@ -11,6 +11,7 @@
 | `tools/windows_host_operations.ps1` | 고정 Windows 절차. 임의 PowerShell 명령을 사용자 입력으로 받지 않음 |
 | `tools/windows_host_probe.py` | 읽기 전용 DB·API·프로세스/토큰·OBS 상태·payload 조회. 명시적 backup만 기존 writer, build만 `build.py` 호출 |
 | `tools/windows_session_probe.py` | 일회성 InteractiveToken에서 비활성 데스크톱 관찰 또는 설치에 필요한 OBS 정상 종료. SYSTEM 토큰 복제·강제 종료 없음 |
+| `tools/windows_media_probe.py` | 설치 전 미디어·음량·포커스 검수와 격리된 실제 사이드바 렌더링. 운영 DB는 표시 필드만 읽고 조작은 명시한 시나리오만 수행 |
 | `tools/ssh_host_testbench.py` | 설치 패키지 shadow copy의 격리 API 시험. 운영 설치·서비스·전원·게임 시험에 사용하지 않음 |
 | `tools/verify_remote_controller.py`, `tools/smoke_*.py` | 기존 원격 계약 자동 검증. 변경 범위에 필요한 검사만 선택 |
 | `tools/diagnose_button.py` | 명시적으로 요청된 Windows 입력 이벤트 조사. 일반 진단에서 자동 실행하지 않음 |
@@ -66,6 +67,29 @@ Git 추적 파일이 디스크에 없더라도 감사 대상에 포함하며, �
 필요하다. `--computer`와 `--owner` 기본값은 `LSH_DESKTOP`, `lsh93`이고 실제 컴퓨터·SID와 대조한다.
 설치 위치는 권장 기본 `C:\Program Files\HomeworkHelper`만 지원한다.
 
+### SSH 이름과 실제 연결 주소
+
+`--host`에는 명시적 IP, Tailscale의 장치 이름·전체 DNS 이름 또는 일반 전체 도메인을 전달한다. Tailscale 이름 입력은
+공용 SSH 실행 경계가 기존 `src/core/tailscale.py`의 최신 peer 목록에서 정확히 한 장치를
+찾고, 그 장치의 현재 IPv4(없으면 IPv6)를 OpenSSH의 `HostName`에 지정한다. OS DNS를 먼저
+시도하지 않으며 개인 IP를 코드·설정에 고정하지 않는다. 원래 SSH 대상·사용자·키·포트와
+host key 검증은 유지한다. host-operations의 모든 명령과 SSH testbench가 같은 경계를 사용한다.
+`--user`를 생략한 기존 `user@host` 입력도 지원한다. `.ts.net` 밖의 일반 전체 도메인 이름은
+기존 SSH의 DNS 경로를 유지한다. 짧은 장치 이름과 MagicDNS 이름은 Tailscale 대상이다.
+
+이름 비교는 장치 이름, 전체 DNS 이름, DNS 이름의 첫 부분에 대한 대소문자 무시 완전 일치다.
+일치 대상 없음·복수 일치·주소 없음·Tailscale 미준비는 SSH 실행 전에 명확히 실패한다.
+온라인인 다른 PC로 전환하지 않고 offline 표시만으로 다른 주소를 선택하거나 Wake하지 않는다.
+명시적 IP는 Tailscale 조회 없이 그대로 사용하며, dry-run은 실제 주소 조회·연결을 하지 않는다.
+실행 실패·인증 실패·시간 초과 뒤 다른 주소로 자동 재전송하지 않는다.
+
+MagicDNS가 tailnet에서 켜져 있어도 Mac의 `Use Tailscale DNS settings`가 꺼져 있으면 OS의
+이름 조회는 일반 네트워크 DNS로 전달되어 짧은 이름과 전체 Tailscale 이름이 모두 실패할 수 있다.
+이는 IP 연결이나 Tailscale 내부 DNS의 실패와 구분한다
+([Tailscale의 장치별 DNS 설정](https://tailscale.com/docs/features/magicdns#disabling-magicdns)).
+공용 도구는 이 OS 설정과 독립적으로 주소를 조회한다. 회사 DNS·Tailscale 설정·`/etc/hosts`를
+자동 변경하지 않는다. DNS와 내부 peer 조회의 구분은 [SSH 진단 가이드](../remote/host-ssh-diagnostics-runbook.md#dns와-tailscale-주소-조회를-구분한다)를 따른다.
+
 ### lsh-desktop의 고정 작업 저장소
 
 제품 소스 준비·빌드·설치는 기존 `C:\VSCode\Projects\HomeworkHelperServer` 한 곳을 사용한다.
@@ -90,7 +114,8 @@ Git 추적 파일이 디스크에 없더라도 감사 대상에 포함하며, �
 고정 진단·검증 소스는 무손실 압축하여 SSH 입력으로 전달한다. 임시 코드를 다시 생성하지 않으며
 제품 패키지의 복사·재포장과는 별개의 소스 전달이다. 통신 시간 초과도 실패 보고서에 남긴다.
 시간 초과 때까지 받은 stdout/stderr는 같은 로그 파일에 원본 바이트로 보존한다. 끝이 잘린 UTF-8을
-치환하지 않으며, 실패 판정과 자동 재시도하지 않는 정책을 유지한다.
+치환하지 않는다. 원격 프로세스가 종료 코드 0을 반환했어도 응답을 JSON 객체로 해석할 수 없으면
+받은 stdout/stderr와 실패 보고서를 남긴다. 실패한 작업을 자동 재시도하지 않는다.
 
 ## 읽기 전용 운영 상태 수집
 
@@ -118,6 +143,118 @@ service.log가 있다고 추측하지 않는다.
 
 ## 소스 준비·빌드·설치
 
+### 설치 전 미디어·사이드바 검수
+
+명시적으로 실호스트 검수가 허용되면 공개된 현재 커밋을 `prepare-source`로 준비한 뒤 실행한다.
+설치본은 교체하지 않으며 지정 사용자 InteractiveToken에서 일반 권한으로 실행한다.
+
+```bash
+./.venv/bin/python tools/host_operations.py media-qa \
+  --host lsh-desktop --user lsh93 --scenario observe --prepare-runtime
+./.venv/bin/python tools/host_operations.py media-qa \
+  --host lsh-desktop --user lsh93 --scenario preview
+```
+
+`--prepare-runtime`은 처음 필요한 경우에만 고정 저장소 `.venv`에 `requirements.txt`를 설치한다.
+제품 빌드·서명·설치는 수행하지 않는다. pip 전체 출력은 Windows 저장소의
+`artifacts/media-qa-requirements.log`에서 확인한다. `observe`는 자동 옵션을 모두 끈 실제
+미디어 runtime·전경 창·WASAPI 세션을 관측하고 종료한다. GSMTC에서 빈 세션 목록을 정상적으로
+받으면 유효한 관측으로 처리하며, 성공 응답을 한 번도 받지 못하면 `gsmtc` 단계의 실패를 기록한다.
+`preview`는 실제 SidebarWidget에
+표시 필드만 읽은 fixture를 주입하며 모든 조작을 차단한다. AppData·LocalAppData·앱 상태 경로를
+제품 모듈 import 전에 격리하고, 운영 자격 증명과 DB writer를 사용하지 않는다.
+
+결과에는 단계별 native 오류·정리 결과 또는 작업 영역/760/1080 높이의 PNG·DPR·컨트롤 좌표·
+스크롤 범위가 포함된다. 미디어 JSON에는 표지 원본 바이트 대신 `artwork_bytes` 크기만 기록하고,
+곡 정보·타임라인·실제 Spotify 믹서 관측값을 함께 보존한다. PNG는 같은 로컬 실행 보고서에 저장한다. 위젯 PNG는 실제 Windows
+폰트·레이아웃의 근거이며 DWM이 배경과 합성한 Acrylic 품질의 증거는 아니다.
+`audio`는 매우 낮은 소리의 자기 소유 WAV 프로세스로 실제 WASAPI의 전경·배경·사용자 음소거·
+0%와 55%를 확인하고 초기 음량을 복원한다. `focus`는 자기 소유 비활성 Qt 창에 한 번 전환한 뒤
+실제 foreground PID와 중복 요청 부재를 확인하고 원래 창을 복원한다. 두 fixture는 정상 종료하며
+90초 자체 상한을 둔다. 운영 게임 실행·DB 이용 기록을 만들지 않는다.
+
+`focus-compare`는 실제 게임 시험을 명시적으로 허용받은 경우에만 사용한다. 운영 DB의 등록 ID·
+이름·감시 경로를 읽기 전용으로 읽고, 같은 사용자 세션에서 정확히 하나의 실행 대상을 선택한다.
+게임이 없으면 최대 60초 동안 시작을 관측하며, 제품과 같이 동일한 후보 창이 1초간 유지된 뒤
+비교한다. 게임 실행·종료 자체는 수행하지 않는다.
+같은 일반 권한 검수 프로세스에서 입력 없는 GUI/worker 호출과 검수 창의 실제 버튼 클릭 후
+GUI/worker 호출을 비교한다. API 반환값과 250ms 뒤 실제 foreground를 따로 기록하며, 스레드
+차이와 입력 문맥 차이를 혼동하지 않는다. `focus-progress.json`은 같은 원격 검수 폴더의 중간
+진행 근거이며 최종 결과는 공통 보고서에 남긴다. 전체 90초 안에 창을 닫고 원래 foreground
+복원을 한 번 시도한다. 게임·설치본은 종료하지 않으며 가짜 입력이나 OS 정책 변경을 사용하지 않는다.
+
+`focus-uia`는 같은 실제 게임과 자기 소유 일반 권한 Qt 창에 Windows UI Automation의
+`SetFocus`를 각각 한 번 요청한다. 별도 MTA 스레드에서 연결 500ms·작업 1500ms 제한을
+설정하고, 오류/HRESULT·정상 반환·250ms와 1초 뒤 실제 foreground를 구분한다. 게임 대상은
+위와 같은 읽기 전용 등록·실행 identity 검증을 거치며 보이는 창이 하나인 경우에만 요청한다.
+정리 완료를 뜻하는 `ok`를 전환 성공으로 해석하지 않는다. 가짜 입력·UIAccess·권한·Windows
+설정 변경이나 제품 대체 경로를 추가하지 않으며, 시험 창 종료 후 원래 foreground 복원을 시도한다.
+
+`focus-lifecycle`은 게임 실행 전에 시작한다. 읽기 전용 등록 목록과 빈 baseline에서 최대 20초
+동안 새 실행을 기다린 뒤 같은 실행의 창을 125초 동안 250ms 간격으로 관측한다. 실제 제품의
+120초 자동 포커싱 정책을 그대로 실행하고 첫 창 출현에서 멈추지 않는다. HWND·owner·style·
+cloaked·전경과 입력 시각의 변화, 검증된 자식 관계, 요청 수락과 250ms 뒤 실제 전경 및 최초
+마감 경과를 같은 `focus-lifecycle-progress.json`에 남긴다. 입력 시각으로 사용자 의도를 단정하지 않는다.
+총 150초 이내 종료하며 게임 실행·종료·추가 전환·가짜 입력·운영 설정 변경은 수행하지 않는다.
+처음 전경이 설치 GUI라면 기본 설치 경로·현재 SID·세션이 일치할 때만 해당 PID를 UI 소유자로
+사용하고, 실제 네이티브 호출자인 검수 PID와 구분한다. 호스트 자동 숨김 흐름을 같은 조건으로 관찰한다.
+실제 게임 실행·종료는 승인된 기존 제품 경로로 따로 수행한다. 관측 완료를 포커싱 성공이나
+최종 로그인 화면 인식 성공으로 확대하지 않는다.
+
+`prepare-spotify`는 실제 제품의 명시적 준비 요청을 한 번 실행하고 최대 60초 동안 실제 Spotify
+세션 또는 준비 오류를 기다린다. 기존 프로세스가 있으면 URI 실행 0회도 정상이다.
+`uri_requested=false`일 때 `uri_accepted=null`이며, 새 실행을 요청했다면 수락 여부를 별도로
+기록한다. 세션 관측과 정리 성공만으로 준비 오류를 숨기지 않는다. 재생은 요청하지 않는다.
+
+Spotify의 시작 창 표시 문제를 명시적으로 조사할 때는 `spotify-window-observe`로 현재
+사용자 세션의 검증된 Spotify 프로세스·창·미디어 상태를 먼저 기록한다. UI Automation의
+메뉴 이름은 제한된 시간 안에서 읽기만 하며 클릭·재생·프로필 설정 변경은 하지 않는다.
+`spotify-window-open`은 고정 URI를 한 번 열고 기본 10초 동안 관측한다. 최초 관측에서 Spotify가
+완전히 종료돼 있었다면 기동 지연을 포함해 최대 60초까지 관측하며, 10초 이후 같은 창이 마지막
+3개 관측에서 표시·복원된 상태로 유지되면 종료한다. 추가 URI 요청이나 자동 재시작은 하지 않는다.
+이 시나리오는 격리된 실제 미디어 패널의 Spotify 버튼을 눌러 `open` 명령과 제품 runtime을
+거쳐 일반 표시 URI를 요청한다. `[BGM 자동]`의 우클릭 메뉴 구성과 토글 불변도 같은 패널에서
+확인하며 검수 메뉴의 화면 표시는 억제한다. URI 수락과 실제 Spotify 창의 표시·최소화 해제를
+구분한다. Play·DJ·음량 요청은 적용하지 않으며 시작 전 프로세스 유무로 cold/warm을 구분한다.
+`spotify-window-minimize`와 `spotify-window-close`는 유일한 표시 창의 identity를 재확인한 뒤
+각각 비활성 최소화 또는 정상 닫기를 한 번 요청하고 약 5초 동안 관측한다.
+닫기는 Spotify 자체 설정에 따라 트레이로 이동하거나 종료될 수 있다. 창의 표시·최소화 상태와
+프로세스·실제 재생 상태를 따로 남겨 명령 접수·관측 완료를 최소화 유지나 트레이 재생 성공으로
+해석하지 않는다. 이 창 시험은 명시적으로 승인된 범위에서만 진행하며 시작 전 상태와
+시험 뒤 남긴 상태를 별도로 보고한다. Play·음량·설정 변경·강제 종료·자동 재전송은 수행하지 않는다.
+완전 종료가 필요한 시작 시험에서는 Spotify 자체 메뉴의 정상 종료와 실제 프로세스 부재를
+확인한다. UI Automation 메뉴가 정상 동작하지 않으면 사용자에게 정상 종료를 요청하며,
+이름 없는 버튼·종료 명령 ID·단축키를 추측하거나 강제 종료하지 않는다.
+`spotify-window-startup`은 기존 Spotify가 없을 때만 실제 준비·DJ URI·Play 경계를 실행한다.
+첫 최소화 뒤의 복원을 관측하고, 최초 최소화에서 5초 뒤 최소화·10초 뒤 닫기를 각각 한 번
+비교한 후 15초까지 상태를 기록한다. 전체 45초 상한이며 새 프로세스의 identity만 사용한다.
+이 시나리오는 실제 재생을 요청하므로 별도 미디어가 재생 중이면 시작하지 않는다.
+시험 뒤 Spotify의 실행·표시·재생 상태를 명시하며 자동 재시작이나 기존 설정 변경은 하지 않는다.
+`spotify-window-startup-close`는 같은 cold 준비 흐름에서 첫 표시 창에 닫기만 한 번 요청한 뒤
+15초 동안 추가 창 조작 없이 관측한다. 첫 닫기가 시작 중의 복원을 막는지와 재생 유지 여부를
+별도로 판단하며, 창이 다시 나타나도 자동으로 다시 닫지 않는다.
+`spotify-window-startup-delayed-close`는 첫 표시 창에서 최소 5초가 지나고 Spotify의 실제
+Playing을 확인한 뒤 닫기를 한 번 요청한다. 이후 15초 동안 추가 창 조작 없이 관측한다.
+너무 이른 닫기와 준비 후 닫기의 영향을 같은 제품 준비 경계에서 분리하는 비교다.
+
+`bgm`은 이미 있는 명확한 단일 playing/paused Spotify 세션에서
+Play/Pause 전환을 관측한 뒤 원래 재생 상태로 복원한다. 세션 없음·복수·unknown·stopped처럼
+복원할 수 없는 조건에서는 실패 사유를 반환하고 임의 재생하지 않는다. 로그인이나 곡 선택은
+제품에서 사용자가 준비해야 하며 자격 증명을 도구가 읽거나 대신 입력하지 않는다.
+관측·렌더링 성공을 실제 재생·음량·포커스 전환 성공으로 확대하지 않는다. 자동 정책 입력의 합성
+검증과 실제 Windows I/O 검증을 각각 기록하며 Firefox의 탭 종료를 추정하지 않는다.
+`triggers`는 전경 입력만 고정하고 실제 Spotify·WASAPI·runtime으로 자동 켜기 → 게임 음성 →
+사용자 음소거 → 수동 일시정지의 연결을 검증한다. 자동 포커스는 이 시나리오에서 끈다.
+관측한 명령·재생 변화와 고정 입력을 구분하고 원래 Spotify 상태와 시험 음량을 복원한다.
+`firefox`는 설치된 Firefox를 별도 임시 프로필과 로컬 HTML/WAV로 실행해 실제 GSMTC의
+재생 → 일시정지 → 시험 브라우저 종료와 Spotify 보류를 관측한다. autoplay 허용은 그 프로필에만
+적용한다. 운영 프로필·확장·원격 디버깅·외부 콘텐츠·HTTP 서버를 사용하지 않는다. Firefox 자체의
+배경 네트워크까지 차단했다는 뜻은 아니다. 종료는 실행 identity와 전용 프로필이 확인된 자기 창에만
+정상 요청하며, 끝나면 원래 Spotify 재생 상태를 복원한다. 로컬 파일 시험을 실제 YouTube 사이트의
+모든 플레이어 동작이나 사용자 프로필의 autoplay 정책 검수로 확대하지 않는다.
+native 검수가 실패하면 원격 fixture 디렉터리도 보존한다. 실행 identity와 종료 결과를 확인한 뒤
+정리하며, 살아 있는 브라우저 프로필이나 음원 파일을 실패 보고보다 먼저 지우지 않는다.
+
 먼저 [빌드](build-guide.md)와 [Windows 설치](windows-package-install-guide.md) 가이드를 읽는다.
 배포가 승인된 작업에서 관련 검증·커밋·해당 브랜치 푸시 후 순서대로 호출한다.
 
@@ -137,6 +274,14 @@ service.log가 있다고 추측하지 않는다.
 `--commit`은 현재 HEAD를 명시할 때 사용하며 다른 커밋을 조용히 배포하지 않는다.
 install의 release ID는 Windows의 `build.py` 버전 계산을 그대로 사용한다. 운영 도구가 파일명이나
 Git 축약 길이를 따로 계산하지 않으므로 `core.abbrev` 설정이 달라도 같은 패키지를 선택한다.
+
+사용자가 이전 설치본으로 복귀를 요청하면 `install --archived-release <정확한 릴리스 ID>`를 사용한다.
+고정 저장소의 `release/archives/windows-host/`에서 같은 ID의 Setup·Portable이 각각 하나여야 하며,
+기존 서명·CRC/payload·사용 상태·정상 백업·정상 종료·설치 후 검증을 그대로 수행한다. 이 경로는 이미
+생성된 보관 패키지를 설치하므로 현재 소스 HEAD 공개·checkout 변경·재빌드를 요구하지 않는다.
+`--commit`과 함께 지정하지 않는다. DB·사용자 설정을 과거 백업으로 복원하거나 로컬 빌드 버전을
+낮추지 않으며, 설치 버전은 선택한 Portable의 payload와 실제 설치 파일을 대조해 판정한다.
+보호 시간 예외 승인과 게임·녹화 중단 조건은 일반 설치와 같다.
 
 build는 Windows의 `build.py --no-gui --no-prune-archives`를 호출한다. `--bump`는 기존 옵션을 전달한다.
 기존 설치본의 유효한 서명 인증서·개인키를 사용하며 재발급·개인키 복사·수동 서명은 하지 않는다.
@@ -189,6 +334,9 @@ ssh_host_testbench.py를 사용하며 자세한 격리는 SSH 진단 문서가 �
 ## 사용자 세션·작업 표시줄 관찰
 
 요청받은 창 문제에서만 desktop을 사용한다. duration 0은 한 번의 스냅샷이고 최대 120초 관측할 수 있다.
+각 창의 실제 위치·표시 여부와 DPI·입력 투명 스타일을 함께 수집하며, 커서 아래의 실제
+Windows 창도 기록한다. 클릭 실패를 조사할 때는 클릭이 손잡이에 도달했는지와 사이드바가
+화면 안으로 이동했는지를 먼저 구분한다. 이 관찰만으로 Qt 내부 상태나 오류 원인을 확정하지 않는다.
 실제 화면·창 geometry, 전경·표시/위치 이벤트와 사이드바를 기록한다. 제품 네이티브 작업 영역 계산을
 재사용하며 가짜 SidebarWidget이나 별도 판정식을 만들지 않는다. 키·마우스를 보내거나 창을 활성화하지 않는다.
 Moonlight 연결은 요청받았을 때 제품의 Moonlight ON을 사용한다.

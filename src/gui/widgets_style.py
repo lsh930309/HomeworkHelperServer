@@ -5,9 +5,122 @@ Runtime state remains owned by the existing GUI/controllers.
 """
 from __future__ import annotations
 
+import datetime
+import logging
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
-from PySide6.QtWidgets import QApplication, QMainWindow, QProgressBar, QWidget
+from PySide6.QtGui import (
+    QBrush, QColor, QFont, QFontMetricsF, QIcon, QPainter, QPainterPath, QPalette, QPen,
+    QPixmap, QRadialGradient,
+)
+from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QProgressBar, QWidget
+
+if TYPE_CHECKING:
+    from src.data.data_models import ManagedProcess
+
+logger = logging.getLogger(__name__)
+
+
+def calculate_game_progress(process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:
+    """Windows 게임 게이지에 표시할 백분율과 값의 원천을 계산합니다."""
+    now = current_dt.timestamp()
+    resource_percentage = process.get_resource_percentage(now=now)
+    if resource_percentage is not None:
+        label = process.resource_label or "리소스"
+        return resource_percentage, f"RESOURCE:{process.resource_key}:{label}:{resource_percentage:.1f}%"
+
+    if process.stamina_tracking_enabled and process.hoyolab_game_id:
+        stamina_info = process.get_predicted_stamina(now=now)
+        if stamina_info:
+            predicted, max_stamina = stamina_info
+            percentage = predicted / max_stamina * 100 if max_stamina > 0 else 0.0
+            return percentage, f"STAMINA:{process.hoyolab_game_id}:{predicted}/{max_stamina}"
+
+    if not process.last_played_timestamp or not process.user_cycle_hours:
+        return 0.0, "기록 없음"
+
+    try:
+        last_played_dt = datetime.datetime.fromtimestamp(process.last_played_timestamp)
+        cycle_hours = process.user_cycle_hours
+        elapsed_hours = (current_dt - last_played_dt).total_seconds() / 3600
+        percentage = min(elapsed_hours / cycle_hours, 1.0) * 100
+        remaining_hours = max(cycle_hours - elapsed_hours, 0)
+
+        if remaining_hours >= 24:
+            remaining_days = int(remaining_hours // 24)
+            remaining_hours_remainder = remaining_hours % 24
+            if remaining_hours_remainder > 0:
+                time_str = f"{remaining_days}일 {int(remaining_hours_remainder)}시간"
+            else:
+                time_str = f"{remaining_days}일"
+        elif remaining_hours >= 1:
+            time_str = f"{int(remaining_hours)}시간"
+        else:
+            time_str = f"{int(remaining_hours * 60)}분"
+        return percentage, time_str
+    except Exception as exc:
+        logger.error("진행률 계산 중 오류: %s", exc)
+        return 0.0, "계산 오류"
+
+
+def progress_bar_format(percentage: float, display_text: str) -> str:
+    """게이지 옆에 표시할 짧은 값을 반환합니다."""
+    if display_text.startswith("RESOURCE:"):
+        parts = display_text.split(":", 3)
+        if len(parts) == 4:
+            return parts[3]
+    if display_text.startswith("STAMINA:"):
+        parts = display_text.split(":")
+        if len(parts) >= 3:
+            return parts[2]
+    return f"{percentage:.1f}%"
+
+
+def progress_color_bucket(percentage: float) -> str:
+    """채워진 정도에 따라 공용 게이지 색을 선택합니다."""
+    if percentage >= 100:
+        return "full"
+    if percentage >= 80:
+        return "high"
+    if percentage >= 50:
+        return "medium"
+    return "low"
+
+
+class GameIconLabel(QLabel):
+    """원본·캐시는 보존하고 게임 아이콘 표시 영역을 같은 둥근 정사각형으로 자른다."""
+
+    def __init__(self, icon_size: int, parent=None):
+        super().__init__(parent)
+        self._icon_size = icon_size
+        self.setMinimumSize(icon_size, icon_size)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def paintEvent(self, event) -> None:
+        size = min(self._icon_size, self.width(), self.height())
+        rect = QRectF((self.width() - size) / 2, (self.height() - size) / 2, size, size)
+        radius = size * 0.2
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, radius, radius)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.setClipPath(clip)
+        painter.fillRect(rect, QColor(255, 255, 255, 12))
+        pixmap = self.pixmap()
+        if not pixmap.isNull():
+            side = min(pixmap.width(), pixmap.height())
+            source = QRectF((pixmap.width() - side) / 2, (pixmap.height() - side) / 2, side, side)
+            painter.drawPixmap(rect, pixmap, source)
+        else:
+            painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.text())
+        painter.setClipping(False)
+        if self.property("hhRunning"):
+            painter.setPen(QPen(QColor("#76ce96"), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius - 1, radius - 1)
 
 
 def widgets_theme_tokens(dark: bool) -> dict[str, str]:
@@ -53,14 +166,46 @@ def widgets_theme_tokens(dark: bool) -> dict[str, str]:
 
 
 class CapsuleProgressBar(QProgressBar):
-    """극소 진행률도 원형 끝을 유지하는 6px 캡슐 진행률 표시입니다."""
+    """극소 진행률도 원형 끝을 유지하고, 필요한 화면에 값을 함께 그립니다."""
 
+    _PERCENTAGE_SCALE = 10
     _BUCKET_COLORS = {
         "low": "success",
         "medium": "warning",
         "high": "#e67e22",
         "full": "danger",
     }
+    _SIDEBAR_BUCKET_COLORS = {
+        "low": "#347e4a",
+        "medium": "#8c6928",
+        "high": "#9f622e",
+        "full": "#ac4a47",
+    }
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setRange(0, 100 * self._PERCENTAGE_SCALE)
+        self.setTextVisible(False)
+
+    def set_progress(self, percentage: float | None, format_text: str) -> bool:
+        """값·표시 문자열·색을 갱신하고 화면 변경 여부를 반환합니다."""
+        value = (self.minimum() - 1 if percentage is None
+                 else round(max(0.0, min(percentage, 100.0)) * self._PERCENTAGE_SCALE))
+        bucket = progress_color_bucket(0.0 if percentage is None else percentage)
+        value_changed = self.value() != value
+        format_changed = self.format() != format_text
+        bucket_changed = self.property("hhBucket") != bucket
+        if format_changed:
+            self.setFormat(format_text)
+        if bucket_changed:
+            self.setProperty("hhBucket", bucket)
+            self.update()
+        if value_changed:
+            if percentage is None:
+                self.reset()
+            else:
+                self.setValue(value)
+        return value_changed or format_changed or bucket_changed
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         del event
@@ -76,27 +221,71 @@ class CapsuleProgressBar(QProgressBar):
         tokens = widgets_theme_tokens(dark)
         rect = QRectF(0.0, 0.0, float(self.width()), float(self.height()))
         radius = rect.height() / 2.0
+        sidebar = self.objectName() == "gameProgressBar"
+        track = ("#11181e" if dark else "#29313c") if sidebar else tokens["surface"]
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(tokens["surface"]))
+        painter.setBrush(QColor(track))
         painter.drawRoundedRect(rect, radius, radius)
 
         span = self.maximum() - self.minimum()
-        if span <= 0 or self.value() <= self.minimum():
-            painter.end()
+        if span > 0 and self.value() > self.minimum():
+            ratio = min(1.0, (self.value() - self.minimum()) / span)
+            fill_width = min(rect.width(), max(rect.height(), rect.width() * ratio))
+            fill_rect = QRectF(rect.left(), rect.top(), fill_width, rect.height())
+            bucket = str(self.property("hhBucket") or "low")
+            color_key = self._BUCKET_COLORS.get(bucket, "success")
+            fill_color = (self._SIDEBAR_BUCKET_COLORS.get(bucket, self._SIDEBAR_BUCKET_COLORS["low"])
+                          if sidebar else tokens.get(color_key, color_key))
+            painter.setBrush(QColor(fill_color))
+            painter.drawRoundedRect(fill_rect, radius, radius)
+
+        if self.isTextVisible():
+            self._paint_caption(painter, rect)
+        painter.end()
+
+    def _paint_caption(self, painter: QPainter, rect: QRectF) -> None:
+        missing = self.value() < self.minimum()
+        caption = self.format() if missing else self.text()
+        if not caption or rect.width() <= 4 or rect.height() <= 2:
+            return
+        glyphs = QPainterPath()
+        font = self.font()
+        if missing:
+            if font.pixelSize() > 0:
+                font.setPixelSize(max(1, round(font.pixelSize() * 10 / 11)))
+            else:
+                font.setPointSizeF(font.pointSizeF() * 10 / 11)
+            font.setWeight(QFont.Weight.Normal)
+        glyphs.addText(0.0, 0.0, font, caption)
+        bounds = glyphs.boundingRect()
+        if bounds.isEmpty():
             return
 
-        ratio = min(1.0, max(0.0, (self.value() - self.minimum()) / span))
-        fill_width = min(rect.width(), max(rect.height(), rect.width() * ratio))
-        fill_rect = QRectF(rect.left(), rect.top(), fill_width, rect.height())
-        bucket = str(self.property("hhBucket") or "low")
-        color_key = self._BUCKET_COLORS.get(bucket, "success")
-        fill_color = tokens[color_key] if color_key in tokens else color_key
-        painter.setBrush(QColor(fill_color))
-        painter.drawRoundedRect(fill_rect, radius, radius)
-        painter.end()
+        text_scale = min(1.0, (rect.width() - 4) / bounds.width())
+        if not missing:
+            text_width = QFontMetricsF(font, self).horizontalAdvance(caption) * text_scale
+            ellipse_width = text_width + 28 * rect.height() / 11
+            radius = rect.height() / 2
+            clip = QPainterPath()
+            clip.addRoundedRect(rect, radius, radius)
+            shade = QRadialGradient(0.0, 0.0, 1.0)
+            shade.setStops([(position, QColor.fromRgbF(0, 0, 0, alpha)) for position, alpha in (
+                (0.0, 0.22), (0.38, 0.19), (0.65, 0.12), (0.85, 0.04), (1.0, 0.0),
+            )])
+            painter.save()
+            painter.setClipPath(clip)
+            painter.translate(rect.center())
+            painter.scale(ellipse_width / 2, rect.height() * 2)
+            painter.fillRect(QRectF(-1.0, -1.0, 2.0, 2.0), QBrush(shade))
+            painter.restore()
+
+        painter.translate(rect.center())
+        painter.scale(text_scale, min(1.0, (rect.height() - 2) / bounds.height()))
+        painter.translate(-bounds.center().x(), -bounds.center().y())
+        painter.fillPath(glyphs, QColor("#aab3bf" if missing else "#f4f6fa"))
 
 
 def tint_icon(icon: QIcon, color: QColor, logical_size: int = 16) -> QIcon:
@@ -240,11 +429,24 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
 def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
     """Apply the same surface/state language to the independent sidebar shell."""
     t = widgets_theme_tokens(dark)
+    button_height = round(widget.width() * 0.1) - 2  # border 1px × 2
+    button_padding = round(widget.width() * 0.03)
+    action_content = round(widget.width() * 0.114) - 2  # 공통 외곽 크기에서 테두리 양쪽 1px을 제외
+    surface_height = round(widget.width() * 0.125) - 2  # 1px 패딩을 제외한 창 전환 영역 높이
+    tab_gap = round(widget.width() * 0.012)
+    row_radius = round(widget.width() * 0.02)
     widget.setStyleSheet(
         f"""
         QWidget {{ color: {t['text']}; }}
-        QFrame[hhRole="sidebarGroup"] {{ background: {t['surface_raised']}; border: none; border-radius: 6px; }}
-        QPushButton {{ min-height: 26px; border: 1px solid transparent; border-radius: 5px; padding: 0px 8px; background: {t['surface_raised']}; }}
+        QLabel[hhRole="sidebarSecondary"] {{ color: {t['muted']}; font-size: 11px; }}
+        QLabel[hhRole="sidebarGameName"] {{ color: {t['text']}; font-size: {round(widget.width() * 0.05)}px; font-weight: 500; }}
+        QProgressBar#gameProgressBar {{ font-size: {round(widget.width() * 0.039)}px; font-weight: 500; }}
+        QLabel[hhRole="sidebarSectionTitle"] {{ font-size: 12px; font-weight: 500; }}
+        QFrame[hhRole="sidebarGameRow"] {{ background: transparent; border: none; border-radius: {row_radius}px; }}
+        QFrame[hhRole="sidebarGameRow"][hhRunning="true"] {{ background: rgba(42,101,174,77); }}
+        QFrame[hhRole="sidebarGameRow"][hhFocused="true"] {{ background: rgba(28,116,103,99); }}
+        QPushButton {{ min-height: {button_height}px; font-size: 12px; border: 1px solid transparent;
+            border-radius: 5px; padding: 0px {button_padding}px; background: {t['surface_raised']}; }}
         QPushButton:hover, QPushButton:focus {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
         QPushButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
         QPushButton:checked {{ color: {t['text']}; background: {t['accent']}; }}
@@ -254,18 +456,22 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
         QPushButton[hhRole="danger"]:pressed,
         QPushButton[hhRole="primaryAction"]:pressed,
         QPushButton[hhRole="folderAction"]:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
-        QPushButton[hhRole="muteToggle"] {{
-            min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px;
-            padding: 0px; background: {t['surface_raised']};
-        }}
-        QPushButton[hhRole="muteToggle"]:checked {{ background: {t['mute_active']}; color: white; }}
-        QPushButton[hhRole="muteToggle"]:checked:hover,
-        QPushButton[hhRole="muteToggle"]:checked:focus {{
-            background: {t['mute_active']}; border-color: {t['focus']};
-        }}
-        QPushButton[hhRole="muteToggle"]:checked:pressed {{
-            background: {t['mute_pressed']}; border-color: {t['focus']};
-        }}
+        QPushButton[hhRole="sidebarIconAction"] {{ min-width: {action_content}px; max-width: {action_content}px;
+            min-height: {action_content}px; max-height: {action_content}px; padding: 0px; }}
+        QPushButton[hhRole="sidebarIconAction"][hhDanger="true"] {{ color: {t['danger']}; background: {t['danger_soft']}; }}
+        QPushButton[hhRole="sidebarGameSurface"] {{ min-height: {surface_height}px; padding: 1px;
+            background: transparent; border-radius: {row_radius}px; border: none; }}
+        QPushButton[hhRole="sidebarGameSurface"][hhRunning="true"]:hover {{ background: rgba(42,101,174,62); }}
+        QPushButton[hhRole="sidebarGameSurface"][hhRunning="true"]:focus {{ background: rgba(42,101,174,115); }}
+        QPushButton[hhRole="sidebarGameSurface"][hhRunning="true"]:pressed {{ background: rgba(42,101,174,155); }}
+        QPushButton[hhRole="sidebarGameSurface"][hhFocused="true"]:hover {{ background: rgba(28,116,103,74); }}
+        QPushButton[hhRole="sidebarGameSurface"][hhFocused="true"]:focus {{ background: rgba(28,116,103,130); }}
+        QPushButton[hhRole="sidebarGameSurface"][hhFocused="true"]:pressed {{ background: rgba(28,116,103,175); }}
+        QTabBar::tab {{ color: {t['muted']}; background: {t['surface_raised']};
+            border: none; border-radius: 5px; padding: 0.5em; margin-right: {tab_gap}px; }}
+        QTabBar::tab:last {{ margin-right: 0px; }}
+        QTabBar::tab:selected {{ color: {t['text']}; background: {t['accent']}; }}
+        QTabBar::tab:hover {{ color: {t['text']}; background: {t['surface_hover']}; }}
         QLabel[hhState="error"] {{ color: {t['danger']}; }}
         QLabel[hhState="success"] {{ color: {t['success']}; }}
         QLabel[hhState="warning"] {{ color: {t['warning']}; }}

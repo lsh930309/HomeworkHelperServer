@@ -148,6 +148,7 @@ def auto_migrate_database(*, strict: bool = False):
         ("global_settings", "recording_hold_threshold_ms", "INTEGER", "800"),
         # Remote server mode
         ("global_settings", "remote_server_mode_enabled", "INTEGER", "0"),
+        ("global_settings", "media_auto_bgm", "INTEGER NOT NULL", "0"),
         # Beholder incident UX / resolution metadata
         ("beholder_incidents", "user_title", "TEXT", None),
         ("beholder_incidents", "user_summary", "TEXT", None),

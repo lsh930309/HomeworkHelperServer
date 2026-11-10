@@ -1,4 +1,8 @@
 import os
+import json
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
@@ -19,6 +23,7 @@ from src.data.data_models import (
     SIDEBAR_MODE_GAME,
 )
 from src.core.process_monitor import ProcessMonitorTickResult
+from src.gui.sidebar.controls import VolumeDial
 import src.gui.sidebar.edge_trigger_window as edge_trigger_module
 from src.gui.sidebar.edge_trigger_window import EdgeTriggerWindow
 
@@ -593,7 +598,8 @@ def test_main_game_table_restores_name_sort_and_centered_icons(monkeypatch, tmp_
         assert [request[2] for request in icon_requests] == ["a", "b", "z"]
         assert {request[1] for request in icon_requests} == {window._TABLE_ICON_LOGICAL_SIZE}
         icon_cell = window.process_table.cellWidget(0, window.COL_ICON)
-        assert isinstance(icon_cell, QLabel)
+        from src.gui.widgets_style import GameIconLabel
+        assert isinstance(icon_cell, GameIconLabel)
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignHCenter
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignVCenter
         assert window.process_table.columnWidth(window.COL_ICON) <= (
@@ -672,6 +678,221 @@ def test_restore_window_state_reapplies_content_fixed_size(monkeypatch, tmp_path
         _stop_window(window, app)
 
 
+@pytest.mark.parametrize("state", ["visible", "minimized", "hidden"])
+@pytest.mark.parametrize("entry", ["tray", "ipc"])
+def test_explicit_quit_returns_gui_loop_and_stops_owned_child(tmp_path, state, entry):
+    # QApplication.exit must run inside exec(), in a separate process so it
+    # cannot quit pytest's shared QApplication. The real entrypoint is compiled
+    # without importing its production DB/server initialization.
+    code = textwrap.dedent('''
+        import ast, atexit, json, multiprocessing, os, signal, sys
+        from pathlib import Path
+        from types import SimpleNamespace
+        import pytest
+        from PySide6.QtCore import QSettings, QTimer
+        from PySide6.QtGui import QAction, QFont, QFontDatabase
+        from PySide6.QtNetwork import QLocalSocket
+        from PySide6.QtWidgets import QApplication
+        from test_gui_layout import _FakeApiClient, _patch_main_window_deps
+        from test_api_runtime_stability import _load_stop_api_server_contract
+        from src.core.instance_manager import SingleInstanceApplication, InstanceCommand, encode_instance_command
+        from src.gui import tray_manager as tray
+
+        root, state, entry = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(root / 'qt-settings'))
+        mp = pytest.MonkeyPatch()
+        module = _patch_main_window_deps(mp, root)
+        mp.setattr(module.MainWindow, '_set_gamebar_capture', lambda self, enabled: None)
+        mp.setattr(module.MainWindow, '_restore_gamebar_setting', lambda self: None)
+        mp.setattr(tray.TrayManager, '_setup_tray_icon_and_menu', lambda self: None)
+        mp.setattr(tray, 'is_windows', lambda: True)
+        mp.setattr(module, 'is_windows', lambda: True)
+        mp.setattr(tray, 'set_windows_taskbar_visible', lambda *_: True)
+        mp.setattr(module, 'set_windows_taskbar_visible', lambda *_: True)
+        context = multiprocessing.get_context('spawn')
+        shutdown = context.Event()
+        child = context.Process(target=shutdown.wait, args=(10,), daemon=False)
+        child.start()
+        child.terminate = child.kill = lambda: (_ for _ in ()).throw(AssertionError('forced child termination'))
+        manager = SingleInstanceApplication('Isolated Quit', executable_path=root / 'isolated-host.exe')
+        namespace = _load_stop_api_server_contract()
+        namespace.update(os=os, api_server_process=child, api_server_shutdown_event=shutdown,
+                         _server_pid_file_path=lambda: str(root / 'server.pid'),
+                         _server_metadata_file_path=lambda: str(root / 'server.json'))
+        stop_owned_child = namespace['stop_api_server']
+        observed = []
+        clients = []
+        def stop_api():
+            observed.append('api_stop_after_gui_loop')
+            return stop_owned_child(timeout=3.0)
+        def create_window(client, instance_manager):
+            window = module.MainWindow(client, instance_manager=instance_manager)
+            window.tray_manager = tray.TrayManager(window)
+            window.tray_manager.tray_icon = SimpleNamespace(hide=lambda: None, isVisible=lambda: True)
+            action = QAction('종료', window)
+            action.triggered.connect(window.initiate_quit_sequence)
+            def request_quit():
+                if state == 'minimized':
+                    window.tray_manager.hide_window_to_tray('test')
+                elif state == 'hidden':
+                    window.hide()
+                if entry == 'tray':
+                    action.trigger()
+                else:
+                    socket = QLocalSocket()
+                    clients.append(socket)
+                    socket.connectToServer(manager._identity.server_name)
+                    assert socket.waitForConnected(500)
+                    socket.write(encode_instance_command(InstanceCommand.QUIT_APPLICATION, manager._identity))
+                    socket.flush()
+            QTimer.singleShot(0, request_quit)
+            QTimer.singleShot(1000, lambda: QApplication.instance().exit(77))
+            return window
+        namespace.update(__name__='isolated_gui_entrypoint', sys=sys, atexit=atexit, signal=signal,
+                         QApplication=QApplication, QFont=QFont, QFontDatabase=QFontDatabase,
+                         SingleInstanceApplication=SingleInstanceApplication, is_admin=lambda: False,
+                         get_bundle_resource_path=lambda _: str(root / 'absent-font'),
+                         binding_diagnostics=lambda: {}, _prepare_gui_database=lambda _: True,
+                         ApiClient=lambda: _FakeApiClient([]), MainWindow=create_window, stop_api_server=stop_api)
+        tree = ast.parse(Path('homework_helper.pyw').read_text(encoding='utf-8'))
+        node = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'start_main_application')
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])), 'homework_helper.pyw', 'exec'), namespace)
+        try:
+            namespace['start_main_application'](manager)
+        except SystemExit as result:
+            print('QUIT_RESULT ' + json.dumps({'loop_exit': result.code, 'api_stopped': not child.is_alive(),
+                                              'shutdown_signalled': shutdown.is_set(), 'observed': observed}))
+        finally:
+            shutdown.set()
+            child.join(3.0)
+    ''')
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", APPDATA=str(tmp_path),
+               LOCALAPPDATA=str(tmp_path), HH_TEST_APPDATA_DIR=str(tmp_path),
+               PYTHONPATH=os.pathsep.join((str(Path("tests").resolve()), str(Path.cwd()))))
+    if os.name != "nt":
+        # macOS's pytest temp path plus the socket name exceeds AF_UNIX's
+        # path limit. QLocalServer already uses a unique executable digest.
+        env["TMPDIR"] = "/tmp"
+    result = subprocess.run([sys.executable, "-c", code, str(tmp_path), state, entry],
+                            env=env, text=True, encoding="utf-8", capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = next(line.removeprefix("QUIT_RESULT ") for line in result.stdout.splitlines()
+                   if line.startswith("QUIT_RESULT "))
+    assert json.loads(payload) == {
+        "loop_exit": 0, "api_stopped": True, "shutdown_signalled": True,
+        "observed": ["api_stop_after_gui_loop"],
+    }
+
+
+@pytest.mark.parametrize("entry", ["tray", "game", "minimize", "close"])
+def test_main_tray_hiding_preserves_native_minimized_window_and_shared_restore(monkeypatch, tmp_path, entry):
+    from PySide6.QtWidgets import QSystemTrayIcon
+    from src.gui import tray_manager as tray_module
+    from src.gui.gui_notification_handler import GuiNotificationHandler
+    app = _qapp()
+    module = _patch_main_window_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(tray_module.TrayManager, "_setup_tray_icon_and_menu", lambda self: None)
+    monkeypatch.setattr(tray_module, "is_windows", lambda: True)
+    monkeypatch.setattr(module, "is_windows", lambda: True)
+    calls = []
+    def taskbar(hwnd, visible):
+        calls.append(visible)
+        return True
+    monkeypatch.setattr(tray_module, "set_windows_taskbar_visible", taskbar)
+    monkeypatch.setattr(module, "set_windows_taskbar_visible", taskbar)
+    window = module.MainWindow(_FakeApiClient([]))
+    manager = tray_module.TrayManager(window)
+    manager.tray_icon = SimpleNamespace(isVisible=lambda: True, hide=lambda: None)
+    window.tray_manager = manager
+    try:
+        window.show()
+        app.processEvents()
+        if entry == "tray":
+            manager._handle_tray_icon_activation(QSystemTrayIcon.ActivationReason.Trigger)
+        elif entry == "game":
+            window._hide_main_window_to_tray("game_started")
+        elif entry == "minimize":
+            window.showMinimized()
+        else:
+            window.close()
+        app.processEvents()
+        assert window.isMinimized() and window.isVisible() and not window.isHidden()
+        assert calls == [False]
+        assert not app.quitOnLastWindowClosed()
+        if entry == "tray":
+            manager._handle_tray_icon_activation(QSystemTrayIcon.ActivationReason.Trigger)
+        elif entry == "game":
+            GuiNotificationHandler(window).process_system_notification_activation(None)
+        else:
+            window.activate_and_show()
+        app.processEvents()
+        assert window.isVisible() and not window.isMinimized()
+        assert calls == [False, True]
+    finally:
+        _stop_window(window, app)
+
+
+@pytest.mark.parametrize("visible", [True, False])
+def test_native_taskbar_visibility_uses_shell_without_hiding_window(monkeypatch, visible):
+    import sys
+    from src.utils import windows
+    calls = []
+    taskbar = SimpleNamespace(HrInit=lambda: calls.append("init"),
+                              AddTab=lambda hwnd: calls.append(("add", hwnd)),
+                              DeleteTab=lambda hwnd: calls.append(("delete", hwnd)))
+    def create(*args):
+        calls.append(("create", args))
+        return taskbar
+    monkeypatch.setattr(windows, "is_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "pythoncom", SimpleNamespace(CoCreateInstance=create, CLSCTX_INPROC_SERVER=1))
+    shell = SimpleNamespace(CLSID_TaskbarList="TaskbarList", IID_ITaskbarList="ITaskbarList")
+    monkeypatch.setitem(sys.modules, "win32com.shell", SimpleNamespace(shell=shell))
+    assert windows.set_windows_taskbar_visible(123, visible)
+    assert calls == [("create", ("TaskbarList", None, 1, "ITaskbarList")), "init",
+                     ("add" if visible else "delete", 123)]
+
+
+def test_native_taskbar_failure_is_reported_without_window_fallback(monkeypatch, caplog):
+    import sys
+    from src.utils import windows
+    def failed(*_args):
+        raise OSError("synthetic Shell failure")
+    monkeypatch.setattr(windows, "is_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "pythoncom", SimpleNamespace(CoCreateInstance=failed, CLSCTX_INPROC_SERVER=1))
+    shell = SimpleNamespace(CLSID_TaskbarList="TaskbarList", IID_ITaskbarList="ITaskbarList")
+    monkeypatch.setitem(sys.modules, "win32com.shell", SimpleNamespace(shell=shell))
+    assert not windows.set_windows_taskbar_visible(123, False)
+    assert "Windows 작업 표시줄 버튼 변경 실패" in caplog.text
+
+
+def test_main_restore_has_no_visible_scrollbar_or_reserved_right_strip(monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QScrollBar
+    app = _qapp()
+    module = _patch_main_window_deps(monkeypatch, tmp_path)
+    names = ["명조: 위더링 웨이브", "몬길: STAR DIVE", "붕괴: 스타레일", "붕괴: 스타레일(베타)",
+             "소녀전선2: 망명", "승리의 여신: 니케", "젠레스 존 제로"]
+    data = _FakeApiClient([ManagedProcess(id=str(i), name=name, monitoring_path=f"/test/{i}.exe",
+                                        launch_path=f"/test/{i}.exe") for i, name in enumerate(names)])
+    data.global_settings.theme = "dark"
+    window = module.MainWindow(data)
+    try:
+        window.show()
+        app.processEvents()
+        window.hide()
+        window.activate_and_show()
+        app.processEvents()
+        table = window.process_table
+        assert all(not bar.isVisible() for bar in window.findChildren(QScrollBar))
+        assert table.viewport().width() == table.contentsRect().width()
+        assert table.viewport().height() == table.contentsRect().height()
+        image = window.grab().toImage()
+        start = window.menuBar().height() + 1
+        assert all(image.pixelColor(image.width() - 1, y).lightness() < 80
+                   for y in range(start, image.height() - 1))
+    finally:
+        _stop_window(window, app)
+
+
 def test_dashboard_button_uses_original_chart_glyph(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
@@ -746,10 +967,10 @@ def test_main_window_position_is_not_persisted_when_show_always_reanchors():
     assert 'setValue("window_geometry"' not in source
     assert "restoreGeometry(" not in source
     assert "_position_on_cursor_screen_bottom_right" in source
-    assert "position_windows_window_bottom_right(" in source
+    assert "position_windows_window_in_work_area(" in source
     assert "_pending_bottom_right_placement" in source
     assert "def moveEvent(self, event):" in source
-    assert "self._position_window_bottom_right()" in source
+    assert "self._position_window_in_work_area()" in source
     assert "_WindowsMovingEventFilter" not in source
     assert "QAbstractNativeEventFilter" not in source
     assert "QApplication.screenAt(QCursor.pos())" in source
@@ -857,6 +1078,17 @@ def test_progress_cell_uses_full_width_bar_and_only_real_resource_icon(monkeypat
         assert resource_icon.geometry().left() == with_icon.contentsRect().left()
         assert progress_text.geometry().right() == with_icon.contentsRect().right()
         assert resource_icon.geometry().right() < progress_text.geometry().left()
+
+        process.resource_tracking_enabled = True
+        process.resource_provider = "fixture"
+        process.resource_key = "energy"
+        for percent in (0.0, 83.4):
+            process.resource_percent = percent
+            window._refresh_progress_bars()
+            cell = window.process_table.cellWidget(0, window.COL_LAST_PLAYED)
+            gauge = cell.findChild(QProgressBar)
+            assert 100 * gauge.value() / gauge.maximum() == pytest.approx(percent)
+            assert cell.findChild(QLabel, "progressText").text() == f"{percent:.1f}%"
     finally:
         if without_icon is not None:
             without_icon.close()
@@ -926,32 +1158,54 @@ def test_volume_button_icon_uses_theme_text_color(monkeypatch, tmp_path):
         _stop_window(window, app)
 
 
-def test_main_window_stays_bottom_right_after_move_and_content_resize(monkeypatch, tmp_path):
+def test_main_window_starts_in_corner_but_preserves_user_move_and_content_resize(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
-    monkeypatch.setattr(main_window, "position_windows_window_bottom_right", lambda *_args: False)
+    monkeypatch.setattr(main_window, "position_windows_window_in_work_area", lambda *_args, **_kwargs: False)
     client = _FakeApiClient([])
     window = main_window.MainWindow(client)
     try:
+        # A generous work area permits resizing without containment correction.
+        area = QRect(0, 0, 1800, 1000)
+        screen = SimpleNamespace(geometry=lambda: area, availableGeometry=lambda: area)
+        monkeypatch.setattr(window, "screen", lambda: screen)
+        monkeypatch.setattr(main_window.QApplication, "screenAt", lambda _point: screen)
         window.show()
-        app.processEvents()
-        area = window.screen().availableGeometry()
+        for _ in range(3):
+            app.processEvents()  # Finish initial fitting and its queued first placement.
         assert window.frameGeometry().bottomRight() == area.bottomRight()
-        window.move(window.pos() + QPoint(-100, -100))
+        window.move(QPoint(150, 150))
         app.processEvents()
-        assert window.frameGeometry().bottomRight() == area.bottomRight()
+        user_position = window.frameGeometry().topLeft()
+        assert user_position == QPoint(150, 150)
+        window._on_ui_refresh_tick()
+        app.processEvents()
+        assert window.frameGeometry().topLeft() == user_position
         initial = window.size()
         client.web_shortcuts = [WebShortcut(id="wide", name="W" * 40, url="https://example.com")]
         window._load_and_display_web_buttons()
         app.processEvents()  # apply the content fit
         app.processEvents()  # apply its queued native/frame placement
         assert window.size() != initial
-        assert window.frameGeometry().bottomRight() == area.bottomRight()
+        assert window.frameGeometry().topLeft() == user_position
         client.web_shortcuts = []
         window._load_and_display_web_buttons()
         app.processEvents()  # apply the content fit
         app.processEvents()  # apply its queued native/frame placement
         assert window.size() == initial
+        assert window.frameGeometry().topLeft() == user_position
+        # All show entrypoints restore the corner policy, without storing geometry.
+        window.hide()
+        window.activate_and_show()
+        for _ in range(3):
+            app.processEvents()
+        assert window.frameGeometry().bottomRight() == area.bottomRight()
+        window.move(user_position)
+        window.showMinimized()
+        app.processEvents()
+        window.activate_and_show()
+        for _ in range(3):
+            app.processEvents()
         assert window.frameGeometry().bottomRight() == area.bottomRight()
     finally:
         _stop_window(window, app)
@@ -961,8 +1215,8 @@ def test_main_window_refresh_uses_monitor_origin_and_does_not_show_hidden_window
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     calls = []
-    monkeypatch.setattr(main_window, "position_windows_window_bottom_right",
-                        lambda hwnd, origin: calls.append((hwnd, origin)) or True)
+    monkeypatch.setattr(main_window, "position_windows_window_in_work_area",
+                        lambda hwnd, origin, **_kwargs: calls.append((hwnd, origin)) or True)
     window = main_window.MainWindow(_FakeApiClient([]))
     try:
         window.show()
@@ -972,42 +1226,127 @@ def test_main_window_refresh_uses_monitor_origin_and_does_not_show_hidden_window
         origin = window.screen().geometry().topLeft()
         assert calls == [(int(window.winId()), (origin.x(), origin.y()))]
         changed = SimpleNamespace(geometry=lambda: QRect(-2560, 200, 1280, 720))
-        window._position_window_bottom_right(changed)
+        window._position_window_in_work_area(changed)
         assert calls[-1] == (int(window.winId()), (-2560, 200))
         window.hide()
         app.processEvents()
         calls.clear()
         window._on_ui_refresh_tick()
-        window._position_window_bottom_right(changed)
+        window._position_window_in_work_area(changed)
         assert calls == []
         assert not window.isVisible()
     finally:
         _stop_window(window, app)
 
 
-def test_main_window_existing_refresh_tracks_taskbar_area_changes(monkeypatch, tmp_path):
+def test_main_window_existing_refresh_contains_taskbar_overlap_without_forcing_corner(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
-    monkeypatch.setattr(main_window, "position_windows_window_bottom_right", lambda *_args: False)
+    monkeypatch.setattr(main_window, "position_windows_window_in_work_area", lambda *_args, **_kwargs: False)
     window = main_window.MainWindow(_FakeApiClient([]))
     try:
         window.show()
-        app.processEvents()
+        for _ in range(3):
+            app.processEvents()
         geometry = window.screen().geometry()
         work = QRect(geometry)
         screen = SimpleNamespace(geometry=lambda: geometry, availableGeometry=lambda: work)
         monkeypatch.setattr(window, "screen", lambda: screen)
+        window._position_window_in_work_area(placement="bottom_right")
         work.setHeight(geometry.height() - 48)
         window._on_ui_refresh_tick()
         assert window.frameGeometry().bottomRight() == work.bottomRight()
+        contained = window.frameGeometry().topLeft()
         work.setHeight(geometry.height())
         window._on_ui_refresh_tick()
-        assert window.frameGeometry().bottomRight() == work.bottomRight()
+        assert window.frameGeometry().topLeft() == contained
         work.setHeight(geometry.height() - 48)
         window._on_ui_refresh_tick()
         assert window.frameGeometry().bottomRight() == work.bottomRight()
     finally:
         _stop_window(window, app)
+
+
+@pytest.mark.parametrize("edge", ["left", "top", "right", "bottom"])
+def test_main_window_drag_snaps_near_each_edge_and_can_move_away(monkeypatch, tmp_path, edge):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(main_window, "position_windows_window_in_work_area", lambda *_args, **_kwargs: False)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    area = QRect(0, 0, 1600, 1000)
+    screen = SimpleNamespace(geometry=lambda: area, availableGeometry=lambda: area)
+    monkeypatch.setattr(window, "screen", lambda: screen)
+    monkeypatch.setattr(main_window.QApplication, "screenAt", lambda _point: screen)
+    try:
+        window.show()
+        for _ in range(3):
+            app.processEvents()
+        frame = window.frameGeometry()
+        center_x, center_y = 400, 400
+        target = {
+            "left": QPoint(area.left() + 10, center_y),
+            "top": QPoint(center_x, area.top() + 10),
+            "right": QPoint(area.right() - frame.width() + 1 - 10, center_y),
+            "bottom": QPoint(center_x, area.bottom() - frame.height() + 1 - 10),
+        }[edge]
+        window.move(target)
+        app.processEvents()
+        frame = window.frameGeometry()
+        assert getattr(frame, edge)() == getattr(area, edge)()
+        if edge in {"left", "right"}:
+            assert frame.top() == center_y
+        else:
+            assert frame.left() == center_x
+        # Leaving the edge is a normal move; later refresh must preserve it.
+        window.move(QPoint(center_x, center_y))
+        app.processEvents()
+        window._on_ui_refresh_tick()
+        assert window.frameGeometry().topLeft() == QPoint(center_x, center_y)
+    finally:
+        _stop_window(window, app)
+
+
+@pytest.mark.parametrize("rect, work, placement, expected", [
+    ((100, 200, 500, 600), (0, 0, 1920, 1080), "snap", (100, 200, 500, 600)),
+    ((15, 100, 415, 500), (0, 0, 1920, 1080), "snap", (0, 100, 400, 500)),
+    ((16, 100, 416, 500), (0, 0, 1920, 1080), "snap", (16, 100, 416, 500)),
+    ((100, 15, 500, 415), (0, 0, 1920, 1080), "snap", (100, 0, 500, 400)),
+    ((1510, 500, 1910, 1070), (0, 0, 1920, 1080), "snap", (1520, 510, 1920, 1080)),
+    ((1510, 500, 1910, 1070), (0, 0, 1920, 1080), "contain", (1510, 500, 1910, 1070)),
+    ((500, 800, 1200, 1300), (0, 0, 1920, 1080), "contain", (500, 580, 1200, 1080)),
+    ((-20, -30, 480, 370), (0, 0, 1920, 1080), "contain", (0, 0, 500, 400)),
+    ((-2550, 205, -1950, 905), (-2560, 200, 0, 1568), "snap", (-2560, 200, -1960, 900)),
+    ((-700, 800, -10, 1558), (-2560, 200, 0, 1568), "snap", (-690, 810, 0, 1568)),
+])
+def test_window_placement_preserves_interior_and_only_changes_requested_axes(rect, work, placement, expected):
+    from src.utils.windows import place_window_rect_in_work_area
+    assert place_window_rect_in_work_area(rect, work, placement=placement) == expected
+
+
+@pytest.mark.parametrize("dpi, frame, expected", [
+    (96, (100, 200, 500, 600), None),
+    (96, (1200, 500, 1910, 1070), (1202, 502)),
+    (96, (1200, 500, 1900, 1060), None),
+    (144, (1200, 500, 1900, 1060), (1212, 512)),
+    (192, (1200, 500, 1890, 1050), (1222, 522)),
+])
+def test_native_snap_uses_visible_frame_and_scales_old_threshold_by_window_dpi(monkeypatch, dpi, frame, expected):
+    import src.utils.windows as windows
+    calls, areas = [], []
+    monkeypatch.setattr(windows, "is_windows", lambda: True)
+    def work_area(origin, ignored_hwnd):
+        areas.append((origin, ignored_hwnd))
+        return (0, 0, 1920, 1080), (0, 0, 1920, 1080)
+    monkeypatch.setattr(windows, "get_visible_taskbar_work_area", work_area)
+    user32 = SimpleNamespace(SetWindowPos=lambda *args: calls.append(args) or True, GetDpiForWindow=lambda _hwnd: dpi)
+    monkeypatch.setattr(windows.ctypes, "WinDLL", lambda *_args, **_kwargs: user32, raising=False)
+    monkeypatch.setattr(windows, "_configure_window_geometry_api", lambda _api: None)
+    visible = SimpleNamespace(left=frame[0], top=frame[1], right=frame[2], bottom=frame[3])
+    outer = SimpleNamespace(left=frame[0] - 8, top=frame[1] - 8)
+    monkeypatch.setattr(windows, "_get_window_frame_rects", lambda *_args: (outer, visible))
+    assert windows.position_windows_window_in_work_area(123, (0, 0), placement="snap")
+    assert areas == [((0, 0), 123)]
+    assert ([call[2:4] for call in calls] == [expected]) if expected else not calls
 
 
 def test_sidebar_all_display_transitions_select_current_primary(monkeypatch):
@@ -1043,12 +1382,12 @@ def test_native_bottom_right_uses_visible_frame_and_shared_work_area(monkeypatch
     visible = SimpleNamespace(left=frame[0], top=frame[1], right=frame[2], bottom=frame[3])
     outer = SimpleNamespace(left=frame[0]-8, top=frame[1]-8)
     monkeypatch.setattr(windows, "_get_window_frame_rects", lambda *_args: (outer, visible))
-    assert windows.position_windows_window_bottom_right(123, work[:2])
+    assert windows.position_windows_window_in_work_area(123, work[:2], placement="bottom_right")
     assert calls[0][2:4] == expected
     # The target frame already touches the work area's corner: no repeated move.
     visible.right, visible.bottom = work[2], work[3]
     calls.clear()
-    assert windows.position_windows_window_bottom_right(123, work[:2])
+    assert windows.position_windows_window_in_work_area(123, work[:2], placement="bottom_right")
     assert calls == []
 
 
@@ -1863,6 +2202,7 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
     window = types.SimpleNamespace(
         _beholder_restore_runtime_suspended=False,
         _lifecycle_shutdown_event=threading.Event(),
+        _stop_media_center=lambda *_args: True,
         process_monitor=process_monitor,
         monitor_timer=monitor_timer,
         scheduler_timer=scheduler_timer,
@@ -1937,7 +2277,8 @@ def sidebar_layout(monkeypatch):
     ])
     view = module.SidebarWidget(data)
     monkeypatch.setattr(view, "_load_icon_async", lambda *_args: None)
-    view._refresh_volumes_list()
+    data.global_settings.obs_watch_output_dir = False
+    view.refresh_content()
     try:
         yield app, view, module
     finally:
@@ -1945,38 +2286,186 @@ def sidebar_layout(monkeypatch):
         view.close()
 
 
+def test_sidebar_unified_games_follow_main_name_order_and_keep_action_targets(sidebar_layout, monkeypatch):
+    from src.gui.main_window import MainWindow
+    _app, view, module = sidebar_layout
+    # Input/launch order intentionally differs from name order, including equal names.
+    games = [
+        ManagedProcess(id="z", name="젠레스 존 제로", monitoring_path="/z.exe", launch_path="/z.exe"),
+        ManagedProcess(id="b", name="Alpha", monitoring_path="/b.exe", launch_path="/b.exe"),
+        ManagedProcess(id="m", name="명조", monitoring_path="/m.exe", launch_path="/m.exe"),
+        ManagedProcess(id="a", name="alpha", monitoring_path="/a.exe", launch_path="/a.exe"),
+        ManagedProcess(id="idle", name="니케", monitoring_path="/idle.exe", launch_path="/idle.exe"),
+    ]
+    view._data_manager.managed_processes = games
+    active = {game.id: {"pid": 100 + index, "start_time_approx": 1000.0 - index}
+              for index, game in enumerate(games) if game.id != "idle"}
+    active["deleted"] = {"pid": 999, "start_time_approx": 1.0}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
+    monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
+    volume_calls = []
+    monkeypatch.setattr(view, "_set_game_volume", lambda value, game, pid: volume_calls.append((game.id, pid, value)))
+    stopped = []
+    monkeypatch.setattr(view, "_kill_process", lambda *args: stopped.append(args))
+    original = [game.to_dict() for game in games]
+    active_before = {key: dict(value) for key, value in active.items()}
+    view._refresh_games()
+    unified_order = ["a", "b", "idle", "m", "z"]
+    assert [view._games_list_layout.itemAt(i).widget().property("processId") for i in range(len(games))] == unified_order
+    for index, game_id in enumerate(unified_order):
+        row = view._games_list_layout.itemAt(index).widget()
+        game = next(game for game in games if game.id == game_id)
+        assert row.findChild(QLabel, "gameName").text() == game.name
+        assert row.property("hhRunning") is (game_id in active)
+        if game_id in active:
+            row.findChild(QPushButton, "gameAction").click()
+            assert stopped[-1] == (game_id, game.monitoring_path, active[game_id]["pid"], active[game_id]["start_time_approx"])
+    sound_order = ["a", "b", "idle", "m", "z"]
+    for index, game_id in enumerate(sound_order):
+        row = view._games_list_layout.itemAt(index).widget()
+        game = next(game for game in games if game.id == game_id)
+        assert row.findChild(QLabel, "gameName").text() == game.name
+        row.findChild(VolumeDial).setValue(35)
+        assert volume_calls[-1] == (game_id, active.get(game_id, {}).get("pid"), 35)
+    assert [game.to_dict() for game in games] == original
+    assert active == active_before
+
+
+def test_sidebar_name_edit_and_running_set_refresh_reapply_sort_without_reordering_source(sidebar_layout, monkeypatch):
+    from src.gui.main_window import MainWindow
+    _app, view, module = sidebar_layout
+    games = view._data_manager.managed_processes
+    active = {game.id: {"pid": 100 + index, "start_time_approx": 1000.0 + index} for index, game in enumerate(games)}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
+    monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
+    ids = [game.id for game in games]
+    view.refresh_content()
+
+    def rows():
+        return [view._games_list_layout.itemAt(index).widget() for index in range(len(games))]
+
+    assert [row.property("processId") for row in rows()] == ["4", "3", "0", "1", "2"]
+    assert all(row.property("hhRunning") for row in rows())
+    games[2].name = "Alpha"
+    active.pop("4")
+    view.refresh_content()
+    assert [row.property("processId") for row in rows() if row.property("hhRunning")] == ["2", "3", "0", "1"]
+    assert [row.findChild(QLabel, "gameName").toolTip() for row in rows()] == [
+        "Alpha", "W" * 80, "긴 이름의 게임 등록 항목 이름", "명조: 위더링 웨이브", "붕괴: 스타레일(베타)"]
+    assert [game.id for game in games] == ids
+    active.clear()
+    view._refresh_games()
+    assert not any(row.property("hhRunning") for row in rows())
+    assert view._games_list_layout.count() == len(games)
+    view._data_manager.managed_processes = []
+    view._refresh_games()
+    assert view._games_list_layout.itemAt(0).widget().text() == "등록된 게임 없음"
+
+
 @pytest.mark.parametrize("height", [250, 1400])
-def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, height):
-    from PySide6.QtWidgets import QSlider
+@pytest.mark.parametrize("volume_visible", [False, True])
+def test_sidebar_long_names_stay_on_one_line_without_clipping_controls(sidebar_layout, height, volume_visible):
     app, view, _module = sidebar_layout
+    titles = ["명조: 워더링 웨이브", "붕괴: 스타레일", "소녀전선2: 망명",
+              "승리의 여신: 니케", "젠레스 존 제로", "W" * 80]
+    view._data_manager.managed_processes = [
+        ManagedProcess(id=str(index), name=title, monitoring_path=f"/{index}.exe", launch_path=f"/{index}.exe")
+        for index, title in enumerate(titles)
+    ]
+    view._data_manager.global_settings.sidebar_volume_section_enabled = volume_visible
+    view.refresh_content()
     view.resize(280, height)
     view.show()
-    app.processEvents()
+    for _ in range(3):
+        app.processEvents()
     assert view.width() == 280
     viewport = view._main_scroll.viewport()
     assert view._scroll_content.width() <= viewport.width()
-    rows = view._vol_list_container.findChildren(QSlider)
-    assert len(rows) == 5
+    rows = [view._games_list_layout.itemAt(index).widget().findChild(VolumeDial)
+            for index in range(view._games_list_layout.count())]
+    assert len(rows) == len(titles)
     for slider in rows:
         row = slider.parentWidget()
-        name = next(label for label in row.findChildren(QLabel) if label.wordWrap())
+        name = row.findChild(QLabel, "gameName")
+        gauge = row.findChild(QProgressBar, "gameProgressBar")
+        title = titles[int(row.property("processId"))]
         assert name.width() > 0
-        assert name.height() >= name.heightForWidth(name.width())
-        for widget in row.findChildren(QPushButton) + row.findChildren(QLabel) + [slider]:
+        assert slider.isVisible() is volume_visible
+        assert not name.wordWrap()
+        assert row.findChild(QLabel, "gameRunState") is None
+        assert gauge.isVisible()
+        assert name.mapTo(row, name.rect().bottomLeft()).y() < gauge.mapTo(row, QPoint()).y()
+        assert name.mapTo(row, QPoint()).x() == gauge.mapTo(row, QPoint()).x()
+        assert name.width() == gauge.width()
+        assert name.height() == 15 and gauge.height() == 11
+        assert name.text() == name.toolTip() == name.accessibleDescription() == title
+        if title == titles[-1]:
+            assert name.fontMetrics().horizontalAdvance(title) > name.contentsRect().width()
+            # Identical prefixes and different suffixes must render different pixels at the far right.
+            full = name.grab().toImage()
+            name.setText(title[:-4] + "iiii")
+            different_suffix = name.grab().toImage()
+            name.setText(title)
+            assert full.size() == different_suffix.size()
+            assert any(full.pixel(x, y) != different_suffix.pixel(x, y)
+                       for x in range(full.width() * 4 // 5, full.width()) for y in range(full.height()))
+        else:
+            assert name.fontMetrics().horizontalAdvance(title) <= name.contentsRect().width()
+        for widget in row.findChildren(QPushButton) + row.findChildren(QLabel) + [slider, gauge]:
             if widget.isVisible():
                 right = widget.mapTo(view._scroll_content, QPoint(widget.width(), 0)).x()
                 assert right <= viewport.width(), (name.text(), right, viewport.width())
-    assert view._main_scroll.verticalScrollBar().isVisible() is (height == 250)
+    # Native label metrics can post a final nested layout request while measured.
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+    app.processEvents()
+    assert not view._main_scroll.verticalScrollBar().isVisible()
+    assert (view._main_scroll.verticalScrollBar().maximum() > 0) is (height == 250)
+    assert viewport.width() == view._main_scroll.contentsRect().width()
+
+
+def test_sidebar_height_change_preserves_hidden_scroll_and_wheel_access(sidebar_layout):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QWheelEvent
+    app, view, _module = sidebar_layout
+    view.resize(280, 1400)
+    view.show()
+    for _ in range(3):
+        app.processEvents()
+    scroll = view._main_scroll
+    assert scroll.verticalScrollBar().maximum() == 0
+    view.resize(280, 250)
+    for _ in range(3):
+        app.processEvents()
+    assert scroll.verticalScrollBar().maximum() > 0
+    assert not scroll.verticalScrollBar().isVisible()
+    viewport = scroll.viewport()
+    assert viewport.width() == scroll.contentsRect().width()
+    position = viewport.rect().center()
+    event = QWheelEvent(QPointF(position), QPointF(viewport.mapToGlobal(position)), QPoint(), QPoint(0, -120),
+                        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+    app.sendEvent(viewport, event)
+    app.processEvents()
+    assert scroll.verticalScrollBar().value() > 0
+    view.resize(280, 1400)
+    for _ in range(3):
+        app.processEvents()
+    assert scroll.verticalScrollBar().maximum() == 0
+    assert scroll.verticalScrollBar().value() == 0
+    assert not scroll.verticalScrollBar().isVisible()
 
 
 def test_sidebar_active_game_and_gallery_buttons_share_visible_width(sidebar_layout):
+    import time
     app, view, _module = sidebar_layout
     view._data_manager.global_settings.screenshot_enabled = True
     view._data_manager.global_settings.recording_enabled = True
-    view._data_manager.global_settings.sidebar_playtime_prefix = "W" * 80
     process = view._data_manager.managed_processes[-1]
-    cluster = view._make_game_cluster(process, 42, 123.0)
-    view._active_clusters_layout.addWidget(cluster)
+    process.last_played_timestamp = time.time() - 12 * 3600
+    row = view._make_game_row(process, {"pid": 42, "start_time_approx": 123.0})
+    view._games_list_layout.addWidget(row)
+    view._refresh_game_row_displays()
     view._refresh_screenshot_section()
     view._refresh_recording_section()
     view.resize(280, 500)
@@ -1984,9 +2473,486 @@ def test_sidebar_active_game_and_gallery_buttons_share_visible_width(sidebar_lay
     app.processEvents()
     viewport = view._main_scroll.viewport()
     assert view._scroll_content.width() <= viewport.width()
-    for button in view._scroll_content.findChildren(QPushButton):
+    gauge = row.findChild(QProgressBar, "gameProgressBar")
+    assert gauge.isVisible()
+    for control in view._scroll_content.findChildren(QPushButton) + [gauge]:
+        if control.isVisible():
+            assert control.mapTo(view._scroll_content, QPoint(control.width(), 0)).x() <= viewport.width()
+
+
+@pytest.fixture
+def sidebar_gallery(sidebar_layout, tmp_path, monkeypatch):
+    app, view, module = sidebar_layout
+    screenshots = tmp_path / "screenshots"
+    recordings = tmp_path / "recordings"
+    screenshots.mkdir()
+    recordings.mkdir()
+    for index in range(12):
+        path = screenshots / f"image-{index:02}.png"
+        image = QImage(40, 30, QImage.Format.Format_RGB32)
+        image.fill(QColor("blue"))
+        assert image.save(str(path))
+        video = recordings / f"video-{index:02}.mp4"
+        video.write_bytes(b"synthetic video fixture; never decoded")
+        os.utime(path, (1000 + index, 1000 + index))
+        os.utime(video, (1000 + index, 1000 + index))
+    gs = view._data_manager.global_settings
+    gs.screenshot_enabled = True
+    gs.screenshot_save_dir = str(screenshots)
+    gs.recording_enabled = True
+    gs.obs_watch_output_dir = True
+    view._recording_output_dir = str(recordings)
+    # Synthetic files only; prevent Windows Shell decoding or external operations.
+    tasks = []
+    monkeypatch.setattr(view._thumb_pool, "start", tasks.append)
+    monkeypatch.setattr(view._rec_thumb_pool, "start", tasks.append)
+    view.refresh_content()
+    view.resize(280, 1100)
+    view.show()
+    for _ in range(3):
+        app.processEvents()
+    yield app, view, module, screenshots, recordings, tasks
+
+
+def _gallery_widgets(view):
+    return [view._gallery_layout.itemAt(index).widget() for index in range(view._gallery_layout.count())]
+
+
+@pytest.mark.parametrize("height", [700, 1100])
+def test_sidebar_clock_and_bottom_group_stay_at_edges_with_two_row_cap(sidebar_gallery, height):
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    view.resize(280, height)
+    for _ in range(4):
+        app.processEvents()
+    margins = view._frame.layout().contentsMargins()
+    assert view._clock_widget.geometry().top() == margins.top()
+    assert view._close_btn.geometry().bottom() == view.height() - margins.bottom() - 1
+    assert view._clock_widget.parentWidget() is view._frame
+    assert view._close_btn.parentWidget() is view._frame
+    assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
+    assert view._gallery.geometry().bottom() == view._media_section.height() - 1
+    _width, cell_height, gap = view._gallery_cell_size()
+    rows = 1 if height == 700 else 2
+    assert view._gallery.height() == rows * cell_height + (rows - 1) * gap
+    assert len(_gallery_widgets(view)) == rows * 3
+    if height == 1100:
+        assert view._scroll_layout.itemAt(1).spacerItem().geometry().height() > 0
+    assert not view._main_scroll.verticalScrollBar().isVisible()
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+
+
+def test_sidebar_extreme_height_scrolls_middle_only_and_recovers_bottom_alignment(sidebar_gallery):
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    view.resize(280, 250)
+    for _ in range(4):
+        app.processEvents()
+    clock = view._clock_widget.geometry()
+    close = view._close_btn.geometry()
+    bar = view._main_scroll.verticalScrollBar()
+    assert bar.maximum() > 0 and not bar.isVisible()
+    assert clock.top() >= 0 and close.bottom() < view.height()
+    bar.setValue(bar.maximum())
+    app.processEvents()
+    assert view._clock_widget.geometry() == clock
+    assert view._close_btn.geometry() == close
+    assert len(_gallery_widgets(view)) == 3
+    view.resize(280, 1100)
+    for _ in range(4):
+        app.processEvents()
+    assert bar.maximum() == 0 and bar.value() == 0
+    assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
+    assert len(_gallery_widgets(view)) == 6
+
+
+def test_sidebar_running_indicator_follows_game_identity_after_name_and_session_changes(sidebar_layout, monkeypatch):
+    from src.gui.main_window import MainWindow
+    app, view, module = sidebar_layout
+    active = {"0": {"pid": 123}}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
+    monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
+    for running_id in ("0", "2"):
+        active.clear()
+        active[running_id] = {"pid": 123}
+        view._data_manager.managed_processes[2].name = "Alpha"
+        view._refresh_games()
+        view.resize(280, 700)
+        view.show()
+        for _ in range(3):
+            app.processEvents()
+        for index, game in enumerate(sorted(view._data_manager.managed_processes, key=ManagedProcess.name_sort_key)):
+            row = view._games_list_layout.itemAt(index).widget()
+            icon = row.findChild(QLabel, "gameIcon")
+            name = row.findChild(QLabel, "gameName")
+            assert name.toolTip() == game.name
+            assert icon.mapTo(row, icon.rect().topRight()).x() < name.mapTo(row, name.rect().topLeft()).x()
+            assert row.property("hhRunning") is (game.id == running_id)
+            assert icon.property("hhRunning") is (game.id == running_id)
+
+
+def test_sidebar_balanced_layout_with_single_line_names_fits_controls_and_bottom_gallery(sidebar_gallery, monkeypatch):
+    import time
+    from src.gui.main_window import MainWindow
+    app, view, module, _screenshots, _recordings, _tasks = sidebar_gallery
+    names = ["명조: 위더링 웨이브", "몬길: STAR DIVE", "붕괴: 스타레일", "붕괴: 스타레일(베타)",
+             "소녀전선2: 망명", "승리의 여신: 니케", "젠레스 존 제로"]
+    games = [ManagedProcess(id=str(index), name=name, monitoring_path=f"/test/{index}.exe", launch_path=f"/test/{index}.exe")
+             for index, name in enumerate(names)]
+    view._data_manager.managed_processes = games
+    active = {"0": {"pid": 123, "start_time_approx": time.time() - 80 * 60}}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
+    monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
+    view.on_recording_state_changed("idle")
+    view.refresh_content()
+    view.resize(280, 800)
+    for _ in range(4):
+        app.processEvents()
+    for index in range(len(games)):
+        row = view._games_list_layout.itemAt(index).widget()
+        name = row.findChild(QLabel, "gameName")
+        dial = row.findChild(VolumeDial)
+        action = row.findChild(QPushButton, "gameAction")
+        assert not name.wordWrap() and name.height() == 15
+        assert action.geometry().right() < dial.geometry().left()
+        assert dial.geometry().right() < row.width()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+    app.processEvents()
+    assert len(_gallery_widgets(view)) == 3
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+    assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
+    # 작은 높이에서는 미디어 조작을 보존하고 갤러리를 1행으로 압축한다.
+    # 같은 7개 게임으로 공간을 넓히면 최대 2행으로 복귀해야 한다.
+    view.resize(280, 1080)
+    for _ in range(4):
+        app.processEvents()
+    assert len(_gallery_widgets(view)) == 6
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+    view.resize(280, 800)
+    for _ in range(4):
+        app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+    app.processEvents()
+    assert len(_gallery_widgets(view)) == 3
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+
+
+def test_sidebar_content_replace_hides_old_rows_before_deferred_delete(sidebar_gallery, monkeypatch):
+    import time
+    from src.gui.main_window import MainWindow
+    app, view, module, _screenshots, _recordings, _tasks = sidebar_gallery
+    active = {"0": {"pid": 123, "start_time_approx": time.time()}}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
+    monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
+    view.refresh_content()
+    app.processEvents()
+    old_rows = [view._games_list_layout.itemAt(index).widget() for index in range(view._games_list_layout.count())]
+    assert all(row.isVisible() for row in old_rows)
+    view.refresh_content()
+    # No event loop/DeferredDelete between replacement and this assertion.
+    assert all(row.isHidden() for row in old_rows)
+    assert all(view._games_list_layout.itemAt(index).widget() is not row for index, row in enumerate(old_rows))
+
+
+def test_sidebar_clock_date_rollover_uses_fixed_face_and_preserves_visibility(sidebar_layout, monkeypatch):
+    import datetime
+    _app, view, _module = sidebar_layout
+    class Clock(datetime.datetime):
+        @classmethod
+        def now(cls):
+            return cls.current
+    monkeypatch.setattr(datetime, "datetime", Clock)
+    gs = view._data_manager.global_settings
+    gs.sidebar_clock_format = "%H:%M"
+    for now, date_text in [(Clock(2026, 10, 14, 23, 59), "10월 14일 수요일"),
+                           (Clock(2026, 10, 15, 0, 0), "10월 15일 목요일")]:
+        Clock.current = now
+        view._update_clock()
+        assert view._clock_face.accessibleName() == now.strftime("%H:%M:%S")
+        assert view._clock_date_label.text() == date_text
+    gs.sidebar_clock_enabled = False
+    view._update_clock()
+    assert view._clock_widget.isHidden()
+
+
+@pytest.mark.parametrize("state, text, action", [
+    ("idle", "연결됨", "_rec_start_btn"),
+    ("recording", "01:01:01", "_rec_stop_btn"),
+    ("connecting", "연결 중", None),
+    ("obs_offline", "연결 안 됨", "_rec_connect_btn"),
+])
+def test_sidebar_recording_status_and_action_share_one_row(sidebar_gallery, state, text, action):
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    view.set_recording_elapsed_provider(lambda: 3661)
+    view.on_recording_state_changed(state)
+    for _ in range(3):
+        app.processEvents()
+    status = view._rec_status_label
+    assert status.text() == text
+    section = view._recording_section
+    assert status.parentWidget() is section
+    for name in ("_rec_start_btn", "_rec_stop_btn", "_rec_connect_btn"):
+        button = getattr(view, name)
+        assert button.isVisible() is (name == action)
         if button.isVisible():
-            assert button.mapTo(view._scroll_content, QPoint(button.width(), 0)).x() <= viewport.width()
+            assert button.parentWidget() is section
+            assert abs(button.geometry().center().y() - status.geometry().center().y()) <= 1
+            assert button.geometry().right() < section.width()
+    assert section.height() == view._screenshot_section.height()
+    assert not section.styleSheet()  # Parent transparency must not erase button backgrounds.
+
+
+def test_sidebar_shared_gallery_height_reduces_previews_before_scrolling(sidebar_gallery):
+    app, view, _module, screenshots, _recordings, _tasks = sidebar_gallery
+    # Exclude the new flexible gap above the bottom group, as well as the gallery.
+    fixed_height = (view.height() - view._gallery.height()
+                    - view._scroll_layout.itemAt(1).spacerItem().geometry().height())
+    cell_width, cell_height, gap = view._gallery_cell_size()
+    for rows in [2, 1, 2]:
+        view.resize(view.width(), fixed_height + rows * cell_height + (rows - 1) * gap)
+        for _ in range(3):
+            app.processEvents()
+        widgets = _gallery_widgets(view)
+        assert len(widgets) == rows * 3
+        assert widgets[-1].text() == f"+{12 - (rows * 3 - 1)}"
+        assert [path for path, cell in view._thumb_buttons.items() if not cell.isHidden()] == [str(screenshots / f"image-{index:02}.png")
+                                           for index in range(11, 11 - (rows * 3 - 1), -1)]
+        assert view._main_scroll.verticalScrollBar().maximum() == 0
+        assert not view._main_scroll.verticalScrollBar().isVisible()
+        assert view._main_scroll.viewport().width() == view._main_scroll.contentsRect().width()
+        assert all(widget.width() == cell_width and widget.height() == cell_height for widget in widgets)
+        assert max(widget.geometry().bottom() for widget in widgets) < view._gallery.height()
+        assert view._capture_now_btn.isVisible() and view._rec_connect_btn.isVisible()
+    # When mandatory controls cannot fit either, wheel access stays available.
+    view.resize(280, 250)
+    for _ in range(3):
+        app.processEvents()
+    assert view._main_scroll.verticalScrollBar().maximum() > 0
+    assert not view._main_scroll.verticalScrollBar().isVisible()
+    assert len(_gallery_widgets(view)) == 3
+    assert next(button for button in view.findChildren(QPushButton) if button.text() == "닫기").isVisible()
+
+
+def test_sidebar_shared_gallery_switch_keeps_actions_and_rejects_late_results(sidebar_gallery, monkeypatch):
+    app, view, module, screenshots, recordings, _tasks = sidebar_gallery
+    old_request = view._thumb_request_id
+    image = module._ThumbnailLoadTask._build_thumbnail(str(screenshots / "image-11.png"))
+    assert image is not None
+    called = []
+    view.set_on_start_recording(lambda: called.append("start"))
+    view.set_on_stop_recording(lambda: called.append("stop"))
+    view.set_on_reconnect_recording(lambda: called.append("reconnect"))
+    view._gallery_tabs.setCurrentIndex(1)
+    app.processEvents()
+    assert not view._thumb_buttons and len(view._rec_thumb_buttons) == 5
+    assert all(str(recordings) in path for path in view._rec_thumb_buttons)
+    view._apply_thumbnail_result(old_request, str(screenshots / "image-11.png"), image)
+    assert not view._thumb_cache
+    old_video_request = view._rec_thumb_request_id
+    view._rec_connect_btn.click()
+    view.on_recording_state_changed("idle")
+    view._rec_start_btn.click()
+    view.on_recording_state_changed("recording")
+    view._rec_stop_btn.click()
+    assert called == ["reconnect", "start", "stop"]
+    view._gallery_tabs.setCurrentIndex(0)
+    app.processEvents()
+    view._apply_rec_thumbnail_result(old_video_request, str(recordings / "video-11.mp4"), image)
+    assert not view._rec_thumb_cache and not view._rec_thumb_buttons
+    view._apply_thumbnail_result(view._thumb_request_id, str(screenshots / "image-11.png"), image)
+    assert view._thumb_buttons[str(screenshots / "image-11.png")].pixmap() is not None
+    assert str(screenshots / "image-11.png") in view._thumb_cache
+    opened = []
+    monkeypatch.setattr(module.os, "startfile", opened.append, raising=False)
+    _gallery_widgets(view)[-1].click()
+    assert opened == [str(screenshots)]
+
+
+def test_sidebar_shared_gallery_refresh_follows_selected_source_and_path(sidebar_gallery):
+    app, view, _module, screenshots, recordings, tasks = sidebar_gallery
+    new_image = screenshots / "new.png"
+    new_image.write_bytes((screenshots / "image-11.png").read_bytes())
+    request = view._thumb_request_id
+    view.on_screenshot_captured(str(new_image))
+    for _ in range(3):
+        app.processEvents()
+    assert view._thumb_request_id > request
+    assert next(iter(view._thumb_buttons)) == str(new_image)
+    assert _gallery_widgets(view)[-1].text() == "+8"
+    view._gallery_tabs.setCurrentIndex(1)
+    app.processEvents()
+    request = view._rec_thumb_request_id
+    # An event for the hidden source does not rebuild the visible source.
+    task_count = len(tasks)
+    view._refresh_screenshot_thumbnails()
+    assert view._rec_thumb_request_id == request and len(tasks) == task_count
+    empty = recordings.parent / "empty"
+    empty.mkdir()
+    view.set_recording_output_dir(str(empty))
+    assert not view._rec_thumb_buttons
+    assert len(_gallery_widgets(view)) == 1 and not _gallery_widgets(view)[0].text()
+    view._apply_rec_thumbnail_result(request, str(recordings / "video-11.mp4"), QImage(4, 3, QImage.Format.Format_RGB32))
+    assert not view._rec_thumb_cache
+    view.set_recording_output_dir(str(empty / "missing"))
+    assert not _gallery_widgets(view)
+    view.set_recording_output_dir(str(recordings))
+    view.refresh_content()
+    app.processEvents()
+    assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == "recording"
+    assert len(view._rec_thumb_buttons) == 5
+
+
+def test_sidebar_shared_gallery_resize_reuses_cells_and_same_source_results(sidebar_gallery):
+    app, view, module, screenshots, _recordings, tasks = sidebar_gallery
+    path = str(screenshots / "image-11.png")
+    image = module._ThumbnailLoadTask._build_thumbnail(path)
+    view._apply_thumbnail_result(view._thumb_request_id, path, image)
+    old_request = view._thumb_request_id
+    fixed_height = (view.height() - view._gallery.height()
+                    - view._scroll_layout.itemAt(1).spacerItem().geometry().height())
+    width, height, _gap = view._gallery_cell_size()
+    tasks.clear()
+    view.resize(280, fixed_height + height)
+    for _ in range(3):
+        app.processEvents()
+    assert sum(not cell.isHidden() for cell in view._thumb_buttons.values()) == 2
+    assert view._thumb_request_id == old_request
+    assert view._thumb_buttons[path].pixmap().size() == QSize(width, height)
+    assert not any(task._path == path for task in tasks)
+    omitted_path = str(screenshots / "image-07.png")
+    view._apply_thumbnail_result(old_request, omitted_path, image)
+    assert view._thumb_buttons[omitted_path].isHidden()
+    # A same-name file updated on disk must be decoded again.
+    os.utime(path, (9000, 9000))
+    tasks.clear()
+    view._refresh_screenshot_thumbnails()
+    assert any(task._path == path for task in tasks)
+
+
+def test_sidebar_resize_never_reads_files_or_restarts_thumbnail_work(sidebar_gallery, monkeypatch):
+    app, view, _module, _screenshots, _recordings, tasks = sidebar_gallery
+    cells = dict(view._thumb_buttons)
+    request = view._thumb_request_id
+    tasks.clear()
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("resize must not inspect files or recreate gallery content")
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    monkeypatch.setattr(Path, "stat", forbidden)
+    for height in (1050, 950, 850, 750, 650, 950, 1100):
+        view.resize(280, height)
+        app.processEvents()
+    assert view._thumb_buttons == cells
+    assert view._thumb_request_id == request and not tasks
+    assert _gallery_widgets(view)[-1].text() == "+7"
+
+
+def test_sidebar_opening_ignores_outside_cursor_until_animation_finishes(sidebar_gallery, monkeypatch):
+    from PySide6.QtGui import QCursor
+    _app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    monkeypatch.setattr(view, "_compute_geometry", lambda: QRect(0, 0, 280, 1100))
+    monkeypatch.setattr(QCursor, "pos", lambda: QPoint(290, 500))
+    view._auto_hide_ms = 0
+    view.slide_in()
+    view._poll_cursor()
+    assert view._is_shown and view.isVisible()
+    view._anim.setCurrentTime(view._anim.duration())
+    view._poll_cursor()
+    assert not view._is_shown
+
+
+def test_sidebar_close_interrupted_by_reopen_cannot_hide_new_open(sidebar_gallery, monkeypatch):
+    _app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    monkeypatch.setattr(view, "_compute_geometry", lambda: QRect(0, 0, 280, 1100))
+    hidden = []
+    view._on_hidden = lambda: hidden.append(True)
+    view.slide_in()
+    view._anim.setCurrentTime(view._anim.duration())
+    view.slide_out()
+    view._anim.setCurrentTime(50)
+    view.slide_in()
+    view._anim.setCurrentTime(view._anim.duration())
+    assert view._is_shown and view.isVisible() and not hidden
+    view.slide_out()
+    view._anim.setCurrentTime(view._anim.duration())
+    assert not view._is_shown and not view.isVisible() and hidden == [True]
+
+
+@pytest.mark.parametrize("saved, expected", [(0, 0), (35, 35), (None, 100)])
+def test_sidebar_saved_volume_zero_is_preserved(sidebar_layout, saved, expected):
+    _app, view, _module = sidebar_layout
+    view._data_manager.managed_processes = [ManagedProcess(
+        id="zero", name="Muted Game", monitoring_path="/test/zero.exe", launch_path="/test/zero.exe", default_volume=saved,
+    )]
+    view._refresh_games()
+    row = view._games_list_layout.itemAt(0).widget()
+    assert row.findChild(VolumeDial).value() == expected
+
+
+@pytest.mark.parametrize("kind", ["screenshot", "recording"])
+def test_sidebar_shared_gallery_delete_updates_folder_count_without_changing_source(sidebar_gallery, monkeypatch, kind):
+    import sys
+    from PySide6.QtWidgets import QMessageBox
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    view._gallery_tabs.setCurrentIndex(0 if kind == "screenshot" else 1)
+    app.processEvents()
+    buttons = view._thumb_buttons if kind == "screenshot" else view._rec_thumb_buttons
+    cache = view._thumb_cache if kind == "screenshot" else view._rec_thumb_cache
+    refresh = view._refresh_screenshot_thumbnails if kind == "screenshot" else view._refresh_recording_thumbnails
+    path = next(iter(buttons))
+    assert _gallery_widgets(view)[-1].text() == "+7"
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
+    monkeypatch.setitem(sys.modules, "winshell", SimpleNamespace(delete_file=lambda path, **_kwargs: Path(path).unlink()))
+    view._delete_gallery_file(path, cache=cache, refresh=refresh)
+    app.processEvents()
+    assert path not in buttons and not Path(path).exists()
+    assert _gallery_widgets(view)[-1].text() == "+6"
+    assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == kind
+
+
+def test_sidebar_shared_gallery_removed_choice_falls_back_only_when_needed(sidebar_gallery):
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    gs = view._data_manager.global_settings
+    view._gallery_tabs.setCurrentIndex(1)
+    gs.screenshot_enabled = False
+    view.refresh_content()
+    app.processEvents()
+    assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == "recording"
+    gs.screenshot_enabled = True
+    gs.obs_watch_output_dir = False
+    view.refresh_content()
+    app.processEvents()
+    assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == "screenshot"
+    assert not view._rec_thumb_buttons
+    gs.obs_watch_output_dir = True
+    view.refresh_content()
+    app.processEvents()
+    assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == "screenshot"
+
+
+@pytest.mark.parametrize("screenshots, control, files", [
+    (False, False, False), (False, False, True), (False, True, False), (False, True, True),
+    (True, False, False), (True, False, True), (True, True, False), (True, True, True),
+])
+def test_sidebar_shared_gallery_settings_keep_file_and_control_boundaries(sidebar_gallery, screenshots, control, files):
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    gs = view._data_manager.global_settings
+    gs.screenshot_enabled = screenshots
+    gs.recording_enabled = control
+    gs.obs_watch_output_dir = files
+    view.refresh_content()
+    app.processEvents()
+    sources = [view._gallery_tabs.tabData(index) for index in range(view._gallery_tabs.count())]
+    assert sources == (["screenshot"] if screenshots else []) + (["recording"] if files else [])
+    assert view._gallery.isHidden() is not (screenshots or files)
+    assert view._capture_now_btn.isVisible() is screenshots
+    assert view._rec_status_label.isVisible() is control
+    assert view._rec_connect_btn.isVisible() is control
+    assert view._recording_section.isHidden() is not (control or files)
+    if not screenshots:
+        assert not view._thumb_buttons
+    if not files:
+        assert not view._rec_thumb_buttons
 
 
 @pytest.mark.parametrize("work, expected", [

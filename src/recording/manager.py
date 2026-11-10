@@ -1,10 +1,12 @@
 import threading
 import time
 import logging
+from pathlib import Path
 from typing import Callable, Literal, Optional
 
 from src.recording.obs_client import OBSClient
 from src.recording.obs_config_reader import read_obs_connection, read_obs_output_directory, find_obs_executable
+from src.utils.app_paths import CapturePathError, validate_capture_output_path
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +206,7 @@ class RecordingManager:
         with self._lock:
             return dict(self._settings) if self._connect_thread is threading.current_thread() else None
 
-    def _read_info(self) -> None:
+    def _read_info(self, *, live_output: bool = False) -> str:
         """Observe file information independently of OBS process/control readiness."""
         executable, directory, errors = "", "", []
         try:
@@ -212,7 +214,7 @@ class RecordingManager:
         except (OSError, ValueError) as error:
             errors.append(str(error))
         try:
-            directory = (self._client.get_record_directory() if self._client.is_connected()
+            directory = (self._client.get_record_directory() if live_output or self._client.is_connected()
                          else read_obs_output_directory())
             if directory is None:
                 raise OSError(self._client.get_last_error())
@@ -222,6 +224,7 @@ class RecordingManager:
         if errors:
             logger.warning("OBS 정보 조회 실패: %s", "; ".join(errors))
         self._publish_info(exe_path=executable, output_dir=directory, error="; ".join(errors))
+        return directory
 
     def _connect_worker(self, then_record: bool, launch_requested: bool,
                         connect_requested: Optional[bool], s: dict, read_only: bool) -> None:
@@ -284,10 +287,9 @@ class RecordingManager:
                             time.sleep(3)
                     if self._work_settings() != s:
                         continue
-                    # Files are observed before a record request, but their lookup
-                    # outcome cannot stop an otherwise healthy control connection.
-                    if ok:
-                        self._read_info()
+                    # A missing output location must not disconnect an otherwise
+                    # healthy session, but it cannot authorize a new recording.
+                    directory = self._read_info(live_output=True) if ok else ""
                     if self._work_settings() != s:
                         continue
                     # The WebSocket thread applies this response before subsequent record events.
@@ -299,8 +301,20 @@ class RecordingManager:
                     if ok:
                         logger.info("OBS WebSocket 연결과 녹화 상태 확인 성공")
                         if then_record and not status["outputActive"]:
-                            if self._client.start_record() is False:
-                                raise OSError(self._client.get_last_error())
+                            try:
+                                if not Path(directory).is_absolute():
+                                    raise CapturePathError("OBS의 녹화 저장 경로를 확인할 수 없습니다. OBS에서 저장 폴더를 확인해 주세요.")
+                                validate_capture_output_path(directory)
+                            except CapturePathError as error:
+                                self._launch_error = str(error)
+                                logger.warning("OBS 녹화 시작 차단: %s", error)
+                                if self._on_info_changed:
+                                    self._on_info_changed()
+                            else:
+                                if self._work_settings() != s:
+                                    continue
+                                if self._client.start_record() is False:
+                                    raise OSError(self._client.get_last_error())
                     else:
                         logger.warning("OBS 연결 또는 녹화 상태 확인 실패")
                         self._launch_error = self._client.get_last_error()

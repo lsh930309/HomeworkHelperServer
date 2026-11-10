@@ -24,6 +24,11 @@ jsonschema
 # === Windows Notifications ===
 Windows-Toasts; platform_system == "Windows"
 winrt-Windows.Gaming.Input; platform_system == "Windows"
+winrt-Windows.Media.Control; platform_system == "Windows"
+winrt-Windows.Foundation; platform_system == "Windows"
+winrt-Windows.Foundation.Collections; platform_system == "Windows"
+winrt-Windows.Media; platform_system == "Windows"
+winrt-Windows.Storage.Streams; platform_system == "Windows"
 websocket-client
 
 # === Screenshot ===

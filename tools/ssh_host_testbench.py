@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime as dt
+import ipaddress
 import json
 import random
 import re
@@ -21,6 +22,9 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.core.tailscale import tailscale_status
 
 
 DEFAULT_EXE = r"C:\Program Files\HomeworkHelper\homework_helper.exe"
@@ -100,6 +104,33 @@ def _ssh_args(config: SSHConfig) -> list[str]:
     ]
     if config.identity:
         args.extend(["-i", config.identity])
+    host = config.host.rsplit("@", 1)[-1]
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        name = host.rstrip(".").casefold()
+        if not name:
+            raise ValueError("SSH 호스트 이름이 비어 있습니다.")
+        # Ordinary external FQDNs keep their existing SSH DNS path.
+        if "." in name and not name.endswith(".ts.net"):
+            args.append(config.target)
+            return args
+        # Short/device and MagicDNS names use the current Tailscale peer address.
+        snapshot = tailscale_status()
+        if not snapshot.ready:
+            raise ValueError(f"SSH 대상 조회 불가: {snapshot.message}")
+        peers = [peer for peer in snapshot.peers if name in {
+            peer.hostname.casefold(), peer.dns_name.rstrip(".").casefold(),
+            peer.dns_name.split(".", 1)[0].casefold(),
+        }]
+        if len(peers) != 1:
+            raise ValueError(f"Tailscale SSH 대상 '{config.host}'과 정확히 일치하는 장치가 {len(peers)}개입니다.")
+        peer = peers[0]
+        address = peer.primary_ipv4() or next(iter(peer.ips), "")
+        if not address:
+            raise ValueError(f"Tailscale SSH 대상 '{config.host}'에 연결 주소가 없습니다.")
+        # Preserve the requested SSH target/options; change only its network address.
+        args.extend(["-o", f"HostName={ipaddress.ip_address(address)}"])
     args.append(config.target)
     return args
 
@@ -454,7 +485,7 @@ def parse_remote_json(stdout: str) -> dict[str, Any]:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run an isolated HomeworkHelper Windows host testbench over SSH.")
-    parser.add_argument("--host", help="SSH host or MagicDNS/Tailscale address. Required unless --dry-run with a placeholder is acceptable.")
+    parser.add_argument("--host", help="Tailscale device/MagicDNS name, explicit IP or external FQDN; user@host is supported. Required unless --dry-run.")
     parser.add_argument("--user", help="SSH username. Omit if --host already contains user@host.")
     parser.add_argument("--ssh-port", type=int, default=22, help="SSH port (default: 22).")
     parser.add_argument("--identity", help="SSH private key path.")
@@ -494,7 +525,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     script = build_remote_script(testbench)
-    completed = run_remote_powershell(ssh, script, timeout=max(args.timeout + 90, 120))
+    try:
+        completed = run_remote_powershell(ssh, script, timeout=max(args.timeout + 90, 120))
+    except ValueError as error:
+        summary = build_summary(ssh=ssh, testbench=testbench, mode="isolated-shadow-server", dry_run=False,
+                                remote_result={"ok": False, "error": {"message": str(error)}})
+        write_reports(summary, artifact_dir)
+        print(json.dumps({"ok": False, "session_id": session_id, "artifact_dir": str(artifact_dir),
+                          "error": str(error)}, ensure_ascii=False))
+        return 1
     remote_result: dict[str, Any] | None = None
     parse_error: str | None = None
     if completed.stdout:

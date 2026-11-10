@@ -6,22 +6,47 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QByteArray, QEventLoop, QObject, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QTabBar, QToolButton, QVBoxLayout, QWidget
 from shiboken6 import Shiboken
 
 from src.data.data_models import ManagedProcess
 from src.gui.power_events import PBT_APMRESUMEAUTOMATIC, WM_POWERBROADCAST, WindowsPowerEventFilter
 from src.gui.qt_runtime import binding_diagnostics, is_qobject_valid, require_object_thread
 from src.gui.sidebar.sidebar_widget import SidebarWidget
+from src.gui.sidebar.controls import VolumeDial
 from src.gui.volume_panel import _MUTE_BTN_STYLE
 from src.gui.widgets_style import (
     CapsuleProgressBar,
+    GameIconLabel,
     apply_modern_widgets_style,
     apply_sidebar_widgets_style,
     apply_widgets_palette,
     widgets_theme_tokens,
 )
+
+
+@pytest.mark.parametrize("size", [30, 32, 48])
+@pytest.mark.parametrize("source_ratio", [1, 2])
+def test_common_game_icon_slot_clips_source_pixels_and_centers_in_larger_cell(size, source_ratio):
+    app = _qapp()
+    root = QWidget()
+    root.resize(80, 80)
+    root.setStyleSheet("background: #102030;")
+    label = GameIconLabel(size, root)
+    label.setGeometry(0, 0, 80, 80)
+    source = QPixmap(size * 2 * source_ratio, size * 2)
+    source.fill(QColor("#f02030"))
+    label.setPixmap(source)
+    root.show()
+    app.processEvents()
+    image = root.grab().toImage()
+    left = (80 - size) // 2
+    assert image.pixelColor(40, 40) == QColor("#f02030")
+    assert image.pixelColor(left, left) == QColor("#102030")
+    assert image.pixelColor(0, 0) == QColor("#102030")
+    assert label.pixmap().size() == source.size()  # 원본을 잘라 저장하지 않는다.
+    root.close()
 
 
 def _qapp():
@@ -199,52 +224,57 @@ def test_sidebar_button_roles_render_distinct_pressed_feedback(role):
     root.close()
 
 
-def test_sidebar_mute_button_uses_blue_checked_state_and_unclipped_focus_border():
+@pytest.mark.parametrize("selected", [0, 1])
+def test_sidebar_gallery_tabs_have_button_like_rounded_corners_and_clear_gap(selected):
     app = _qapp()
     root = QWidget()
+    root.setFixedWidth(280)
+    palette = root.palette()
+    palette.setColor(root.backgroundRole(), QColor("#0f0f10"))
+    root.setPalette(palette)
+    root.setAutoFillBackground(True)
     layout = QVBoxLayout(root)
-    button = QPushButton(root)
-    button.setProperty("hhRole", "muteToggle")
-    button.setCheckable(True)
-    layout.addWidget(button)
+    tabs = QTabBar()
+    tabs.setExpanding(True)
+    tabs.setDrawBase(False)
+    tabs.addTab("스크린샷")
+    tabs.addTab("녹화")
+    tabs.setCurrentIndex(selected)
+    layout.addWidget(tabs)
     apply_sidebar_widgets_style(root, dark=True)
     root.show()
     app.processEvents()
-
-    button.setChecked(True)
-    button.clearFocus()
-    button.update()
-    app.processEvents()
-    checked = _button_background(button)
-    assert checked.blue() > checked.red()
-    assert checked.blue() > checked.green()
-    assert button.size().toTuple() == (22, 22)
-    assert button.size() == button.sizeHint()
-
-    button.setDown(True)
-    button.update()
-    app.processEvents()
-    assert _button_background(button) != checked
-    button.setDown(False)
-    button.setFocus()
-    button.update()
-    app.processEvents()
-    focused = button.grab().toImage()
-    edge_points = (
-        (focused.width() // 2, 0),
-        (focused.width() - 1, focused.height() // 2),
-        (focused.width() // 2, focused.height() - 1),
-        (0, focused.height() // 2),
-    )
-    # Fractional DPI에서는 오른쪽/아래 1px이 focus 색과 배경의 안티앨리어싱 혼합색입니다.
-    assert all(
-        focused.pixelColor(x, y).lightness() > checked.lightness()
-        for x, y in edge_points
-    )
+    image = tabs.grab().toImage()
+    ratio = image.devicePixelRatio()
+    def color(x, y):
+        return image.pixelColor(round(x * ratio), round(y * ratio))
+    gap = round(root.width() * 0.012)
+    for index in (0, 1):
+        rect = tabs.tabRect(index)
+        left, right = rect.left(), rect.right() - (gap if index == 0 else 0)
+        inside = color(left + 8, rect.top() + 2)
+        assert all(color(x, y) != inside for x, y in (
+            (left, rect.top()), (right, rect.top()), (left, rect.bottom()), (right, rect.bottom()),
+        ))
+    first = tabs.tabRect(0)
+    assert color(first.right() - 1, first.center().y()) == color(first.left(), first.top())
+    assert tabs.currentIndex() == selected
     root.close()
 
 
-def test_sidebar_volume_row_does_not_mask_checked_mute_background(monkeypatch):
+def test_sidebar_round_volume_keeps_checked_state_and_stable_size():
+    app = _qapp()
+    dial = VolumeDial(42)
+    dial.setChecked(True)
+    dial.show()
+    app.processEvents()
+    assert dial.isChecked() and dial.is_silent()
+    assert dial.size().toTuple() == (42, 42)
+    assert not dial.grab().isNull()
+    dial.close()
+
+
+def test_sidebar_volume_row_preserves_saved_manual_mute_in_round_dial(monkeypatch):
     from src.gui.main_window import MainWindow
 
     monkeypatch.setattr(MainWindow, "INSTANCE", None)
@@ -257,23 +287,20 @@ def test_sidebar_volume_row_does_not_mask_checked_mute_background(monkeypatch):
         default_muted=True,
     )
     data_manager = SimpleNamespace(
-        global_settings=SimpleNamespace(sidebar_volume_section_enabled=True),
+        global_settings=SimpleNamespace(sidebar_volume_section_enabled=True, screenshot_enabled=False, obs_watch_output_dir=False),
         managed_processes=[process],
     )
     sidebar = SidebarWidget(data_manager)
-    sidebar._refresh_volumes_list()
+    monkeypatch.setattr(sidebar, "_load_icon_async", lambda *_args: None)
+    sidebar._refresh_games()
     sidebar.show()
     app.processEvents()
 
-    mute_button = next(
-        button
-        for button in sidebar.findChildren(QPushButton)
-        if button.property("hhRole") == "muteToggle"
-    )
-    checked = _button_background(mute_button)
-    assert mute_button.isChecked()
-    assert checked.blue() > checked.red()
-    assert checked.blue() > checked.green()
+    dial = sidebar.findChild(VolumeDial)
+    assert dial.isChecked() and dial.is_silent()
+    assert process.default_muted is True
+    assert not dial.grab().isNull()
+    assert sidebar.cleanup(deadline_ms=200)
     sidebar.close()
 
 
