@@ -145,6 +145,28 @@ def test_remote_failure_is_recorded_without_a_followup_mutation(monkeypatch, tmp
     assert "준비 실패" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("command", ["logs", "media-qa"])
+@pytest.mark.parametrize("stdout", ['{"누락":', 'null\n', '["잘못된 응답"]\n'])
+def test_invalid_remote_response_preserves_outputs_without_retry(monkeypatch, tmp_path, capsys, command, stdout):
+    calls = []
+    stderr = "원격 진단 메시지\n"
+
+    def remote(*args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess([], 0, stdout, stderr)
+
+    monkeypatch.setattr(ops, "published_commit", lambda _: ("a" * 40, "media-center"))
+    monkeypatch.setattr(ops, "run_remote_powershell", remote)
+    assert ops.main([command, "--host", "test.invalid", "--report-root", str(tmp_path)]) == 1
+
+    report = next(tmp_path.glob("*/result.json"))
+    failure = json.loads(report.read_text(encoding="utf-8"))
+    assert failure == json.loads(capsys.readouterr().err) and failure["ok"] is False
+    assert (report.parent / "stdout.log").read_bytes() == stdout.encode("utf-8")
+    assert (report.parent / "stderr.log").read_bytes() == stderr.encode("utf-8")
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("stdout,stderr", [
     (None, None),
     ("한글 출력", "진단 오류"),
@@ -385,14 +407,22 @@ def test_media_preview_pixels_are_saved_once_and_cannot_escape_report(tmp_path):
 
 def test_media_qa_uses_published_canonical_source_and_explicit_interactive_scenario(monkeypatch, tmp_path, capsys):
     selected, scripts = [], []
+    pixels = b"\x89PNG\r\n\x1a\nfixture"
+    payload = {"scenario": "preview", "ok": True,
+               "images": [{"name": "sidebar-preview.png", "base64": base64.b64encode(pixels).decode()}]}
     monkeypatch.setattr(ops, "published_commit", lambda commit: selected.append(commit) or ("a" * 40, "media-center"))
     monkeypatch.setattr(ops, "run_remote_powershell", lambda config, script, **kwargs: (
-        scripts.append(script) or subprocess.CompletedProcess([], 0, '{"scenario":"observe","ok":true}', '')))
-    assert ops.main(["media-qa", "--scenario", "observe", "--host", "test.invalid",
+        scripts.append(script) or subprocess.CompletedProcess([], 0, json.dumps(payload), '')))
+    assert ops.main(["media-qa", "--scenario", "preview", "--host", "test.invalid",
                      "--report-root", str(tmp_path)]) == 0
-    assert selected == [None] and "-Scenario 'observe'" in scripts[0]
+    assert selected == [None] and "-Scenario 'preview'" in scripts[0]
     assert "'media-qa'" in scripts[0] and "Invoke-Session 'media-qa'" in scripts[0]
-    assert json.loads(capsys.readouterr().out)["result"]["scenario"] == "observe"
+    summary = json.loads(capsys.readouterr().out)
+    report = Path(summary["report"])
+    assert summary["result"]["scenario"] == "preview"
+    assert (report / "sidebar-preview.png").read_bytes() == pixels
+    assert json.loads((report / "stdout.log").read_text(encoding="utf-8")) == summary["result"]
+    assert "base64" not in summary["result"]["images"][0]
 
 
 def test_media_runtime_preparation_only_installs_declared_dependencies(monkeypatch, tmp_path, capsys):

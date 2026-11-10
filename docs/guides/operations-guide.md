@@ -114,7 +114,8 @@ MagicDNS가 tailnet에서 켜져 있어도 Mac의 `Use Tailscale DNS settings`�
 고정 진단·검증 소스는 무손실 압축하여 SSH 입력으로 전달한다. 임시 코드를 다시 생성하지 않으며
 제품 패키지의 복사·재포장과는 별개의 소스 전달이다. 통신 시간 초과도 실패 보고서에 남긴다.
 시간 초과 때까지 받은 stdout/stderr는 같은 로그 파일에 원본 바이트로 보존한다. 끝이 잘린 UTF-8을
-치환하지 않으며, 실패 판정과 자동 재시도하지 않는 정책을 유지한다.
+치환하지 않는다. 원격 프로세스가 종료 코드 0을 반환했어도 응답을 JSON 객체로 해석할 수 없으면
+받은 stdout/stderr와 실패 보고서를 남긴다. 실패한 작업을 자동 재시도하지 않는다.
 
 ## 읽기 전용 운영 상태 수집
 
@@ -157,7 +158,9 @@ service.log가 있다고 추측하지 않는다.
 `--prepare-runtime`은 처음 필요한 경우에만 고정 저장소 `.venv`에 `requirements.txt`를 설치한다.
 제품 빌드·서명·설치는 수행하지 않는다. pip 전체 출력은 Windows 저장소의
 `artifacts/media-qa-requirements.log`에서 확인한다. `observe`는 자동 옵션을 모두 끈 실제
-미디어 runtime·전경 창·WASAPI 세션을 관측하고 종료한다. `preview`는 실제 SidebarWidget에
+미디어 runtime·전경 창·WASAPI 세션을 관측하고 종료한다. GSMTC에서 빈 세션 목록을 정상적으로
+받으면 유효한 관측으로 처리하며, 성공 응답을 한 번도 받지 못하면 `gsmtc` 단계의 실패를 기록한다.
+`preview`는 실제 SidebarWidget에
 표시 필드만 읽은 fixture를 주입하며 모든 조작을 차단한다. AppData·LocalAppData·앱 상태 경로를
 제품 모듈 import 전에 격리하고, 운영 자격 증명과 DB writer를 사용하지 않는다.
 

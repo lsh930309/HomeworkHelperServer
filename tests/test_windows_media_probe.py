@@ -1,4 +1,5 @@
 """공용 media probe의 운영 데이터 비변경·환경 격리·시각 검수 경계를 확인한다."""
+import asyncio
 import hashlib
 import json
 import os
@@ -67,8 +68,8 @@ def spotify_profile_runtime(tmp_path, monkeypatch):
         POLL_SECONDS = .01
         PREPARE_TIMEOUT_SECONDS = 1
         def __init__(self, **kwargs):
+            kwargs.setdefault("backend_factory", Sessions)
             super().__init__(
-                backend_factory=Sessions,
                 native_factory=lambda: SimpleNamespace(foreground=lambda: (99, 100)),
                 audio_factory=lambda: SimpleNamespace(update_targets=lambda _targets: None,
                     reconcile=lambda *_args, **_kwargs: (), cleanup=lambda: True),
@@ -76,6 +77,7 @@ def spotify_profile_runtime(tmp_path, monkeypatch):
                 **kwargs,
             )
     monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
+    monkeypatch.setattr(media_sessions, "WindowsMediaSessions", Sessions)
     return SimpleNamespace(source=source, local=local, program_files=program_files,
                            process_path=process_path, launches=launches, controls=controls, closed=closed)
 
@@ -111,6 +113,28 @@ def test_observe_dispatch_reads_actual_per_user_spotify_mixer_under_isolation(
     assert result["writes"] == []
     assert os.environ["APPDATA"] == str(tmp_path / "result/media-fixture/roaming")
     assert os.environ["LOCALAPPDATA"] == str(tmp_path / "result/media-fixture/local")
+
+
+@pytest.mark.parametrize("responds", [False, True])
+def test_observe_requires_gsmtc_response_but_accepts_empty_sessions(
+        tmp_path, monkeypatch, spotify_profile_runtime, responds):
+    from src.core import media_sessions
+
+    async def snapshot(_self):
+        if not responds:
+            await asyncio.Event().wait()  # 게임 관측은 돌아가지만 GSMTC는 타임아웃될 때까지 응답하지 않는다.
+        return ()
+
+    monkeypatch.setattr(media_sessions.WindowsMediaSessions, "snapshot", snapshot)
+    profile = spotify_profile_runtime
+    result = probe.run(tmp_path, profile.source, tmp_path / "result", "observe")
+
+    assert result["foreground"] == (99, 100) and result["audio"]["sessions"] == 1
+    assert result["cleanup_ok"] and profile.closed == [True]
+    assert result["writes"] == [] and not profile.controls and not profile.launches
+    assert result["ok"] is responds
+    assert all(sample["sessions"] == [] for sample in result["samples"])
+    assert {row["stage"] for row in result["native_errors"]} == (set() if responds else {"gsmtc"})
 
 
 @pytest.mark.parametrize("scenario", ["observe", "prepare-spotify", "bgm", "triggers", "firefox",
@@ -693,7 +717,7 @@ def test_observation_preserves_native_stage_errors_and_always_cleans_up(tmp_path
     result = probe._observe(tmp_path, None)
     assert result["ok"] is False and result["cleanup_ok"] and cleanup == [True]
     assert result["samples"][0]["error"]
-    assert {row["stage"] for row in result["native_errors"]} == {"foreground", "audio"}
+    assert {row["stage"] for row in result["native_errors"]} == {"gsmtc", "foreground", "audio"}
 
 
 def test_preview_renders_actual_widgets_without_operational_writer(tmp_path, monkeypatch):

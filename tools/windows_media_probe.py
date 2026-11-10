@@ -626,12 +626,28 @@ def _versions() -> dict:
 def _observe(source_appdata: Path, source_local_appdata: str | None) -> dict:
     from src.core.media_center import MediaCenterRuntime, MediaOptions
     from src.core.game_focus import WindowsGameFocusNative
+    from src.core.media_sessions import WindowsMediaSessions
     from src.core.spotify_audio import SpotifyAudioController
     from src.utils import audio_control
 
-    first = threading.Event()
+    ready = threading.Event()
+    gsmtc_observed = False
+
+    class ObservedSessions(WindowsMediaSessions):
+        async def snapshot(self):
+            nonlocal gsmtc_observed
+            rows = await super().snapshot()
+            gsmtc_observed = True
+            ready.set()
+            return rows
+
+    def on_change(snapshot):
+        # 게임 루프의 최초 상태 발행은 GSMTC 응답을 뜻하지 않는다.
+        if not snapshot.running:
+            ready.set()
+
     reader = lambda: _spotify_probe_processes(source_appdata, source_local_appdata)
-    runtime = MediaCenterRuntime(on_change=lambda _snapshot: first.set(),
+    runtime = MediaCenterRuntime(on_change=on_change, backend_factory=ObservedSessions,
         spotify_process_reader=reader,
         spotify_audio_factory=lambda: SpotifyAudioController(process_reader=reader))
     started = runtime.start(MediaOptions(False, False, False))
@@ -640,7 +656,7 @@ def _observe(source_appdata: Path, source_local_appdata: str | None) -> dict:
     native_errors, foreground, audio = [], None, None
     try:
         if started:
-            first.wait(4)
+            ready.wait(4)
             for index in range(3):
                 samples.append(_media_snapshot_payload(runtime.snapshot))
                 if not runtime.running:
@@ -649,6 +665,9 @@ def _observe(source_appdata: Path, source_local_appdata: str | None) -> dict:
                     time.sleep(.4)
         else:
             samples.append(_media_snapshot_payload(runtime.snapshot))
+        if not gsmtc_observed:
+            native_errors.append({"stage": "gsmtc", "type": "Unobserved",
+                                  "error": "GSMTC 세션의 성공 응답이 관측되지 않았습니다."})
         try:
             foreground = WindowsGameFocusNative().foreground()
         except Exception as error:

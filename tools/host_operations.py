@@ -138,13 +138,20 @@ def main(argv=None) -> int:
                    "inspect": 45, "logs": 20}[args.command]
         result = run_remote_powershell(SSHConfig(args.host, args.user, args.ssh_port, args.identity),
                                        script, timeout=timeout)
-        payload = json.loads(result.stdout) if result.returncode == 0 else None
-        if args.command == "media-qa" and payload is not None:
-            save_preview_images(payload, report)
-        (report / "stdout.log").write_text(
-            json.dumps(payload, ensure_ascii=False) if args.command == "media-qa" and payload is not None else result.stdout,
-            encoding="utf-8")
-        (report / "stderr.log").write_text(result.stderr, encoding="utf-8")
+        stdout = result.stdout
+        payload = None
+        try:
+            if result.returncode == 0:
+                payload = json.loads(stdout)
+                if not isinstance(payload, dict):
+                    raise ValueError("원격 작업 응답이 JSON 객체가 아닙니다.")
+                if args.command == "media-qa":
+                    save_preview_images(payload, report)
+                    stdout = json.dumps(payload, ensure_ascii=False)
+        finally:
+            # 해석 실패 때는 원격 출력을 보존하고, 성공한 미디어 응답의 PNG는 한 번만 저장한다.
+            (report / "stdout.log").write_text(stdout, encoding="utf-8")
+            (report / "stderr.log").write_text(result.stderr, encoding="utf-8")
         native_ok = (payload.get("ok", False) if args.command == "media-qa" and payload is not None else True)
         summary = {"ok": result.returncode == 0 and native_ok, "command": args.command, "commit": commit or None,
                    "report": str(report), "result": payload}
