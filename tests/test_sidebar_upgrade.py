@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, QThread, QThreadPool, Qt
-from PySide6.QtGui import QImage, QWheelEvent
+from PySide6.QtGui import QImage, QPalette, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
@@ -336,23 +336,43 @@ def test_stopped_game_displays_zero_and_later_resource_updates_on_the_same_row(s
     app.processEvents()
     row = current_row(view)
     geometry = row.geometry()
-    assert row.findChild(QLabel, "gameRunState").text() == "꺼짐"
+    controls = (row.findChild(QPushButton, "gameAction"), row.findChild(VolumeDial))
+    control_rects = [control.geometry() for control in controls]
+    status = row.findChild(QLabel, "gameRunState")
+    assert status.text() == "꺼짐"
+    text_role = QPalette.ColorRole.WindowText
+    stopped_color = status.palette().color(text_role)
+    missing_color = row.findChild(QLabel, "gameProgressValue").palette().color(text_role)
 
-    for percent, bucket in [(None, None), (0.0, "low"), (83.4, "high"), (None, None)]:
+    for percent, bucket in [(None, None), (0.0, "low"), (83.4, "high"), (100.0, "full"), (None, None)]:
         view._data_manager.managed_processes[0] = ManagedProcess.from_dict({**game.to_dict(), "resource_percent": percent})
         view._refresh_game_row_displays()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
         app.processEvents()
         assert current_row(view) is row
         assert row.geometry() == geometry, f"resource_percent={percent}"
+        assert [control.geometry() for control in controls] == control_rects
         gauge = row.findChild(CapsuleProgressBar, "gameProgressBar")
         label = row.findChild(QLabel, "gameProgressValue")
         assert bool(gauge and gauge.isVisible()) is (percent is not None)
         assert label.isVisible() and not label.wordWrap()
         assert label.text() == ("기록 없음" if percent is None else f"{percent:.1f}%")
+        assert status.text() == "꺼짐" and status.palette().color(text_role) == stopped_color
+        value_center = label.mapTo(row, label.rect().center())
+        state_center = status.mapTo(row, status.rect().center())
+        assert abs(value_center.y() - state_center.y()) <= 2
+        assert label.mapTo(row, label.rect().topRight()).x() < status.mapTo(row, QPoint()).x()
+        value_color = label.palette().color(text_role)
         if percent is not None:
             assert 100 * gauge.value() / gauge.maximum() == pytest.approx(percent)
             assert gauge.property("hhBucket") == bucket
+            assert value_color.lightness() > missing_color.lightness()
+            assert label.fontMetrics().horizontalAdvance(label.text()) <= label.contentsRect().width()
+            gauge_center = gauge.mapTo(row, gauge.rect().center())
+            assert abs(gauge_center.y() - value_center.y()) <= 2
+            assert gauge.mapTo(row, gauge.rect().topRight()).x() < label.mapTo(row, QPoint()).x()
+        else:
+            assert value_color == missing_color
     assert not writes
 
 
@@ -513,7 +533,14 @@ def test_styled_row_keeps_action_and_volume_outer_sizes_square(sidebar, app, mon
         assert control.minimumSize().toTuple() == control.maximumSize().toTuple() == (32, 32)
     icon = row.findChild(GameIconLabel)
     assert icon.size().toTuple() == (30, 30)
-    assert row.findChild(QLabel, "gameName").font().pixelSize() == 12
+    name = row.findChild(QLabel, "gameName")
+    value = row.findChild(QLabel, "gameProgressValue")
+    assert name.font().pixelSize() == 12
+    text_top = name.mapTo(row, name.rect().topLeft()).y()
+    text_bottom = value.mapTo(row, value.rect().bottomLeft()).y()
+    centers = [widget.mapTo(row, widget.rect().center()).y() for widget in (icon, *controls)]
+    centers.append((text_top + text_bottom) // 2)
+    assert max(centers) - min(centers) <= 1
 
 
 def test_game_body_width_and_right_controls_stay_aligned_when_game_stops(sidebar, app, monkeypatch):
@@ -602,7 +629,6 @@ def test_short_sidebar_fits_seven_games_two_gauges_and_gallery_then_restores(sid
     view.show()
     for _ in range(6):
         app.processEvents()
-    assert view._compact_game_rows
     assert view._main_scroll.verticalScrollBar().maximum() == 0
     assert view._gallery.height() == view._gallery_cell_size()[1]
     assert view._gallery.mapTo(view, QPoint(0, view._gallery.height())).y() <= view._close_btn.y()
@@ -630,12 +656,11 @@ def test_short_sidebar_fits_seven_games_two_gauges_and_gallery_then_restores(sid
     view.resize(280, 1080)
     for _ in range(6):
         app.processEvents()
-    assert not view._compact_game_rows
     assert view._main_scroll.verticalScrollBar().maximum() == 0
     assert view._gallery.height() == 2 * view._gallery_cell_size()[1] + view._gallery_cell_size()[2]
     assert sum(gauge.isVisible() for gauge in view.findChildren(CapsuleProgressBar)) == 2
     view.resize(280, 760)
     for _ in range(6):
         app.processEvents()
-    assert view._compact_game_rows and view._main_scroll.verticalScrollBar().maximum() == 0
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
     assert not writes

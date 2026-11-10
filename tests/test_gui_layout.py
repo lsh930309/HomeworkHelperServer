@@ -2352,7 +2352,7 @@ def test_sidebar_name_edit_and_running_set_refresh_reapply_sort_without_reorderi
     active.pop("4")
     view.refresh_content()
     assert [row.property("processId") for row in rows() if row.property("hhRunning")] == ["2", "3", "0", "1"]
-    assert [row.findChild(QLabel, "gameName").text() for row in rows()] == [
+    assert [row.findChild(QLabel, "gameName").toolTip() for row in rows()] == [
         "Alpha", "W" * 80, "긴 이름의 게임 등록 항목 이름", "명조: 위더링 웨이브", "붕괴: 스타레일(베타)"]
     assert [game.id for game in games] == ids
     active.clear()
@@ -2365,8 +2365,17 @@ def test_sidebar_name_edit_and_running_set_refresh_reapply_sort_without_reorderi
 
 
 @pytest.mark.parametrize("height", [250, 1400])
-def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, height):
+@pytest.mark.parametrize("volume_visible", [False, True])
+def test_sidebar_long_names_stay_on_one_line_without_clipping_controls(sidebar_layout, height, volume_visible):
     app, view, _module = sidebar_layout
+    titles = ["명조: 워더링 웨이브", "붕괴: 스타레일", "소녀전선2: 망명",
+              "승리의 여신: 니케", "젠레스 존 제로", "W" * 80]
+    view._data_manager.managed_processes = [
+        ManagedProcess(id=str(index), name=title, monitoring_path=f"/{index}.exe", launch_path=f"/{index}.exe")
+        for index, title in enumerate(titles)
+    ]
+    view._data_manager.global_settings.sidebar_volume_section_enabled = volume_visible
+    view.refresh_content()
     view.resize(280, height)
     view.show()
     for _ in range(3):
@@ -2376,16 +2385,31 @@ def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, h
     assert view._scroll_content.width() <= viewport.width()
     rows = [view._games_list_layout.itemAt(index).widget().findChild(VolumeDial)
             for index in range(view._games_list_layout.count())]
-    assert len(rows) == 5
+    assert len(rows) == len(titles)
     for slider in rows:
         row = slider.parentWidget()
         name = row.findChild(QLabel, "gameName")
+        state = row.findChild(QLabel, "gameRunState")
+        title = titles[int(row.property("processId"))]
         assert name.width() > 0
-        if height == 1400:
-            assert name.wordWrap() and name.text() == name.toolTip()
-            assert name.height() >= name.heightForWidth(name.width())
+        assert slider.isVisible() is volume_visible
+        assert not name.wordWrap() and not state.wordWrap()
+        assert state.text() == "꺼짐"
+        assert name.mapTo(row, name.rect().bottomLeft()).y() < state.mapTo(row, QPoint()).y()
+        assert name.height() == name.fontMetrics().height()
+        assert name.text() == name.toolTip() == name.accessibleDescription() == title
+        if title == titles[-1]:
+            assert name.fontMetrics().horizontalAdvance(title) > name.contentsRect().width()
+            # Identical prefixes and different suffixes must render different pixels at the far right.
+            full = name.grab().toImage()
+            name.setText(title[:-4] + "iiii")
+            different_suffix = name.grab().toImage()
+            name.setText(title)
+            assert full.size() == different_suffix.size()
+            assert any(full.pixel(x, y) != different_suffix.pixel(x, y)
+                       for x in range(full.width() * 4 // 5, full.width()) for y in range(full.height()))
         else:
-            assert not name.wordWrap()
+            assert name.fontMetrics().horizontalAdvance(title) <= name.contentsRect().width()
         for widget in row.findChildren(QPushButton) + row.findChildren(QLabel) + [slider]:
             if widget.isVisible():
                 right = widget.mapTo(view._scroll_content, QPoint(widget.width(), 0)).x()
@@ -2557,13 +2581,13 @@ def test_sidebar_running_indicator_follows_game_identity_after_name_and_session_
             row = view._games_list_layout.itemAt(index).widget()
             icon = row.findChild(QLabel, "gameIcon")
             name = row.findChild(QLabel, "gameName")
-            assert name.text() == game.name
+            assert name.toolTip() == game.name
             assert icon.mapTo(row, icon.rect().topRight()).x() < name.mapTo(row, name.rect().topLeft()).x()
             assert row.property("hhRunning") is (game.id == running_id)
             assert icon.property("hhRunning") is (game.id == running_id)
 
 
-def test_sidebar_balanced_layout_with_full_game_names_fits_controls_and_bottom_gallery(sidebar_gallery, monkeypatch):
+def test_sidebar_balanced_layout_with_single_line_names_fits_controls_and_bottom_gallery(sidebar_gallery, monkeypatch):
     import time
     from src.gui.main_window import MainWindow
     app, view, module, _screenshots, _recordings, _tasks = sidebar_gallery
@@ -2586,7 +2610,7 @@ def test_sidebar_balanced_layout_with_full_game_names_fits_controls_and_bottom_g
         name = row.findChild(QLabel, "gameName")
         dial = row.findChild(VolumeDial)
         action = row.findChild(QPushButton, "gameAction")
-        assert name.height() >= name.heightForWidth(name.width())
+        assert not name.wordWrap() and name.height() >= name.fontMetrics().height()
         assert action.geometry().right() < dial.geometry().left()
         assert dial.geometry().right() < row.width()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)

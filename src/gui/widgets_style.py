@@ -388,6 +388,7 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
         QLabel[hhRole="sidebarRunState"][hhRunning="true"] {{ color: {running_text}; }}
         QLabel[hhRole="sidebarRunState"][hhFocused="true"] {{ color: {focused_text}; }}
         QLabel[hhRole="sidebarProgressValue"] {{ color: {t['muted']}; font-size: 11px; }}
+        QLabel[hhRole="sidebarProgressValue"][hhValueAvailable="true"] {{ color: {t['text']}; }}
         QLabel[hhRole="sidebarSectionTitle"] {{ font-size: 12px; font-weight: 500; }}
         QFrame[hhRole="sidebarGameRow"] {{ background: transparent; border: none; border-radius: {row_radius}px; }}
         QFrame[hhRole="sidebarGameRow"][hhRunning="true"] {{ background: rgba(42,101,174,77); }}

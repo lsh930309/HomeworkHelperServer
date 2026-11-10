@@ -11,9 +11,9 @@ from PySide6.QtCore import (
     Qt, QObject, QPropertyAnimation, QEasingCurve, QSize,
     QEvent, QRect, QTimer, QRunnable, QThreadPool, QSignalBlocker, Signal, Slot,
 )
-from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
+from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QBoxLayout, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QLayout, QPushButton, QScrollArea, QSizePolicy, QStyle, QTabBar, QVBoxLayout, QWidget,
 )
 
@@ -411,22 +411,30 @@ class _HoverThumbCell(QLabel):
         super().mousePressEvent(event)
 
 
-class _GameNameLabel(QLabel):
-    def set_compact(self, compact: bool) -> None:
-        self.setWordWrap(not compact)
-        self._update_text()
+class _GameTextLabel(QLabel):
+    """기본 글자 높이로 그리며 가용 폭을 넘는 경우에만 가로로 맞춘다."""
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if not self.wordWrap():
-            self._update_text()
+    def paintEvent(self, event) -> None:
+        text = self.text()
+        rect = self.contentsRect()
+        if not text or rect.isEmpty():
+            return
+        metrics = self.fontMetrics()
+        bounds = metrics.boundingRect(text)
+        left = min(0, bounds.left())
+        width = max(metrics.horizontalAdvance(text), bounds.right() + 1) - left
+        if width <= rect.width():
+            super().paintEvent(event)
+            return
 
-    def _update_text(self) -> None:
-        title = self.toolTip()
-        if not self.wordWrap():
-            title = self.fontMetrics().elidedText(title.replace("\r", " ").replace("\n", " "),
-                Qt.TextElideMode.ElideRight, self.contentsRect().width())
-        self.setText(title)
+        painter = QPainter(self)
+        painter.setClipRect(rect)
+        painter.setFont(self.font())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.translate(rect.left(), rect.top())
+        painter.scale(rect.width() / width, 1.0)
+        baseline = (rect.height() - metrics.height()) // 2 + metrics.ascent()
+        painter.drawText(-left, baseline, text)
 
 
 class _GameRowSurface(QPushButton):
@@ -477,7 +485,6 @@ class SidebarWidget(QWidget):
         self._on_hidden = on_hidden
         self._on_audio_change = on_audio_change
         self._audio_state = audio_state
-        self._compact_game_rows = False
         self._on_media_options = on_media_options
         self._on_media_command = on_media_command
         self._media_state = media_state
@@ -862,15 +869,8 @@ class SidebarWidget(QWidget):
         media_controls_height = (self._media_section.sizeHint().height()
                                  - self._gallery.minimumHeight())
         gallery_minimum = cell_height if not self._gallery.isHidden() else 0
-        # 현재 압축된 높이를 기준으로 판단하면 정상/압축 레이아웃이 왕복한다.
-        # 행의 여백을 압축하기 전 높이로 비교한다.
-        self._set_compact_game_rows(
-            self._normal_top_height(width) + media_controls_height + gallery_minimum > viewport.height())
-        self._fit_compact_row_padding(width, viewport.height() - media_controls_height - gallery_minimum)
+        top_height = self._fit_game_row_padding(viewport.height() - media_controls_height - gallery_minimum)
         if not self._gallery.isHidden() and self._gallery_layout.count():
-            top_layout = self._top_section.layout()
-            top_height = (top_layout.totalHeightForWidth(width) if top_layout.hasHeightForWidth()
-                          else top_layout.totalSizeHint().height())
             available = viewport.height() - top_height - media_controls_height
             available_rows = max(1, (available + gap) // (cell_height + gap))
             cell_count = len(self._thumb_buttons) + len(self._rec_thumb_buttons) + 1
@@ -879,85 +879,26 @@ class SidebarWidget(QWidget):
         if self._gallery.minimumHeight() != height:
             self._gallery.setFixedHeight(height)
 
-    def _fit_compact_row_padding(self, width: int, available_height: int) -> None:
-        """폰트별 실제 높이 뒤에 남는 세로 예산만 게임 행 여백으로 나눈다."""
-        if not self._compact_game_rows:
-            return
-        rows = [self._games_list_layout.itemAt(index).widget()
-                for index in range(self._games_list_layout.count())
-                if self._games_list_layout.itemAt(index).widget().property("processId") is not None]
-        if not rows:
-            return
-        top = self._top_section.layout()
-        current_height = (top.totalHeightForWidth(width) if top.hasHeightForWidth()
-                          else top.totalSizeHint().height())
-        used_padding = sum(row.layout().contentsMargins().top() + row.layout().contentsMargins().bottom()
-                           for row in rows)
-        content_height = current_height - used_padding
-        normal_padding = round(self.width() * 0.007)
-        padding = max(0, min(normal_padding, (available_height - content_height) // (len(rows) * 2)))
-        for row in rows:
-            layout = row.layout()
+    def _fit_game_row_padding(self, available_height: int) -> int:
+        """실제 콘텐츠가 필요한 높이를 유지하고 남는 높이만 게임 행 여백에 쓴다."""
+        top_height = self._top_section.layout().totalSizeHint().height()
+        row_layouts = []
+        for index in range(self._games_list_layout.count()):
+            layout = self._games_list_layout.itemAt(index).widget().layout()
+            if layout is not None:
+                row_layouts.append(layout)
+        if not row_layouts:
+            return top_height
+        content_height = top_height - sum(layout.contentsMargins().top() + layout.contentsMargins().bottom()
+                                          for layout in row_layouts)
+        edges = len(row_layouts) * 2
+        normal_padding = round(self.width() * 0.015)
+        padding = max(0, min(normal_padding, (available_height - content_height) // edges))
+        for layout in row_layouts:
             margins = layout.contentsMargins()
             if margins.top() != padding or margins.bottom() != padding:
                 layout.setContentsMargins(margins.left(), padding, margins.right(), padding)
-
-    def _normal_top_height(self, width: int) -> int:
-        """정상 모드의 전체 게임명과 세로 여백에 필요한 높이."""
-        padding = round(self.width() * 0.015)
-        rows_height = 0
-        for index in range(self._games_list_layout.count()):
-            row = self._games_list_layout.itemAt(index).widget()
-            name = row.findChild(_GameNameLabel)
-            if name is None:
-                rows_height += row.sizeHint().height()
-                continue
-            row_layout = row.layout()
-            surface_layout = row_layout.itemAt(0).widget().layout()
-            controls = [item for item in (row_layout.itemAt(1), row_layout.itemAt(2)) if not item.isEmpty()]
-            controls_width = sum(item.sizeHint().width() + row_layout.spacing() for item in controls)
-            icon = surface_layout.itemAt(0).widget()
-            text = surface_layout.itemAt(1).layout()
-            heading = text.itemAt(0).layout()
-            state = heading.itemAt(1).widget()
-            gauge = text.itemAt(1).widget().layout()
-            margins = surface_layout.contentsMargins()
-            name_width = (width - padding * 2 - controls_width - margins.left() - margins.right()
-                          - icon.width() - surface_layout.spacing() - state.width() - heading.spacing())
-            name.ensurePolished()
-            name_height = name.fontMetrics().boundingRect(QRect(0, 0, max(1, name_width), 100000),
-                int(Qt.TextFlag.TextWordWrap), name.toolTip()).height()
-            text_height = (max(name_height, state.sizeHint().height())
-                           + gauge.itemAt(0).sizeHint().height() + gauge.itemAt(1).widget().height()
-                           + gauge.spacing() + text.spacing())
-            surface_height = max(icon.height(), text_height) + margins.top() + margins.bottom()
-            controls_height = max((item.sizeHint().height() for item in controls), default=0)
-            rows_height += max(surface_height, controls_height) + padding * 2
-        rows_height += self._games_list_layout.spacing() * max(0, self._games_list_layout.count() - 1)
-        return self._top_section.layout().sizeHint().height() - self._games_list_layout.sizeHint().height() + rows_height
-
-    def _set_compact_game_rows(self, compact: bool, *, force: bool = False) -> None:
-        if self._compact_game_rows == compact and not force:
-            return
-        self._compact_game_rows = compact
-        padding = round(self.width() * 0.015)
-        vertical = round(self.width() * 0.007) if compact else padding
-        for index in range(self._games_list_layout.count()):
-            row = self._games_list_layout.itemAt(index).widget()
-            if row.layout() is not None:
-                row.layout().setContentsMargins(padding, vertical, padding, vertical)
-                name = row.findChild(_GameNameLabel)
-                name.ensurePolished()
-                name.setMinimumHeight(name.fontMetrics().height())
-                name.set_compact(compact)
-                gauge = row.findChild(QLabel, "gameProgressValue")
-                gauge.ensurePolished()
-                gauge.setFixedHeight(gauge.fontMetrics().lineSpacing())
-                value_width = round(self.width() * 0.2)
-                gauge.setMinimumWidth(value_width if compact else 0)
-                gauge.setMaximumWidth(value_width if compact else self.width())
-                row.findChild(QWidget, "gameProgress").layout().setDirection(
-                    QBoxLayout.Direction.RightToLeft if compact else QBoxLayout.Direction.TopToBottom)
+        return content_height + edges * padding
 
     # ------------------------------------------------------------------
     # 내부 메서드 — 레이아웃
@@ -983,7 +924,6 @@ class SidebarWidget(QWidget):
             label.setProperty("hhRole", "sidebarSecondary")
             self._games_list_layout.addWidget(label)
         self._refresh_game_row_displays(active)
-        self._set_compact_game_rows(self._compact_game_rows, force=True)
 
     def _make_game_row(self, process: ManagedProcess, runtime: Optional[dict]) -> QFrame:
         running = runtime is not None
@@ -993,7 +933,7 @@ class SidebarWidget(QWidget):
         padding = round(self.width() * 0.015)
         action_size = round(self.width() * 0.114)
 
-        row = QFrame()
+        row = QFrame(self._top_section)
         row.setProperty("hhRole", "sidebarGameRow")
         row.setProperty("hhRunning", running)
         row.setProperty("hhFocused", False)
@@ -1036,50 +976,57 @@ class SidebarWidget(QWidget):
 
         text = QVBoxLayout()
         text.setSpacing(inset)
-        heading = QHBoxLayout()
-        heading.setSpacing(padding)
-        name = _GameNameLabel(process.name)
+        name = _GameTextLabel(" ".join(process.name.splitlines()))
         name.setObjectName("gameName")
         name.setProperty("hhRole", "sidebarGameName")
         name.setTextFormat(Qt.TextFormat.PlainText)
         name.setToolTip(process.name)
         name.setAccessibleDescription(process.name)
         name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        heading.addWidget(name, 1)
+        text.addWidget(name)
+
+        progress = QWidget()
+        progress.setObjectName("gameProgress")
+        gauge_layout = QHBoxLayout(progress)
+        gauge_layout.setContentsMargins(0, 0, 0, 0)
+        gauge_layout.setSpacing(padding)
+        bar = CapsuleProgressBar()
+        bar.setObjectName("gameProgressBar")
+        bar.setAccessibleName(f"{process.name} 진행률")
+        bar.setFixedHeight(6)
+        bar_policy = bar.sizePolicy()
+        bar_policy.setRetainSizeWhenHidden(True)
+        bar.setSizePolicy(bar_policy)
+        bar.hide()
+        gauge_layout.addWidget(bar, 1, Qt.AlignmentFlag.AlignVCenter)
+
+        value = _GameTextLabel()
+        value.setObjectName("gameProgressValue")
+        value.setProperty("hhRole", "sidebarProgressValue")
+        value.setTextFormat(Qt.TextFormat.PlainText)
+        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        gauge_layout.addWidget(value, alignment=Qt.AlignmentFlag.AlignVCenter)
+
         state = QLabel("실행 중" if running else "꺼짐")
         state.setObjectName("gameRunState")
         state.setProperty("hhRole", "sidebarRunState")
         state.setProperty("hhRunning", running)
         state.setProperty("hhFocused", False)
-        state.setFixedWidth(round(self.width() * 0.15))
         state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        heading.addWidget(state)
-        text.addLayout(heading)
+        gauge_layout.addWidget(state, alignment=Qt.AlignmentFlag.AlignVCenter)
 
-        progress = QWidget()
-        progress.setObjectName("gameProgress")
-        gauge_layout = QBoxLayout(QBoxLayout.Direction.TopToBottom, progress)
-        gauge_layout.setContentsMargins(0, 0, 0, 0)
-        gauge_layout.setSpacing(inset)
-        value = QLabel()
-        value.setObjectName("gameProgressValue")
-        value.setProperty("hhRole", "sidebarProgressValue")
-        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        gauge_layout.addWidget(value)
-        track = QWidget()
-        track.setFixedHeight(6)
-        track_layout = QHBoxLayout(track)
-        track_layout.setContentsMargins(0, 0, 0, 0)
-        bar = CapsuleProgressBar()
-        bar.setObjectName("gameProgressBar")
-        bar.setAccessibleName(f"{process.name} 진행률")
-        bar.hide()
-        track_layout.addWidget(bar)
-        gauge_layout.addWidget(track, 1)
         text.addWidget(progress)
         surface_layout.addLayout(text, 1)
-        for child in (icon, name, state, progress):
+        surface_layout.setAlignment(text, Qt.AlignmentFlag.AlignVCenter)
+
+        name.ensurePolished()
+        name.setFixedHeight(name.fontMetrics().height())
+        for label, samples in ((value, ("100.0%", "888/888", "기록 없음", "계산 오류")),
+                               (state, ("꺼짐", "실행 중", "현재 창"))):
+            label.ensurePolished()
+            metrics = label.fontMetrics()
+            label.setFixedSize(max(metrics.horizontalAdvance(sample) for sample in samples), metrics.height())
+        for child in (icon, name, progress):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         action = QPushButton()
@@ -1215,6 +1162,10 @@ class SidebarWidget(QWidget):
             if show_bar:
                 bar.set_progress(percentage, display)
             if bar.isHidden() == show_bar:
+                value.setProperty("hhValueAvailable", show_bar)
+                value.style().unpolish(value)
+                value.style().polish(value)
+                value.update()
                 bar.setVisible(show_bar)
             description = f"{process.name} · {state.text()} · {display}"
             if surface.accessibleDescription() != description:
