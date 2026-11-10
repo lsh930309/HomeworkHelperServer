@@ -163,7 +163,7 @@ def widgets_theme_tokens(dark: bool) -> dict[str, str]:
 
 
 class CapsuleProgressBar(QProgressBar):
-    """극소 진행률도 원형 끝을 유지하는 6px 캡슐 진행률 표시입니다."""
+    """극소 진행률도 원형 끝을 유지하고, 필요한 화면에 값을 함께 그립니다."""
 
     _PERCENTAGE_SCALE = 10
     _BUCKET_COLORS = {
@@ -178,20 +178,24 @@ class CapsuleProgressBar(QProgressBar):
         self.setRange(0, 100 * self._PERCENTAGE_SCALE)
         self.setTextVisible(False)
 
-    def set_progress(self, percentage: float, format_text: str) -> bool:
+    def set_progress(self, percentage: float | None, format_text: str) -> bool:
         """값·표시 문자열·색을 갱신하고 화면 변경 여부를 반환합니다."""
-        value = round(max(0.0, min(percentage, 100.0)) * self._PERCENTAGE_SCALE)
-        bucket = progress_color_bucket(percentage)
+        value = (self.minimum() - 1 if percentage is None
+                 else round(max(0.0, min(percentage, 100.0)) * self._PERCENTAGE_SCALE))
+        bucket = progress_color_bucket(0.0 if percentage is None else percentage)
         value_changed = self.value() != value
         format_changed = self.format() != format_text
         bucket_changed = self.property("hhBucket") != bucket
-        if value_changed:
-            self.setValue(value)
         if format_changed:
             self.setFormat(format_text)
         if bucket_changed:
             self.setProperty("hhBucket", bucket)
             self.update()
+        if value_changed:
+            if percentage is None:
+                self.reset()
+            else:
+                self.setValue(value)
         return value_changed or format_changed or bucket_changed
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -216,19 +220,42 @@ class CapsuleProgressBar(QProgressBar):
         painter.drawRoundedRect(rect, radius, radius)
 
         span = self.maximum() - self.minimum()
-        if span <= 0 or self.value() <= self.minimum():
-            painter.end()
+        if span > 0 and self.value() > self.minimum():
+            ratio = min(1.0, (self.value() - self.minimum()) / span)
+            fill_width = min(rect.width(), max(rect.height(), rect.width() * ratio))
+            fill_rect = QRectF(rect.left(), rect.top(), fill_width, rect.height())
+            bucket = str(self.property("hhBucket") or "low")
+            color_key = self._BUCKET_COLORS.get(bucket, "success")
+            fill_color = tokens[color_key] if color_key in tokens else color_key
+            painter.setBrush(QColor(fill_color))
+            painter.drawRoundedRect(fill_rect, radius, radius)
+
+        if self.isTextVisible():
+            self._paint_caption(painter, rect, tokens, dark)
+        painter.end()
+
+    def _paint_caption(self, painter: QPainter, rect: QRectF, tokens: dict[str, str], dark: bool) -> None:
+        missing = self.value() < self.minimum()
+        caption = self.format() if missing else self.text()
+        if not caption or rect.width() <= 4:
+            return
+        glyphs = QPainterPath()
+        glyphs.addText(0.0, 0.0, self.font(), caption)
+        bounds = glyphs.boundingRect()
+        if bounds.isEmpty():
             return
 
-        ratio = min(1.0, max(0.0, (self.value() - self.minimum()) / span))
-        fill_width = min(rect.width(), max(rect.height(), rect.width() * ratio))
-        fill_rect = QRectF(rect.left(), rect.top(), fill_width, rect.height())
-        bucket = str(self.property("hhBucket") or "low")
-        color_key = self._BUCKET_COLORS.get(bucket, "success")
-        fill_color = tokens[color_key] if color_key in tokens else color_key
-        painter.setBrush(QColor(fill_color))
-        painter.drawRoundedRect(fill_rect, radius, radius)
-        painter.end()
+        painter.translate(rect.center())
+        painter.scale(min(1.0, (rect.width() - 4) / bounds.width()), 1.0)
+        painter.translate(-bounds.center().x(), -bounds.center().y())
+        if missing:
+            painter.fillPath(glyphs, QColor(tokens["muted"]))
+        else:
+            ink = tokens["text"] if dark else tokens["surface"]
+            outline = tokens["surface"] if dark else tokens["text"]
+            painter.strokePath(glyphs, QPen(QColor(outline), 1.5, Qt.PenStyle.SolidLine,
+                                           Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.fillPath(glyphs, QColor(ink))
 
 
 def tint_icon(icon: QIcon, color: QColor, logical_size: int = 16) -> QIcon:
@@ -377,18 +404,12 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
     action_content = round(widget.width() * 0.114) - 2  # 공통 외곽 크기에서 테두리 양쪽 1px을 제외
     tab_gap = round(widget.width() * 0.012)
     row_radius = round(widget.width() * 0.02)
-    running_text = "#a8caff" if dark else "#164f8c"
-    focused_text = "#8ce3d1" if dark else "#11675a"
     widget.setStyleSheet(
         f"""
         QWidget {{ color: {t['text']}; }}
         QLabel[hhRole="sidebarSecondary"] {{ color: {t['muted']}; font-size: 11px; }}
         QLabel[hhRole="sidebarGameName"] {{ color: {t['text']}; font-size: {round(widget.width() * 0.043)}px; }}
-        QLabel[hhRole="sidebarRunState"] {{ color: {t['muted']}; font-size: 10px; }}
-        QLabel[hhRole="sidebarRunState"][hhRunning="true"] {{ color: {running_text}; }}
-        QLabel[hhRole="sidebarRunState"][hhFocused="true"] {{ color: {focused_text}; }}
-        QLabel[hhRole="sidebarProgressValue"] {{ color: {t['muted']}; font-size: 11px; }}
-        QLabel[hhRole="sidebarProgressValue"][hhValueAvailable="true"] {{ color: {t['text']}; }}
+        QProgressBar#gameProgressBar {{ font-size: 11px; }}
         QLabel[hhRole="sidebarSectionTitle"] {{ font-size: 12px; font-weight: 500; }}
         QFrame[hhRole="sidebarGameRow"] {{ background: transparent; border: none; border-radius: {row_radius}px; }}
         QFrame[hhRole="sidebarGameRow"][hhRunning="true"] {{ background: rgba(42,101,174,77); }}

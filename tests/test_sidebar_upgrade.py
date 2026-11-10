@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, QThread, QThreadPool, Qt
-from PySide6.QtGui import QImage, QPalette, QWheelEvent
+from PySide6.QtGui import QImage, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
@@ -271,10 +271,14 @@ def test_unified_rows_distinguish_current_window_running_and_stopped(sidebar, ap
             assert row.property("hhRunning") is running
             assert row.property("hhFocused") is (game_id == focused)
             status = "현재 창" if game_id == focused else "실행 중" if running else "꺼짐"
-            assert row.findChild(QLabel, "gameRunState").text() == status
+            assert row.findChild(QLabel, "gameRunState") is None
+            assert status in row.findChild(QPushButton, "gameRowSurface").accessibleDescription()
         game_row = rows[game.id]
         game_backgrounds.append(game_row.grab().toImage().pixelColor(2, game_row.height() // 2))
     assert game_backgrounds[0] != game_backgrounds[1] == game_backgrounds[2] == game_backgrounds[3]
+    idle_row = rows[idle.id]
+    idle_background = idle_row.grab().toImage().pixelColor(2, idle_row.height() // 2)
+    assert idle_background not in game_backgrounds
 
     old_dial = rows[game.id].findChild(VolumeDial)
     wheel(app, old_dial, -120)
@@ -323,6 +327,46 @@ def test_game_row_click_transfers_focus_only_from_the_running_body(sidebar, app,
     assert called == [identity, identity, "hidden"]
 
 
+def _relative_luminance(color):
+    def linear(value):
+        return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+
+    return sum(coefficient * linear(channel) for coefficient, channel in
+               zip((0.2126, 0.7152, 0.0722), (color.redF(), color.greenF(), color.blueF())))
+
+
+def _assert_readable_text_inside_gauge(gauge, *, split_fill):
+    assert gauge.isTextVisible()
+    rendered = gauge.grab().toImage()
+    gauge.setTextVisible(False)
+    try:
+        bare = gauge.grab().toImage()
+    finally:
+        gauge.setTextVisible(True)
+    assert rendered.size() == bare.size()
+    width, height = rendered.width(), rendered.height()
+    glyph_pixels = [(x, y) for y in range(height) for x in range(width)
+                    if rendered.pixel(x, y) != bare.pixel(x, y)]
+    assert glyph_pixels
+    xs, ys = zip(*glyph_pixels)
+    assert 0 < min(xs) <= max(xs) < width - 1
+    assert abs((min(xs) + max(xs)) / 2 - (width - 1) / 2) <= 3 * rendered.devicePixelRatio()
+    assert abs((min(ys) + max(ys)) / 2 - (height - 1) / 2) <= 3 * rendered.devicePixelRatio()
+
+    def contrast(x, y):
+        low, high = sorted((_relative_luminance(bare.pixelColor(x, y)),
+                            _relative_luminance(rendered.pixelColor(x, y))))
+        return (high + 0.05) / (low + 0.05)
+
+    if split_fill:
+        # At 50%, the centered string crosses the fill boundary. Both halves must stay legible.
+        for side in (True, False):
+            assert max((contrast(x, y) for x, y in glyph_pixels if (x < width / 2) is side), default=0) >= 3
+    else:
+        assert max(contrast(x, y) for x, y in glyph_pixels) >= 3
+    return rendered, bare
+
+
 def test_stopped_game_displays_zero_and_later_resource_updates_on_the_same_row(sidebar, app):
     view, game, _settings, writes = sidebar
     game.resource_tracking_enabled = True
@@ -338,41 +382,43 @@ def test_stopped_game_displays_zero_and_later_resource_updates_on_the_same_row(s
     geometry = row.geometry()
     controls = (row.findChild(QPushButton, "gameAction"), row.findChild(VolumeDial))
     control_rects = [control.geometry() for control in controls]
-    status = row.findChild(QLabel, "gameRunState")
-    assert status.text() == "꺼짐"
-    text_role = QPalette.ColorRole.WindowText
-    stopped_color = status.palette().color(text_role)
-    missing_color = row.findChild(QLabel, "gameProgressValue").palette().color(text_role)
+    surface = row.findChild(QPushButton, "gameRowSurface")
+    title = row.findChild(QLabel, "gameName")
+    gauge = row.findChild(CapsuleProgressBar, "gameProgressBar")
+    gauge_rect = gauge.geometry()
+    assert "꺼짐" in surface.accessibleDescription()
+    assert row.findChild(QLabel, "gameProgressValue") is None
+    assert gauge.mapTo(row, QPoint()).x() == title.mapTo(row, QPoint()).x()
+    assert gauge.width() == title.width()
 
-    for percent, bucket in [(None, None), (0.0, "low"), (83.4, "high"), (100.0, "full"), (None, None)]:
+    empty_track = None
+    missing_render = None
+    for percent, bucket in [(None, None), (0.0, "low"), (50.0, "medium"), (83.4, "high"), (100.0, "full"), (None, None)]:
         view._data_manager.managed_processes[0] = ManagedProcess.from_dict({**game.to_dict(), "resource_percent": percent})
         view._refresh_game_row_displays()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
         app.processEvents()
         assert current_row(view) is row
         assert row.geometry() == geometry, f"resource_percent={percent}"
+        assert row.findChild(CapsuleProgressBar, "gameProgressBar") is gauge
+        assert gauge.isVisible() and gauge.geometry() == gauge_rect
         assert [control.geometry() for control in controls] == control_rects
-        gauge = row.findChild(CapsuleProgressBar, "gameProgressBar")
-        label = row.findChild(QLabel, "gameProgressValue")
-        assert bool(gauge and gauge.isVisible()) is (percent is not None)
-        assert label.isVisible() and not label.wordWrap()
-        assert label.text() == ("기록 없음" if percent is None else f"{percent:.1f}%")
-        assert status.text() == "꺼짐" and status.palette().color(text_role) == stopped_color
-        value_center = label.mapTo(row, label.rect().center())
-        state_center = status.mapTo(row, status.rect().center())
-        assert abs(value_center.y() - state_center.y()) <= 2
-        assert label.mapTo(row, label.rect().topRight()).x() < status.mapTo(row, QPoint()).x()
-        value_color = label.palette().color(text_role)
+        shown_value = "기록 없음" if percent is None else f"{percent:.1f}%"
+        assert gauge.format() == shown_value
+        assert gauge.accessibleDescription() == shown_value
+        assert "꺼짐" in surface.accessibleDescription() and shown_value in surface.accessibleDescription()
+        rendered, bare = _assert_readable_text_inside_gauge(gauge, split_fill=percent == 50.0)
         if percent is not None:
             assert 100 * gauge.value() / gauge.maximum() == pytest.approx(percent)
             assert gauge.property("hhBucket") == bucket
-            assert value_color.lightness() > missing_color.lightness()
-            assert label.fontMetrics().horizontalAdvance(label.text()) <= label.contentsRect().width()
-            gauge_center = gauge.mapTo(row, gauge.rect().center())
-            assert abs(gauge_center.y() - value_center.y()) <= 2
-            assert gauge.mapTo(row, gauge.rect().topRight()).x() < label.mapTo(row, QPoint()).x()
+            if percent == 0.0:
+                assert bare == empty_track and rendered != missing_render
         else:
-            assert value_color == missing_color
+            assert gauge.value() < gauge.minimum()
+            if empty_track is None:
+                empty_track, missing_render = bare, rendered
+            else:
+                assert bare == empty_track and rendered == missing_render
     assert not writes
 
 
@@ -534,10 +580,10 @@ def test_styled_row_keeps_action_and_volume_outer_sizes_square(sidebar, app, mon
     icon = row.findChild(GameIconLabel)
     assert icon.size().toTuple() == (30, 30)
     name = row.findChild(QLabel, "gameName")
-    value = row.findChild(QLabel, "gameProgressValue")
+    gauge = row.findChild(CapsuleProgressBar, "gameProgressBar")
     assert name.font().pixelSize() == 12
     text_top = name.mapTo(row, name.rect().topLeft()).y()
-    text_bottom = value.mapTo(row, value.rect().bottomLeft()).y()
+    text_bottom = gauge.mapTo(row, gauge.rect().bottomLeft()).y()
     centers = [widget.mapTo(row, widget.rect().center()).y() for widget in (icon, *controls)]
     centers.append((text_top + text_bottom) // 2)
     assert max(centers) - min(centers) <= 1
@@ -632,7 +678,9 @@ def test_short_sidebar_fits_seven_games_two_gauges_and_gallery_then_restores(sid
     assert view._main_scroll.verticalScrollBar().maximum() == 0
     assert view._gallery.height() == view._gallery_cell_size()[1]
     assert view._gallery.mapTo(view, QPoint(0, view._gallery.height())).y() <= view._close_btn.y()
-    assert sum(gauge.isVisible() for gauge in view.findChildren(CapsuleProgressBar)) == 2
+    gauges = [gauge for gauge in view.findChildren(CapsuleProgressBar) if gauge.isVisible()]
+    assert len(gauges) == len(games)
+    assert sum(gauge.value() >= gauge.minimum() for gauge in gauges) == 2
     for index in range(len(games)):
         row = current_row(view, index)
         label = row.findChild(QLabel, "gameName")
@@ -658,7 +706,7 @@ def test_short_sidebar_fits_seven_games_two_gauges_and_gallery_then_restores(sid
         app.processEvents()
     assert view._main_scroll.verticalScrollBar().maximum() == 0
     assert view._gallery.height() == 2 * view._gallery_cell_size()[1] + view._gallery_cell_size()[2]
-    assert sum(gauge.isVisible() for gauge in view.findChildren(CapsuleProgressBar)) == 2
+    assert all(gauge.isVisible() for gauge in gauges)
     view.resize(280, 760)
     for _ in range(6):
         app.processEvents()

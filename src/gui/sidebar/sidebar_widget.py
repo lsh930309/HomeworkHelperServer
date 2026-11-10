@@ -411,7 +411,7 @@ class _HoverThumbCell(QLabel):
         super().mousePressEvent(event)
 
 
-class _GameTextLabel(QLabel):
+class _GameNameLabel(QLabel):
     """기본 글자 높이로 그리며 가용 폭을 넘는 경우에만 가로로 맞춘다."""
 
     def paintEvent(self, event) -> None:
@@ -976,7 +976,7 @@ class SidebarWidget(QWidget):
 
         text = QVBoxLayout()
         text.setSpacing(inset)
-        name = _GameTextLabel(" ".join(process.name.splitlines()))
+        name = _GameNameLabel(" ".join(process.name.splitlines()))
         name.setObjectName("gameName")
         name.setProperty("hhRole", "sidebarGameName")
         name.setTextFormat(Qt.TextFormat.PlainText)
@@ -985,48 +985,18 @@ class SidebarWidget(QWidget):
         name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         text.addWidget(name)
 
-        progress = QWidget()
-        progress.setObjectName("gameProgress")
-        gauge_layout = QHBoxLayout(progress)
-        gauge_layout.setContentsMargins(0, 0, 0, 0)
-        gauge_layout.setSpacing(padding)
         bar = CapsuleProgressBar()
         bar.setObjectName("gameProgressBar")
         bar.setAccessibleName(f"{process.name} 진행률")
-        bar.setFixedHeight(6)
-        bar_policy = bar.sizePolicy()
-        bar_policy.setRetainSizeWhenHidden(True)
-        bar.setSizePolicy(bar_policy)
-        bar.hide()
-        gauge_layout.addWidget(bar, 1, Qt.AlignmentFlag.AlignVCenter)
-
-        value = _GameTextLabel()
-        value.setObjectName("gameProgressValue")
-        value.setProperty("hhRole", "sidebarProgressValue")
-        value.setTextFormat(Qt.TextFormat.PlainText)
-        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        gauge_layout.addWidget(value, alignment=Qt.AlignmentFlag.AlignVCenter)
-
-        state = QLabel("실행 중" if running else "꺼짐")
-        state.setObjectName("gameRunState")
-        state.setProperty("hhRole", "sidebarRunState")
-        state.setProperty("hhRunning", running)
-        state.setProperty("hhFocused", False)
-        state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        gauge_layout.addWidget(state, alignment=Qt.AlignmentFlag.AlignVCenter)
-
-        text.addWidget(progress)
+        bar.setTextVisible(True)
+        bar.setFixedHeight(round(self.width() * 0.054))
+        text.addWidget(bar)
         surface_layout.addLayout(text, 1)
         surface_layout.setAlignment(text, Qt.AlignmentFlag.AlignVCenter)
 
         name.ensurePolished()
         name.setFixedHeight(name.fontMetrics().height())
-        for label, samples in ((value, ("100.0%", "888/888", "기록 없음", "계산 오류")),
-                               (state, ("꺼짐", "실행 중", "현재 창"))):
-            label.ensurePolished()
-            metrics = label.fontMetrics()
-            label.setFixedSize(max(metrics.horizontalAdvance(sample) for sample in samples), metrics.height())
-        for child in (icon, name, progress):
+        for child in (icon, name, bar):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         action = QPushButton()
@@ -1143,31 +1113,22 @@ class SidebarWidget(QWidget):
                 and row.property("gameStartTime") == float(runtime.get("start_time_approx") or 0.0)
             )
             surface = row.findChild(QPushButton, "gameRowSurface")
-            state = row.findChild(QLabel, "gameRunState")
             if row.property("hhFocused") != focused:
-                state.setText("현재 창" if focused else "실행 중" if running else "꺼짐")
-                for widget in (row, surface, state):
+                for widget in (row, surface):
                     widget.setProperty("hhFocused", focused)
                     widget.style().unpolish(widget)
                     widget.style().polish(widget)
                     widget.update()
 
             percentage, raw_text = calculate_game_progress(process, now)
-            show_bar = raw_text not in ("기록 없음", "계산 오류")
-            display = progress_bar_format(percentage, raw_text) if show_bar else raw_text
-            value = row.findChild(QLabel, "gameProgressValue")
+            available = raw_text not in ("기록 없음", "계산 오류")
+            display = progress_bar_format(percentage, raw_text) if available else raw_text
             bar = row.findChild(CapsuleProgressBar, "gameProgressBar")
-            if value.text() != display:
-                value.setText(display)
-            if show_bar:
-                bar.set_progress(percentage, display)
-            if bar.isHidden() == show_bar:
-                value.setProperty("hhValueAvailable", show_bar)
-                value.style().unpolish(value)
-                value.style().polish(value)
-                value.update()
-                bar.setVisible(show_bar)
-            description = f"{process.name} · {state.text()} · {display}"
+            bar.set_progress(percentage if available else None, display)
+            if bar.accessibleDescription() != display:
+                bar.setAccessibleDescription(display)
+            state = "현재 창" if focused else "실행 중" if running else "꺼짐"
+            description = f"{process.name} · {state} · {display}"
             if surface.accessibleDescription() != description:
                 surface.setAccessibleDescription(description)
                 surface.setToolTip(description)

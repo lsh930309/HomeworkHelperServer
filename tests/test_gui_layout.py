@@ -2389,13 +2389,16 @@ def test_sidebar_long_names_stay_on_one_line_without_clipping_controls(sidebar_l
     for slider in rows:
         row = slider.parentWidget()
         name = row.findChild(QLabel, "gameName")
-        state = row.findChild(QLabel, "gameRunState")
+        gauge = row.findChild(QProgressBar, "gameProgressBar")
         title = titles[int(row.property("processId"))]
         assert name.width() > 0
         assert slider.isVisible() is volume_visible
-        assert not name.wordWrap() and not state.wordWrap()
-        assert state.text() == "꺼짐"
-        assert name.mapTo(row, name.rect().bottomLeft()).y() < state.mapTo(row, QPoint()).y()
+        assert not name.wordWrap()
+        assert row.findChild(QLabel, "gameRunState") is None
+        assert gauge.isVisible()
+        assert name.mapTo(row, name.rect().bottomLeft()).y() < gauge.mapTo(row, QPoint()).y()
+        assert name.mapTo(row, QPoint()).x() == gauge.mapTo(row, QPoint()).x()
+        assert name.width() == gauge.width()
         assert name.height() == name.fontMetrics().height()
         assert name.text() == name.toolTip() == name.accessibleDescription() == title
         if title == titles[-1]:
@@ -2410,7 +2413,7 @@ def test_sidebar_long_names_stay_on_one_line_without_clipping_controls(sidebar_l
                        for x in range(full.width() * 4 // 5, full.width()) for y in range(full.height()))
         else:
             assert name.fontMetrics().horizontalAdvance(title) <= name.contentsRect().width()
-        for widget in row.findChildren(QPushButton) + row.findChildren(QLabel) + [slider]:
+        for widget in row.findChildren(QPushButton) + row.findChildren(QLabel) + [slider, gauge]:
             if widget.isVisible():
                 right = widget.mapTo(view._scroll_content, QPoint(widget.width(), 0)).x()
                 assert right <= viewport.width(), (name.text(), right, viewport.width())
