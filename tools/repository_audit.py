@@ -34,7 +34,7 @@ def category(path: Path, tracked: bool) -> str:
         return "git_metadata"
     if parts[0] == "local-artifacts" or path.name in {".env", "SmartThings_Token"}:
         return "local_credentials"
-    if path.name == "build.version.json":
+    if path.name in {"build.version.json", "version.ledger.json", "version.ledger.lock"}:
         return "local_build_state"
     if parts[0] == "release":
         return "release_artifact"

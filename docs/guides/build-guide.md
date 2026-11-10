@@ -9,8 +9,8 @@
 Windows에서는 Windows 저장소 환경에서, macOS에서는 macOS 저장소 환경에서
 `python build.py`를 실행한다. 별도 옵션이 필요한 경우에만 아래의 지원 옵션을 사용한다.
 
-`build.py`가 대상 선택, 빌드 환경 준비, 버전 선택, 이전 산출물 보관,
-플랫폼 빌드·서명·패키징, 성공한 버전 저장, 결과 안내와 중간 파일 정리를 소유한다.
+`build.py`가 대상 선택, 빌드 환경 준비, 발급된 버전 확인, 이전 산출물 보관,
+플랫폼 빌드·서명·패키징, 결과 안내와 중간 파일 정리를 소유한다.
 패키지 산출물 준비는 이 스크립트의 실행 흐름으로 완료한다. 개별 패키징 도구를 직접
 이어 호출하거나 스크립트 밖에서 버전·서명·아카이브·배포 묶음을 다시 만들지 않는다.
 
@@ -47,69 +47,44 @@ Python 3.14로 생성하고, 해당 환경에서 `requirements.txt`를 설치·�
 가상환경 삭제·재생성을 정상 빌드의 선행 단계로 실행하지 않는다. 기존 환경의 Python 버전이
 다르거나 손상됐으면 실제 오류를 먼저 확인하고 수동 환경 정비와 정상 빌드를 구분한다.
 
-## 로컬 버전 상태
+## 빌드 버전과 산출물
 
-`build.version.json`은 Git에 커밋하지 않는 로컬 mutable state다. 각 워크스페이스에서 현재 배포하려는 target별 version/build를 보관한다.
+맥의 Git 제외 파일 `version.ledger.json`은 호스트·클라이언트의 버전과 소스 커밋을 기록한다.
+macOS 빌드는 현재 checkout의 클라이언트 버전을 이 기록에서 확인한다. Windows는 맥의 소스 준비
+명령이 동기화한 `build.version.json`을 읽고, 현재 커밋과 일치하는 호스트 버전을 사용한다.
+같은 제품의 커밋을 다시 빌드하면 같은 번호를 사용한다. 발급 규칙과 정책 시작점은
+[버전 변경 규칙](../development/commit-message-policy.md), Windows 동기화는
+[공용 운영 도구](operations-guide.md#소스-준비빌드설치)를 따른다.
 
-```json
-{
-  "schema": 1,
-  "targets": {
-    "windows-host": {"version": "1.2.0", "build": 1},
-    "macos-client": {"version": "0.2.0", "build": 1}
-  }
-}
-```
-
-빌드는 시작 시 후보 버전을 만들고, 산출물이 실제로 생성된 경우에만 이 파일을 저장한다. 실패한 빌드는 버전 파일을 갱신하지 않는다.
-
-릴리스 ID 형식:
+정식 버전은 `vX.Y.Z`, 개발 버전은 `dev.N`을 파일 이름에 사용한다.
 
 ```text
-v{semver}_b{build}_g{git-hash}[_dirty]
+HomeworkHelper_v1.6.0_Setup.exe
+HomeworkHelper_v1.6.0_Portable.zip
+HomeworkHelperRemote_v1.0.0.pkg
+HomeworkHelperRemote_dev.12.pkg
 ```
 
-예시 산출물:
-
-```text
-HomeworkHelper_v1.2.0_b2_gabc1234_Setup.exe
-HomeworkHelper_v1.2.0_b2_gabc1234_Portable.zip
-HomeworkHelperRemote_v0.2.0_b2_gabc1234.pkg
-```
+macOS 번들의 두 숫자 버전 필드에는 발급 기록의 정식 기준 버전을 사용한다. 앱 진단의
+`HHRemoteReleaseID`에는 파일명과 같은 버전 표기를 넣고, 소스 커밋은 별도 `HHRemoteGitHash`에 남긴다.
 
 ## 기본 실행
 
 ```bash
-# 현재 OS 기준 target 자동 선택, GUI version selector 사용
 python build.py
-
-# 콘솔/CI 환경
-python build.py --no-gui
-
-# target 강제 지정
-python build.py --target windows-host
-python build.py --target macos-client
 ```
 
-GUI 사용 가능 환경에서는 Windows host와 macOS client 모두 같은 version selector를 사용한다. 후보 버전은 `--bump` 결과로 채워지고, 사용자는 방향키로 semver를 조정한 뒤 Enter로 확정한다. Esc는 빌드를 취소한다.
-
-## 버전 증가 정책
-
-```bash
-python build.py --bump build   # 기본값: 같은 semver에서 build +1
-python build.py --bump patch   # patch +1, build=1
-python build.py --bump minor   # minor +1, patch=0, build=1
-python build.py --bump major   # major +1, minor=0, patch=0, build=1
-python build.py --bump none    # 현재 파일 값을 그대로 사용
-```
-
-동일 semver의 build 번호는 자동 계산한다. semver를 올리면 build는 1부터 시작한다.
+현재 OS에 맞는 제품을 콘솔에서 빌드한다. 실행 환경의 제품을 명시하려면 `--target windows-host`
+또는 `--target macos-client`를 사용한다. `--deep-clean`은 Swift 빌드 캐시 같은 중간 파일까지 정리한다.
 
 ## Archive 관리
 
-빌드 시작 시 `release/` 루트의 기존 배포 산출물은 아래 구조로 이동한다.
+빌드 시작 시 `release/` 루트의 기존 배포 산출물을 보관한다. 새 버전 형식은 같은 번호로
+다시 빌드해도 보관소에 동명의 복사본이 생기지 않도록 `by-version`에 둔다. 이전 버전 형식은
+날짜별 보관 경로를 사용한다.
 
 ```text
+release/archives/{target}/{artifact_type}/by-version/{artifact}
 release/archives/{target}/{artifact_type}/{YY-MM-DD}/{artifact}
 ```
 
@@ -137,10 +112,8 @@ Windows 배포 빌드 전에는 기존 인증서의 개인키가 현재 사용�
 lsh-desktop 업데이트는 현재 설치본의 유효한 서명 인증서를 기준으로 같은 인증서·개인키를
 확인한다. 인증서 재발급·개인키 복사·저장소에 fingerprint 고정은 하지 않는다.
 
-인증서 지정 없이 `build.py`가 패키지를 만들고 서명을 생략한 경우는 배포 준비 완료가
-아니다. 기존 인증서를 올바르게 지정하고 같은 버전은 `--bump none`을 사용해 `build.py`
-전체 절차를 다시 실행한다. 개별 EXE나 ZIP을 수동으로 서명·재포장하지 않는다. 설치 전에는
-최종 Setup과 제품 payload의 서명이 `Valid`인지 확인한다.
+배포 전에는 최종 Setup과 제품 payload의 서명이 `Valid`인지 확인한다. 서명이 빠졌다면
+기존 인증서를 올바르게 지정하고 같은 커밋의 `build.py` 전체 절차를 다시 실행한다.
 
 ## macOS 서명 identity
 
@@ -150,21 +123,9 @@ fingerprint 일부로 구분하고 인증서를 재발급하지 않는다. build
 중복 이름은 임의 선택하지 않는다. 로컬 fingerprint를 저장소에 고정하지 않는다.
 외부 배포용 PKG 서명·공증은 별도 범위다.
 
-## 선택적 GitHub Release 게시
+## GitHub Release
 
-`--publish-release`는 기본 비활성화이다. 활성화해도 조건이 맞지 않으면 빌드 실패로 처리하지 않고 게시만 건너뛴다.
-
-필요 조건:
-
-- `gh` CLI 사용 가능
-- 작업 트리가 깨끗함
-- 현재 릴리스 ID를 포함한 산출물이 존재함
-
-태그 형식:
-
-```text
-hh-{target}-v{semver}-b{build}
-```
+마이너 이상 게시 절차는 [맥에서 PR 병합과 릴리즈](operations-guide.md#맥에서-pr-병합과-릴리즈)를 따른다.
 
 ## 검증
 
