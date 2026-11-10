@@ -10,7 +10,10 @@ import logging
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
+from PySide6.QtGui import (
+    QBrush, QColor, QFont, QFontMetricsF, QIcon, QPainter, QPainterPath, QPalette, QPen,
+    QPixmap, QRadialGradient,
+)
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QProgressBar, QWidget
 
 if TYPE_CHECKING:
@@ -261,15 +264,28 @@ class CapsuleProgressBar(QProgressBar):
         if bounds.isEmpty():
             return
 
+        text_scale = min(1.0, (rect.width() - 4) / bounds.width())
+        if not missing:
+            text_width = QFontMetricsF(font, self).horizontalAdvance(caption) * text_scale
+            ellipse_width = text_width + 28 * rect.height() / 11
+            radius = rect.height() / 2
+            clip = QPainterPath()
+            clip.addRoundedRect(rect, radius, radius)
+            shade = QRadialGradient(0.0, 0.0, 1.0)
+            shade.setStops([(position, QColor.fromRgbF(0, 0, 0, alpha)) for position, alpha in (
+                (0.0, 0.22), (0.38, 0.19), (0.65, 0.12), (0.85, 0.04), (1.0, 0.0),
+            )])
+            painter.save()
+            painter.setClipPath(clip)
+            painter.translate(rect.center())
+            painter.scale(ellipse_width / 2, rect.height() * 2)
+            painter.fillRect(QRectF(-1.0, -1.0, 2.0, 2.0), QBrush(shade))
+            painter.restore()
+
         painter.translate(rect.center())
-        painter.scale(min(1.0, (rect.width() - 4) / bounds.width()),
-                      min(1.0, (rect.height() - 2) / bounds.height()))
+        painter.scale(text_scale, min(1.0, (rect.height() - 2) / bounds.height()))
         painter.translate(-bounds.center().x(), -bounds.center().y())
-        if missing:
-            painter.fillPath(glyphs, QColor("#aab3bf"))
-        else:
-            painter.fillPath(glyphs.translated(0.0, 1.0), QColor(0, 0, 0, 96))
-            painter.fillPath(glyphs, QColor("#f4f6fa"))
+        painter.fillPath(glyphs, QColor("#aab3bf" if missing else "#f4f6fa"))
 
 
 def tint_icon(icon: QIcon, color: QColor, logical_size: int = 16) -> QIcon:

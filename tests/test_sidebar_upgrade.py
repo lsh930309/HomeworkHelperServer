@@ -335,7 +335,7 @@ def _relative_luminance(color):
                zip((0.2126, 0.7152, 0.0722), (color.redF(), color.greenF(), color.blueF())))
 
 
-def _assert_readable_text_inside_gauge(gauge, *, split_fill, shadow):
+def _gauge_text_renders(gauge):
     assert gauge.isTextVisible()
     rendered = gauge.grab().toImage()
     gauge.setTextVisible(False)
@@ -344,9 +344,15 @@ def _assert_readable_text_inside_gauge(gauge, *, split_fill, shadow):
     finally:
         gauge.setTextVisible(True)
     assert rendered.size() == bare.size()
+    return rendered, bare
+
+
+def _assert_readable_text_inside_gauge(gauge, *, split_fill, shaded):
+    rendered, bare = _gauge_text_renders(gauge)
     width, height = rendered.width(), rendered.height()
     glyph_pixels = [(x, y) for y in range(height) for x in range(width)
-                    if rendered.pixel(x, y) != bare.pixel(x, y)]
+                    if _relative_luminance(rendered.pixelColor(x, y))
+                    > _relative_luminance(bare.pixelColor(x, y)) + 0.04]
     assert glyph_pixels
     xs, ys = zip(*glyph_pixels)
     assert 0 < min(xs) <= max(xs) < width - 1
@@ -364,17 +370,23 @@ def _assert_readable_text_inside_gauge(gauge, *, split_fill, shadow):
             assert max((contrast(x, y) for x, y in glyph_pixels if (x < width / 2) is side), default=0) >= 3
     else:
         assert max(contrast(x, y) for x, y in glyph_pixels) >= 3
-    if shadow is not None:
-        differences = {
-            (x, y): _relative_luminance(rendered.pixelColor(x, y)) - _relative_luminance(bare.pixelColor(x, y))
-            for x, y in glyph_pixels
-        }
-        dark_pixels = {point for point, delta in differences.items() if delta < -0.015}
-        if shadow:
-            assert any((x, y + 1) in dark_pixels or (x, y + 2) in dark_pixels
-                       for (x, y), delta in differences.items() if delta > 0.08)
-        else:
-            assert not dark_pixels
+    def shade(x, y):
+        base = bare.pixelColor(x, y)
+        current = rendered.pixelColor(x, y)
+        base_total = base.red() + base.green() + base.blue()
+        return 1 - (current.red() + current.green() + current.blue()) / max(1, base_total)
+
+    if shaded:
+        mid = width // 2
+        near = (max(xs) - min(xs)) // 2 + round(4 * rendered.devicePixelRatio())
+        far = near + round(7 * rendered.devicePixelRatio())
+        for edge_y in (0, height - 1):
+            center = shade(mid, edge_y)
+            assert 0.12 < center < 0.27
+            for side in (-1, 1):
+                assert center > shade(mid + side * near, edge_y) > shade(mid + side * far, edge_y)
+    else:
+        assert all(shade(x, y) <= 0 for y in range(height) for x in range(width))
     return rendered, bare
 
 
@@ -418,8 +430,7 @@ def test_stopped_game_displays_zero_and_later_resource_updates_on_the_same_row(s
         assert gauge.format() == shown_value
         assert gauge.accessibleDescription() == shown_value
         assert "꺼짐" in surface.accessibleDescription() and shown_value in surface.accessibleDescription()
-        shadow = False if percent is None else True if percent in (50.0, 100.0) else None
-        rendered, bare = _assert_readable_text_inside_gauge(gauge, split_fill=percent == 50.0, shadow=shadow)
+        rendered, bare = _assert_readable_text_inside_gauge(gauge, split_fill=percent == 50.0, shaded=percent is not None)
         if percent is not None:
             assert 100 * gauge.value() / gauge.maximum() == pytest.approx(percent)
             assert gauge.property("hhBucket") == bucket
@@ -432,6 +443,26 @@ def test_stopped_game_displays_zero_and_later_resource_updates_on_the_same_row(s
             else:
                 assert bare == empty_track and rendered == missing_render
     assert not writes
+
+
+def test_sidebar_gauge_shade_is_clipped_at_rounded_ends(app):
+    gauge = CapsuleProgressBar()
+    gauge.setObjectName("gameProgressBar")
+    gauge.setStyleSheet("font-size:11px; font-weight:700;")
+    gauge.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    gauge.setFixedSize(28, 11)
+    gauge.setTextVisible(True)
+    gauge.set_progress(100.0, "100.0%")
+    gauge.show()
+    try:
+        app.processEvents()
+        rendered, bare = _gauge_text_renders(gauge)
+        assert rendered.pixel(rendered.width() // 2, 0) != bare.pixel(bare.width() // 2, 0)
+        for x in (0, bare.width() - 1):
+            for y in (0, bare.height() - 1):
+                assert rendered.pixel(x, y) == bare.pixel(x, y)
+    finally:
+        gauge.close()
 
 
 def test_open_sidebar_tracks_another_game_start_pid_replacement_and_stop(sidebar, app, monkeypatch):
