@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -161,6 +162,11 @@ def _uninstall_callbacks():
 
 @pytest.fixture(scope="module")
 def inert_uninstall_setup_exe(tmp_path_factory):
+    import ctypes
+
+    # Inno 6.5 can schedule its temporary uninstaller for deletion at reboot
+    # when the first-phase process has an administrative token.
+    assert not ctypes.WinDLL("shell32").IsUserAnAdmin(), "Run the uninstall fixture without elevation"
     directory = tmp_path_factory.mktemp("inno uninstall fixture")
     (directory / "payload.txt").write_text("fixture only", encoding="utf-8")
     source_path = directory / "fixture.iss"
@@ -274,6 +280,12 @@ begin
   Result := IDOK;
 end;
 
+<event('CurUninstallStepChanged')>
+procedure FixtureObserveCompletion(Step: TUninstallStep);
+begin
+  if Step = usDone then Log('HH_UNINSTALL:done');
+end;
+
 ''' + callbacks, encoding="utf-8-sig")
     compiler = Path(os.environ["ProgramFiles(x86)"]) / "Inno Setup 6" / "ISCC.exe"
     assert compiler.is_file(), "Actual Inno Setup compiler is required for this Windows test"
@@ -332,15 +344,25 @@ def test_inno_uninstall_cleans_only_opted_in_owner_data_without_following_links(
     try:
         result = subprocess.run([str(uninstall), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
                                  f"/LOG={log_path}", f"/FixtureCase={scenario}"], capture_output=True, timeout=45)
+        # Inno closes the launcher to remove its EXE before the second phase
+        # runs the post-uninstall callback. Keep the lock until that phase ends.
+        deadline = time.monotonic() + 10
+        while True:
+            raw = log_path.read_bytes()
+            encoding = "utf-16" if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)) else "utf-8-sig"
+            log = raw.decode(encoding, errors="replace")
+            if log.rstrip().endswith("Log closed.") or time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
     finally:
         if lock is not None:
             assert native.CloseHandle(lock)
-    raw = log_path.read_bytes()
-    encoding = "utf-16" if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)) else "utf-8-sig"
-    log = raw.decode(encoding)
     assert result.returncode == 0, log
+    assert log.rstrip().endswith("Log closed."), log
+    assert "CurUninstallStepChanged raised an exception" not in log, log
     assert not (app / "payload.txt").exists(), log
     events = re.findall(r"HH_UNINSTALL:([a-z-]+)", log)
+    assert events and events[-1] == "done", log
     assert events[0] == "owner" and events.index("service") < events.index("tasks") < events.index("legacy"), log
     assert ("unchecked" in events) is (scenario != "silent"), log
     assert ("checkbox-enabled" in events) is (scenario not in {"silent", "other-owner", "redirected"}), log
