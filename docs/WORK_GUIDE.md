@@ -15,6 +15,7 @@ README는 앱 소개다. 이 문서는 개발·진단·검증·배포를 시작�
 | 문제 진단·반복 검증·공용 도구 변경 | [운영 도구](guides/operations-guide.md), [SSH 진단](remote/host-ssh-diagnostics-runbook.md) |
 | 저장소 전체 감사·임시 자료 정리 | [운영 도구의 저장소 감사](guides/operations-guide.md#저장소-전체-감사와-작업-자료-정리), [작업 규칙](../AGENTS.md) |
 | 호스트·클라이언트 소스 준비·빌드·서명·패키지 배포 | [빌드](guides/build-guide.md), [운영 도구](guides/operations-guide.md) |
+| 맥에서 PR 병합 후 GitHub Release 게시 | [PR 병합과 릴리즈](guides/operations-guide.md#맥에서-pr-병합과-릴리즈) |
 | lsh-desktop 패키지 설치 | 위 빌드 문서와 [Windows 설치](guides/windows-package-install-guide.md) |
 | 로그인·권한·감시·게임 실행/종료·OBS 연동 | [Windows 수명주기](development/windows-host-lifecycle.md) |
 | DB·백업·복구·자원 추적·저장 경계 | [데이터 안전](data-safety-policy.md) |

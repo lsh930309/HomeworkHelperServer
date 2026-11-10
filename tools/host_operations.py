@@ -8,6 +8,7 @@ import gzip
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import uuid
@@ -16,9 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 WINDOWS_REPO = r"C:\VSCode\Projects\HomeworkHelperServer"
 sys.path.insert(0, str(ROOT))
 from tools.ssh_host_testbench import SSHConfig, run_remote_powershell
+from tools.version_policy import BuildVersion, VersionLedger, VersionPolicyError
 
 VERIFY_FILES = ("build.py", "tools/host_operations.py", "tools/ssh_host_testbench.py", "tools/windows_host_probe.py",
-                "tools/windows_session_probe.py", "tools/windows_host_operations.ps1", "tests/test_host_operations.py",
+                "tools/windows_session_probe.py", "tools/windows_host_operations.ps1", "tools/version_policy.py",
+                "tests/test_host_operations.py",
                 "src/__init__.py", "src/core/__init__.py", "src/core/tailscale.py",
                 "src/gui/__init__.py", "src/gui/runtime_logging.py")
 
@@ -58,6 +61,16 @@ def published_commit(commit: str | None) -> tuple[str, str]:
     return head, branch
 
 
+def published_release_commit(commit: str) -> str:
+    """Select a specific public main revision even when local HEAD is elsewhere."""
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("릴리즈에는 main의 전체 커밋 해시가 필요합니다.")
+    main = git("ls-remote", "--heads", "origin", "refs/heads/main")
+    if not main or commit not in git("rev-list", "--first-parent", main.split()[0]).splitlines():
+        raise ValueError("릴리즈 커밋이 공개 main 이력에 없습니다.")
+    return commit
+
+
 def ps_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -69,12 +82,13 @@ def source_state() -> dict:
             "published_head": remote.split()[0] if remote else None}
 
 
-def remote_script(args, commit: str = "", branch: str = "") -> str:
+def remote_script(args, commit: str = "", branch: str = "", version: BuildVersion | None = None) -> str:
     script = (ROOT / "tools/windows_host_operations.ps1").read_text(encoding="utf-8")
     values = {
         "Command": args.command, "Repo": WINDOWS_REPO, "Owner": args.owner,
         "ExpectedComputer": args.computer, "Commit": commit, "Branch": branch,
-        "Bump": args.bump,
+        "VersionSnapshot": version.to_json() if version is not None else "",
+        "ReleaseTag": args.release_tag or "", "ReleaseRepo": args.release_repo or "",
         "ArchivedRelease": args.archived_release or "",
         "LogLines": str(args.log_lines), "Contains": args.contains,
         "Scenario": args.scenario,
@@ -95,7 +109,7 @@ def remote_script(args, commit: str = "", branch: str = "") -> str:
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("command", choices=("inspect", "logs", "prepare-source", "build", "install", "desktop", "verify", "media-qa"))
+    p.add_argument("command", choices=("inspect", "logs", "prepare-source", "build", "release-build", "install", "desktop", "verify", "media-qa"))
     p.add_argument("--host", required=True, help="Tailscale device/MagicDNS name, explicit IP or external FQDN")
     p.add_argument("--user")
     p.add_argument("--ssh-port", type=int, default=22)
@@ -104,7 +118,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--computer", default="LSH_DESKTOP")
     p.add_argument("--commit", help="Published local HEAD (defaults to current HEAD)")
     p.add_argument("--archived-release", help="install only: reinstall this exact release from build.py archives")
-    p.add_argument("--bump", choices=("build", "patch", "minor", "major", "none"), default="build")
+    p.add_argument("--release-tag", help="release-build only: tag of the existing draft release")
+    p.add_argument("--release-repo", help="release-build only: owner/repository of the draft release")
     p.add_argument("--duration", type=int, choices=range(0, 121), default=0,
                    metavar="0..120", help="desktop observation duration; 0 takes one snapshot")
     p.add_argument("--log-lines", type=int, choices=range(1, 2001), default=80, metavar="1..2000")
@@ -126,13 +141,30 @@ def main(argv=None) -> int:
         argument_parser.error("--prepare-runtime은 media-qa에서만 사용할 수 있습니다.")
     if args.archived_release and (args.command != "install" or args.commit):
         argument_parser.error("--archived-release는 install에서만 사용하며 --commit과 함께 지정하지 않습니다.")
+    if args.command == "release-build":
+        if not (args.commit and args.release_tag and args.release_repo):
+            argument_parser.error("release-build에는 --commit, --release-tag, --release-repo가 필요합니다.")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.release_repo):
+            argument_parser.error("--release-repo는 owner/repository 형식이어야 합니다.")
+    elif args.release_tag or args.release_repo:
+        argument_parser.error("--release-tag와 --release-repo는 release-build에서만 사용합니다.")
     report = args.report_root / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8])
     try:
         report.mkdir(parents=True)
-        commit, branch = (published_commit(args.commit) if args.command in
-                          {"prepare-source", "build", "install", "media-qa"} and not args.archived_release else ("", ""))
-        script = remote_script(args, commit, branch)
-        timeout = {"build": 1800, "install": 360, "prepare-source": 120, "verify": 180,
+        version = None
+        if args.command == "release-build":
+            commit, branch = published_release_commit(args.commit), "main"
+            event, version = VersionLedger(ROOT).read_main(commit) or (None, None)
+            if (event not in {"minor", "major"} or version is None or version.product != "host"
+                    or args.release_tag != version.tag):
+                raise ValueError("공개 호스트 릴리즈에 발급된 정식 버전과 태그가 필요합니다.")
+        else:
+            commit, branch = (published_commit(args.commit) if args.command in
+                              {"prepare-source", "build", "install", "media-qa"} and not args.archived_release else ("", ""))
+            if commit and args.command in {"prepare-source", "build", "install"}:
+                version = VersionLedger(ROOT).resolve_build("host", commit, development=branch != "main")
+        script = remote_script(args, commit, branch, version)
+        timeout = {"build": 1800, "release-build": 2400, "install": 360, "prepare-source": 120, "verify": 180,
                    "desktop": args.duration + 90,
                    "media-qa": 360 if args.prepare_runtime else (190 if args.scenario == "focus-lifecycle" else 180),
                    "inspect": 45, "logs": 20}[args.command]
@@ -162,7 +194,7 @@ def main(argv=None) -> int:
         if result.returncode:
             print(result.stderr.strip(), file=sys.stderr)
         return 0 if summary["ok"] else 1
-    except (ValueError, OSError, subprocess.SubprocessError) as error:
+    except (ValueError, OSError, subprocess.SubprocessError, VersionPolicyError) as error:
         message = ("SSH 작업 응답 시간 초과" if isinstance(error, subprocess.TimeoutExpired) else str(error))
         failure = {"ok": False, "command": args.command, "report": str(report), "error": message}
         if report.is_dir():

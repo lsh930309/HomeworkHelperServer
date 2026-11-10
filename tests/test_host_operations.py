@@ -16,6 +16,7 @@ import pytest
 from tools import host_operations as ops
 from tools import ssh_host_testbench as transport
 from tools import windows_host_probe as probe
+from tools.version_policy import BuildVersion
 from src.core.tailscale import TailscalePeer, TailscaleSnapshot
 
 
@@ -63,6 +64,46 @@ def test_dirty_or_different_commit_cannot_deploy(published_repository):
     command("commit", "-am", "second fixture")
     with pytest.raises(ValueError, match="HEAD와 다릅니다"):
         ops.published_commit(before)
+
+
+def test_release_build_accepts_exact_older_main_revision(published_repository):
+    _, command = published_repository
+    start = command("rev-parse", "HEAD")
+    command("switch", "-qc", "work")
+    command("commit", "--allow-empty", "-qm", "feature fixture")
+    work = command("rev-parse", "HEAD")
+    command("switch", "-q", "main")
+    command("merge", "--no-ff", "-qm", "merge fixture", "work")
+    command("push", "-q", "origin", "main")
+    assert ops.published_release_commit(start) == start
+    with pytest.raises(ValueError, match="공개 main 이력"):
+        ops.published_release_commit(work)
+
+
+@pytest.mark.parametrize("event", ["minor", "patch"])
+def test_release_build_forwards_only_the_issued_host_release(event, monkeypatch, tmp_path, capsys):
+    commit = "a" * 40
+    snapshot = BuildVersion("host", "1.7.0", commit, "1.7.0")
+    monkeypatch.setattr(ops, "published_release_commit", lambda target: target)
+    monkeypatch.setattr(ops.VersionLedger, "read_main", lambda _, target: (event, snapshot))
+    calls = []
+
+    def remote(config, script, *, timeout):
+        calls.append(script)
+        return subprocess.CompletedProcess([], 0, '{"ok":true,"assets":{}}', '')
+
+    monkeypatch.setattr(ops, "run_remote_powershell", remote)
+    assert ops.main(["release-build", "--host", "test.invalid", "--commit", commit,
+                     "--release-tag", "H/v1.7.0", "--release-repo", "fixture/repo",
+                     "--report-root", str(tmp_path)]) == (0 if event == "minor" else 1)
+    if event == "patch":
+        assert not calls
+        assert "발급된 정식 버전과 태그가 필요합니다" in capsys.readouterr().err
+    else:
+        assert len(calls) == 1
+        assert f"-VersionSnapshot {ops.ps_literal(snapshot.to_json())}" in calls[0]
+        assert "-Branch 'main'" in calls[0]
+        assert "-ReleaseRepo 'fixture/repo'" in calls[0]
 
 
 def test_inspect_never_requests_publication_or_host_changes(monkeypatch, tmp_path, capsys):
@@ -199,30 +240,32 @@ def test_update_cannot_select_a_temporary_or_alternative_checkout(command, monke
     assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize("abbreviation", [4, 7, 12])
-def test_install_release_selection_matches_builder_despite_git_abbreviation(published_repository, monkeypatch, capsys, abbreviation):
-    import build
+@pytest.mark.parametrize("version,release_id", [("1.6.0", "v1.6.0"), ("dev.12", "dev.12")])
+def test_install_release_selection_uses_synced_version(published_repository, monkeypatch, capsys, version, release_id):
     repo, command = published_repository
-    command("config", "core.abbrev", str(abbreviation))
-    version = repo / "build.version.json"
-    version.write_text('{"schema":1,"targets":{"windows-host":{"version":"1.4.0","build":3}}}')
-    (repo / ".gitignore").write_text("release/\n")
-    command("add", "build.version.json", ".gitignore")
-    command("commit", "-qm", "version fixture")
-    monkeypatch.setattr(build, "PROJECT_ROOT", repo)
+    (repo / ".gitignore").write_text("release/\nbuild.version.json\n")
+    command("add", ".gitignore")
+    command("commit", "-qm", "ignore local output")
+    snapshot = BuildVersion("host", version, command("rev-parse", "HEAD"), "1.6.0")
+    (repo / "build.version.json").write_text(snapshot.to_json(), encoding="utf-8")
     monkeypatch.setenv("APPDATA", str(repo / "isolated-appdata"))
-    expected = "v1.4.0_b3_g" + command("rev-parse", "--short=7", "HEAD")
-    package = repo / "release" / ("HomeworkHelper_" + expected + "_Setup.exe")
-    package.parent.mkdir()
-    package.write_bytes(b"inert package fixture")
-
     assert probe.main(["release", "--repo", str(repo), "--appdata", str(repo / "isolated-appdata"),
                        "--install", str(repo / "installed")]) == 0
-    selected = json.loads(capsys.readouterr().out)["release_id"]
-    assert (repo / "release" / ("HomeworkHelper_" + selected + "_Setup.exe")) == package
-    source = (Path(__file__).parents[1] / "tools/windows_host_operations.ps1").read_text(encoding="utf-8")
-    assert "$Release = (Invoke-Probe 'release').release_id" in source
-    assert "Git-Checked @('rev-parse','--short'" not in source
+    result = json.loads(capsys.readouterr().out)
+    assert result["release_id"] == release_id
+    assert Path(result["setup"]) == repo / "release" / f"HomeworkHelper_{release_id}_Setup.exe"
+    assert Path(result["portable"]) == repo / "release" / f"HomeworkHelper_{release_id}_Portable.zip"
+
+    with pytest.raises(ValueError, match="패키지 선택의 요청 커밋 또는 버전과 다릅니다"):
+        probe.main(["release", "--repo", str(repo), "--appdata", str(repo / "isolated-appdata"),
+                    "--install", str(repo / "installed"), "--expected-commit", snapshot.commit,
+                    "--expected-version", "1.6.1"])
+
+    command("commit", "--allow-empty", "-qm", "move checkout")
+    from build import BuildConfigError
+    with pytest.raises(BuildConfigError, match="빌드 버전 스냅숏과 현재 제품 또는 소스 커밋이 다릅니다"):
+        probe.main(["release", "--repo", str(repo), "--appdata", str(repo / "isolated-appdata"),
+                    "--install", str(repo / "installed")])
 
 
 def test_missing_db_is_not_created(tmp_path):
@@ -309,14 +352,84 @@ def test_build_invokes_single_authoritative_builder(monkeypatch, tmp_path, capsy
     monkeypatch.setenv("APPDATA", str(tmp_path / "data"))
     monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs)))
     assert probe.main(["build", "--repo", str(tmp_path), "--appdata", str(tmp_path / "data"),
-                       "--install", str(tmp_path / "installed"), "--bump", "none"]) == 0
-    assert calls[0][0][1:] == ["build.py", "--no-gui", "--no-prune-archives", "--bump", "none"]
+                       "--install", str(tmp_path / "installed")]) == 0
+    assert calls[0][0][1:] == ["build.py", "--no-prune-archives"]
     assert len(calls) == 1
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Actual Windows PowerShell required")
+@pytest.mark.parametrize("scenario", ["match", "wrong-digest", "wrong-tag"])
+def test_windows_release_upload_preserves_existing_draft_asset(tmp_path, scenario):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    python = repo / ".venv/Scripts/python.exe"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    snapshot = BuildVersion("host", "1.7.0", "a" * 40, "1.7.0")
+    (repo / "build.version.json").write_text(snapshot.to_json(), encoding="utf-8")
+    (repo / "release").mkdir()
+    for suffix in ("Setup.exe", "Portable.zip"):
+        (repo / "release" / f"HomeworkHelper_v1.7.0_{suffix}").write_bytes(suffix.encode())
+
+    stubs = r'''
+function Git-Checked($Arguments) {
+    switch ($Arguments[0]) {
+        'status' { return '' }
+        'rev-parse' { return $Commit }
+        'remote' { return 'https://github.com/fixture/repo.git' }
+        'ls-remote' {
+            $Target = if ($global:Scenario -eq 'wrong-tag') { 'b' * 40 } else { $Commit }
+            return "$Target`trefs/tags/H/v1.7.0"
+        }
+        default { throw 'existing packages must not trigger a source checkout' }
+    }
+}
+function Get-AuthenticodeSignature { return @{Status='Valid'} }
+function Invoke-Probe($Kind, $Portable) {
+    if ($Kind -eq 'release') { return @{setup=(Join-Path $Repo 'release/HomeworkHelper_v1.7.0_Setup.exe');portable=(Join-Path $Repo 'release/HomeworkHelper_v1.7.0_Portable.zip')} }
+    if ($Kind -eq 'payload') { return @{} }
+    throw 'existing packages must not trigger a rebuild'
+}
+function gh {
+    $global:LASTEXITCODE = 0
+    if ($args[1] -eq 'view') {
+        $Digest = (Get-FileHash (Join-Path $Repo 'release/HomeworkHelper_v1.7.0_Setup.exe')).Hash.ToLowerInvariant()
+        if ($global:Scenario -eq 'wrong-digest') { $Digest = '0' * 64 }
+        return @{isDraft=$true;tagName=$ReleaseTag;assets=@(@{name='HomeworkHelper_v1.7.0_Setup.exe';state='uploaded';digest=('sha256:'+$Digest)})} | ConvertTo-Json -Depth 6
+    }
+    if ($args[1] -ne 'upload' -or $args -contains '--clobber') { throw 'unexpected mutation' }
+    $global:Uploads = @($args | Where-Object {$_ -match '\.(zip|exe)\z'} | ForEach-Object {[IO.Path]::GetFileName($_)})
+}
+'''
+    source = (ops.ROOT / "tools/windows_host_operations.ps1").read_text(encoding="utf-8")
+    source = source.replace("switch ($Command) {", stubs + "\nswitch ($Command) {")
+    arguments = {
+        "Command": "release-build", "Repo": str(repo), "Owner": getpass.getuser(),
+        "Commit": snapshot.commit, "Branch": "main", "VersionSnapshot": snapshot.to_json(),
+        "ReleaseRepo": "fixture/repo", "ReleaseTag": snapshot.tag,
+    }
+    invocation = " ".join(f"-{key} {ops.ps_literal(value)}" for key, value in arguments.items())
+    source = (f"$global:Scenario={ops.ps_literal(scenario)}\n$global:Uploads=@()\n$Failure=''\n"
+              "try { & {\n" + source + "\n} " + invocation + " -ExpectedComputer $env:COMPUTERNAME\n"
+              "} catch { $Failure=$_.Exception.Message }\n"
+              "@{uploads=$global:Uploads;failure=$Failure} | ConvertTo-Json -Compress")
+    bootstrap = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))"
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("HH_")}
+    result = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", base64.b64encode(bootstrap.encode("utf-16-le")).decode()],
+                            input=source, text=True, encoding="utf-8", errors="strict", capture_output=True,
+                            timeout=20, env=environment, check=True)
+    trace = json.loads(result.stdout.strip().splitlines()[-1])
+    if scenario == "match":
+        assert trace == {"uploads": ["HomeworkHelper_v1.7.0_Portable.zip"], "failure": ""}
+    elif scenario == "wrong-digest":
+        assert trace["uploads"] == [] and "기존 초안 자산이 원본과 다릅니다" in trace["failure"]
+    else:
+        assert trace["uploads"] == [] and "릴리즈 태그와 빌드 커밋이 다릅니다" in trace["failure"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Actual Windows PowerShell required")
 @pytest.mark.parametrize("failure,expected", [
-    ("dirty", []), ("source", []), ("release", ["release"]), ("signature", ["release"]),
+    ("dirty", []), ("source", []), ("snapshot", []), ("release", ["release"]), ("signature", ["release"]),
     ("payload", ["release", "payload"]), ("preflight", ["release", "payload", "preflight"]),
     ("backup", ["release", "payload", "preflight", "backup"]),
     ("quit", ["release", "payload", "preflight", "backup", "preflight", "quit"]),
@@ -334,7 +447,10 @@ def test_windows_install_stops_before_mutation_on_preparation_failure(tmp_path, 
     python = repo / ".venv/Scripts/python.exe"
     python.parent.mkdir(parents=True)
     python.touch()
-    (repo / "build.version.json").write_text('{"targets":{"windows-host":{"version":"1.0.0","build":1}}}')
+    commit = "a" * 40
+    version = BuildVersion("host", "1.6.0", commit, "1.6.0")
+    stale = BuildVersion("host", "1.6.1", commit, "1.6.1")
+    (repo / "build.version.json").write_text((stale if failure == "snapshot" else version).to_json(), encoding="utf-8")
     archived_release = "v1.0.0_b1_gabc1234"
     if failure in {"archive-ok", "archive-duplicate"}:
         for folder in (["one", "two"] if failure == "archive-duplicate" else ["one"]):
@@ -348,14 +464,14 @@ def test_windows_install_stops_before_mutation_on_preparation_failure(tmp_path, 
     stubs = r'''
 function Git-Checked($Arguments) {
  if ($Arguments[0] -eq 'status') {if ($global:Failure -in @('dirty','archive-ok')) {return 'M changed'}; return ''}
- if ($global:Failure -eq 'source') {return 'other'}; return 'commit'
+ if ($global:Failure -eq 'source') {return 'other'}; return $Commit
 }
 function Require-InstallTime {}
 function Get-AuthenticodeSignature {if ($global:Failure -eq 'signature') {return @{Status='NotSigned'}}; return @{Status='Valid'}}
 function Invoke-Probe($Kind,$Portable) {
  $global:Events.Add($Kind)
  if ($Kind -eq $global:Failure) {throw ('expected '+$Kind+' failure')}
- if ($Kind -eq 'release') {return @{release_id='v1.0.0_b1_gabc1234'}}
+ if ($Kind -eq 'release') {return @{release_id='v1.6.0';setup='test_Setup.exe';portable='test_Portable.zip'}}
  if ($Kind -eq 'payload') {return @{'homework_helper.exe'='expected';'homework_helper_service.exe'='expected'}}
  if ($Kind -eq 'backup') {return @{backup='fixture'}}
  $Processes=@()
@@ -377,10 +493,11 @@ function Start-UserApp {$global:Events.Add('start')}
 function Invoke-RestMethod {return @{ok=$true;db_ready=$true;database_access=@{mode='normal'}}}
 '''
     source = source.replace("switch ($Command) {", stubs + "\nswitch ($Command) {")
-    text = "$global:Events=[Collections.Generic.List[string]]::new()\n$global:Failed=$false\n$global:Failure=" + ops.ps_literal(failure) + "\ntry {\n& {\n" + source + "\n} -Command install -Repo " + ops.ps_literal(str(repo)) + " -Owner " + ops.ps_literal(getpass.getuser()) + " -ExpectedComputer $env:COMPUTERNAME -Commit commit\n} catch { $global:Failed=$true }\n@{events=@($global:Events.ToArray());failed=$global:Failed} | ConvertTo-Json -Compress"
+    arguments = ["-Commit " + ops.ps_literal(commit), "-VersionSnapshot " + ops.ps_literal(version.to_json())]
     if failure.startswith("archive-"):
         selected = "../invalid" if failure == "archive-invalid" else archived_release
-        text = text.replace(" -Commit commit\n}", " -Commit commit -ArchivedRelease " + ops.ps_literal(selected) + "\n}")
+        arguments.append("-ArchivedRelease " + ops.ps_literal(selected))
+    text = "$global:Events=[Collections.Generic.List[string]]::new()\n$global:Failed=$false\n$global:Failure=" + ops.ps_literal(failure) + "\ntry {\n& {\n" + source + "\n} -Command install -Repo " + ops.ps_literal(str(repo)) + " -Owner " + ops.ps_literal(getpass.getuser()) + " -ExpectedComputer $env:COMPUTERNAME " + " ".join(arguments) + "\n} catch { $global:Failed=$true }\n@{events=@($global:Events.ToArray());failed=$global:Failed} | ConvertTo-Json -Compress"
     bootstrap = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))"
     environment = {key: value for key, value in os.environ.items() if not key.startswith("HH_")}
     result = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", base64.b64encode(bootstrap.encode("utf-16-le")).decode()],
