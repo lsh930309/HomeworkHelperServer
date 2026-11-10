@@ -8,6 +8,7 @@
 | 도구 | 책임과 실행 경계 |
 |---|---|
 | `tools/host_operations.py` | SSH로 읽기 전용 상태 수집, 공개 소스 준비, Windows 빌드·설치, 격리 운영 도구 검사, 요청받은 데스크톱 관찰 |
+| `tools/release_pr.py` | 맥에서 검토한 PR 병합, 정식 버전 배정과 패키지 포함 GitHub Release 게시 |
 | `tools/windows_host_operations.ps1` | 고정 Windows 절차. 임의 PowerShell 명령을 사용자 입력으로 받지 않음 |
 | `tools/windows_host_probe.py` | 읽기 전용 DB·API·프로세스/토큰·OBS 상태·payload 조회. 명시적 backup만 기존 writer, build만 `build.py` 호출 |
 | `tools/windows_session_probe.py` | 일회성 InteractiveToken에서 비활성 데스크톱 관찰 또는 설치에 필요한 OBS 정상 종료. SYSTEM 토큰 복제·강제 종료 없음 |
@@ -97,7 +98,7 @@ MagicDNS가 tailnet에서 켜져 있어도 Mac의 `Use Tailscale DNS settings`�
 다른 checkout·Temp 저장소를 만들거나 대체 경로로 자동 전환하지 않는다. 기존 저장소 또는 `.venv`가
 없으면 중단하여 원인을 확인한다. 설치 폴더 `C:\Program Files\HomeworkHelper`와 구분한다.
 
-`build.py`는 이 저장소에서 실행하며 로컬 `build.version.json`, 최종 `release/`와
+`build.py`는 이 저장소에서 실행하며 맥이 전달한 `build.version.json`, 최종 `release/`와
 `release/archives/`를 계속 사용한다. 작업 저장소를 이전할 때는 기존 변경·로컬 Git 이력·버전·패키지·
 사용자 설정·서명을 먼저 확인하고 보존한다. 같은 상대 경로의 파일은 내용이 같을 때만 합치며 다른
 내용을 조용히 덮어쓰지 않는다. 이전 자료의 검증 완료 후에만 폐기 저장소를 제거한다.
@@ -269,11 +270,11 @@ native 검수가 실패하면 원격 fixture 디렉터리도 보존한다. 실�
 
 로컬의 깨끗한 브랜치 HEAD와 실제 `origin` 브랜치의 공개 HEAD가 같아야 한다. `prepare-source`는
 고정 Windows 저장소에서 같은 브랜치를 fetch하고 `FETCH_HEAD`가 대상 커밋과 같은지 확인한 뒤
-`checkout --detach <커밋>`으로 이동한다. 단순 pull·merge로 바꾸지 않고 기존 변경을 덮어쓰지 않는다.
+`checkout --detach <커밋>`으로 이동한다. 맥에서 확정한 버전과 전체 소스 SHA를 `build.version.json`에
+동기화하고 Windows에서 현재 checkout과 대조한다. 단순 pull·merge로 바꾸지 않고 기존 변경을 덮어쓰지 않는다.
 자동 push나 Git bundle 예외는 선택하지 않는다. build/install도 공개 소스·Windows HEAD 일치를 확인한다.
 `--commit`은 현재 HEAD를 명시할 때 사용하며 다른 커밋을 조용히 배포하지 않는다.
-install의 release ID는 Windows의 `build.py` 버전 계산을 그대로 사용한다. 운영 도구가 파일명이나
-Git 축약 길이를 따로 계산하지 않으므로 `core.abbrev` 설정이 달라도 같은 패키지를 선택한다.
+install은 동일한 빌드 버전과 SHA를 확인하고 `build.py`가 정한 패키지 이름을 사용한다.
 
 사용자가 이전 설치본으로 복귀를 요청하면 `install --archived-release <정확한 릴리스 ID>`를 사용한다.
 고정 저장소의 `release/archives/windows-host/`에서 같은 ID의 Setup·Portable이 각각 하나여야 하며,
@@ -283,7 +284,7 @@ Git 축약 길이를 따로 계산하지 않으므로 `core.abbrev` 설정이 �
 낮추지 않으며, 설치 버전은 선택한 Portable의 payload와 실제 설치 파일을 대조해 판정한다.
 보호 시간 예외 승인과 게임·녹화 중단 조건은 일반 설치와 같다.
 
-build는 Windows의 `build.py --no-gui --no-prune-archives`를 호출한다. `--bump`는 기존 옵션을 전달한다.
+build는 Windows의 `build.py --no-prune-archives`를 호출한다.
 기존 설치본의 유효한 서명 인증서·개인키를 사용하며 재발급·개인키 복사·수동 서명은 하지 않는다.
 Windows checkout의 `artifacts/host-operations-build.log`에 전체 출력을 남긴다.
 
@@ -300,6 +301,40 @@ install은 release·서명/payload·DB·게임·OBS 출력·지정 사용자 세
 macOS 패키지는 해당 Mac의 build.py로 준비한다. 설치 관리자 인증은 사용자가 입력한다.
 이 Windows 도구는 Mac Keychain·인증·앱 재시작을 조작하지 않는다.
 소스 공개·패키지 빌드·설치·API/로그 확인·사용자 실사용 검수 결과를 구분한다.
+
+## 맥에서 PR 병합과 릴리즈
+
+두 제품의 패키징 전환을 마친 뒤, 깨끗한 맥 `main`과 GitHub `main`이 가리키는 동일한 커밋에서
+아래 명령으로 `H/v1.6.0`과 `C/v1.0.0`을 함께 등록한다. 최초에는 `--dry-run`으로 태그와 커밋을 확인한다.
+시작 태그를 만드는 실행에는 두 시작 태그가 함께 등록된다.
+
+```bash
+python tools/release_pr.py bootstrap --commit '<main 전체 SHA>' --dry-run
+```
+
+그 이후 맥 `main`에서 검토한 PR의 전체 head SHA와
+[규칙에 맞는 병합 메시지](../development/commit-message-policy.md)를 명시한다. 호스트 PR에는 기존 SSH 대상과 인증 옵션을 추가한다.
+
+```bash
+python tools/release_pr.py merge 123 --head '<검토한 PR의 전체 SHA>' \
+  --message-file '<병합 메시지 파일>' --host '<Windows 호스트>' --user '<SSH 사용자>'
+```
+
+`merge --dry-run`은 GitHub와 소스 입력을 조회하고 제품과 버전업 유형을 표시한다.
+사용자에게 메이저 승인을 받은 PR만 `--approved-major`를 지정한다. GitHub 웹의 병합과 일반 `gh pr merge`는 이 흐름의 시작점이 아니다.
+병합 직전에는 PR이 변경한 제품과 커밋을 확인하고, 병합 뒤에는 GitHub `main`에 반영된 실제 변경을 확인한다.
+제품 패키지 변경이 있는 마이너·메이저만 제품 태그를 등록하고 PR 제목·본문을 바탕으로 릴리즈를 작성한다.
+릴리즈 설명에 인용되는 PR 본문에는 게시해도 되는 내용만 남긴다. `main`에 직접 반영한 패치 버전은 로컬 버전 기록에 남는다.
+
+호스트는 기존 SSH 경로로 고정 Windows 작업 저장소에서 빌드하고 Setup EXE와 Portable ZIP을 그 위치에서 첨부한다.
+클라이언트 PKG는 맥에서 빌드하고 첨부한다. 맥과 Windows는 각각 해당 저장소에 쓸 수 있는 기존 `gh` 로그인을 사용한다.
+필수 패키지의 파일명과 SHA-256을 GitHub 응답과 대조한 뒤 draft를 공개한다. 게시와 앱 설치는 별도 작업이다.
+
+병합 뒤 빌드나 게시가 실패하면 같은 PR 번호와 검토한 head SHA로 명령을 다시 실행한다.
+병합 커밋과 버전은 그대로 사용한다. 초안에 이미 있는 패키지는 빌드 환경의 같은 버전 파일과 SHA-256이 같을 때 재사용한다.
+로컬 파일을 찾을 수 없거나 SHA-256이 다르면 기존 첨부를 보존하고 중단하므로, 원래 패키지를 확인한 뒤 재개한다.
+맥 `main`이 클라이언트의 릴리즈 커밋보다 앞서 간 경우에는
+릴리즈 커밋을 가리키는 깨끗한 detached checkout에서 재개한다.
 
 ## 관련 검증 선택
 

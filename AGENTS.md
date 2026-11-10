@@ -110,3 +110,4 @@
 - 커밋 전에는 `.githooks/commit-msg` 또는 `tools/validate_commit_message.py` 검증을 통과해야 한다.
 
 권장 형식은 `docs/development/commit-message-policy.md`와 `.gitmessage`를 따른다.
+제품에 영향을 주는 커밋과 브랜치 분리는 [제품 단위 커밋 규칙](docs/development/commit-message-policy.md#제품-단위-커밋-규칙)을 따른다.

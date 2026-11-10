@@ -66,6 +66,9 @@ VERSION_SCHEMA = 1
 VERSION_BUMP_CHOICES = ("none", "build", "patch", "minor", "major")
 DEFAULT_VERSION_BUMP = "build"
 VERSION_PATTERN = re.compile(r'v(\d+)\.(\d+)\.(\d+)_b(\d+)_g([0-9a-fA-F]+|unknown)(?:_dirty)?')
+WINDOWS_PACKAGE_NAME = re.compile(
+    r"HomeworkHelper_(?:v[0-9]+\.[0-9]+\.[0-9]+|dev\.[1-9][0-9]*)_(?:Setup\.exe|Portable\.zip)"
+)
 WINDOWS_PYTHON_VERSION = (3, 14)
 WINDOWS_REQUIRED_DISTRIBUTIONS = (
     "PySide6",
@@ -372,6 +375,42 @@ def target_release_tag(version_info: dict) -> str:
 def release_filename(prefix: str, version_info: dict, suffix: str, extension: str) -> str:
     suffix_part = f"_{suffix}" if suffix else ""
     return f"{prefix}_{version_info['string']}{suffix_part}.{extension}"
+
+
+def load_windows_version_info(repo: Path | None = None) -> dict:
+    """Read the Mac-issued version of this exact, clean Windows checkout."""
+    from tools.version_policy import VersionPolicyError, read_snapshot
+
+    repo = PROJECT_ROOT if repo is None else repo
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, capture_output=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=repo, check=True, text=True, capture_output=True,
+        ).stdout
+        if status.strip():
+            raise BuildConfigError("Windows 작업 checkout에 변경 사항이 있습니다.")
+        snapshot = read_snapshot(repo / VERSION_CONFIG_FILE.name, product="host", commit=commit)
+    except (OSError, ValueError, subprocess.SubprocessError, VersionPolicyError) as exc:
+        raise BuildConfigError(f"Windows 빌드 버전 확인 실패. 맥에서 먼저 소스를 준비하세요. {exc}") from exc
+
+    return {
+        "target": "windows-host",
+        "version": snapshot.version,
+        "string": snapshot.version if snapshot.version.startswith("dev.") else f"v{snapshot.version}",
+        "git_hash": snapshot.commit,
+        "dirty": False,
+        "jobs": determine_parallel_jobs(),
+    }
+
+
+def windows_package_paths(version_info: dict, release_dir: Path | None = None) -> tuple[Path, Path]:
+    release_dir = RELEASE_DIR if release_dir is None else release_dir
+    return (
+        release_dir / release_filename("HomeworkHelper", version_info, "Setup", "exe"),
+        release_dir / release_filename("HomeworkHelper", version_info, "Portable", "zip"),
+    )
 
 
 def sha256_file(path: Path) -> str:
@@ -1159,7 +1198,7 @@ def prune_archive_files(gui, *, keep: int = 10, days: int = 90):
 
 
 def archive_old_files(gui, _new_version, *, archive_keep: int = 10, archive_days: int = 90, prune_archives: bool = True):
-    """이전 release 루트 산출물을 target/type/date별 archives 폴더로 이동."""
+    """이전 산출물을 보관하고 새 Windows 버전은 이름당 한 경로를 유지한다."""
     gui.log_section("이전 버전 파일 아카이빙")
     gui.set_status("이전 버전 파일 아카이빙 중...")
     gui.set_progress(5)
@@ -1179,13 +1218,17 @@ def archive_old_files(gui, _new_version, *, archive_keep: int = 10, archive_days
         if bucket is None:
             continue
         target, artifact_type = bucket
-        archive_subdir = ARCHIVES_DIR / target / artifact_type / date_folder
+        slot = "by-version" if WINDOWS_PACKAGE_NAME.fullmatch(file_path.name) else date_folder
+        archive_subdir = ARCHIVES_DIR / target / artifact_type / slot
 
         archive_subdir.mkdir(parents=True, exist_ok=True)
         dest = archive_subdir / file_path.name
-        shutil.move(str(file_path), str(dest))
+        if slot == "by-version":
+            file_path.replace(dest)
+        else:
+            shutil.move(str(file_path), str(dest))
         archived_count += 1
-        gui.log(f"  ✓ {file_path.name} → archives/{target}/{artifact_type}/{date_folder}/")
+        gui.log(f"  ✓ {file_path.name} → archives/{target}/{artifact_type}/{slot}/")
 
     gui.log(f"\n총 {archived_count}개 파일 아카이빙 완료", 'success')
     if prune_archives:
@@ -1930,19 +1973,23 @@ def run_windows_build(gui, version_info) -> int:
         gui.log("\n✗ 코드 서명 실패로 빌드를 중단합니다.", 'error')
         return 0
 
-    success_count = 0
-    if create_zip_distribution(gui, version_info):
-        success_count += 1
-
-    if create_installer(gui, version_info):
-        success_count += 1
-        setup_files = list(RELEASE_DIR.glob(f"*{version_info['string']}*Setup*.exe"))
-        if setup_files:
-            gui.set_progress(96)
-            if not sign_build_artifacts(gui, version_info, target_files=setup_files):
-                gui.log("\n✗ 인스톨러 코드 서명 실패로 빌드를 중단합니다.", 'error')
-                return 0
-    return success_count
+    setup, portable = windows_package_paths(version_info)
+    complete = False
+    try:
+        if not create_zip_distribution(gui, version_info) or not portable.is_file():
+            return 0
+        if not create_installer(gui, version_info) or not setup.is_file():
+            return 0
+        gui.set_progress(96)
+        if not sign_build_artifacts(gui, version_info, target_files=[setup]):
+            gui.log("\n✗ 인스톨러 코드 서명 실패로 빌드를 중단합니다.", 'error')
+            return 0
+        complete = True
+        return 2
+    finally:
+        if not complete:
+            for path in (setup, portable):
+                path.unlink(missing_ok=True)
 
 
 def run_macos_build(gui, version_info) -> int:
@@ -2137,13 +2184,12 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument(
         "--version-file",
         type=Path,
-        default=VERSION_CONFIG_FILE,
-        help="환경별 버전 정보를 담은 JSON 파일 경로입니다.",
+        help="macOS 기존 버전 파일 경로입니다.",
     )
     parser.add_argument(
         "--no-gui",
         action="store_true",
-        help="tkinter GUI 대신 콘솔 진행 로그를 사용합니다.",
+        help="macOS 기존 빌드를 콘솔 모드로 실행합니다.",
     )
     parser.add_argument(
         "--deep-clean",
@@ -2153,8 +2199,7 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument(
         "--bump",
         choices=VERSION_BUMP_CHOICES,
-        default=DEFAULT_VERSION_BUMP,
-        help="빌드 성공 시 저장할 후보 버전 증가 방식입니다. 기본값은 build입니다.",
+        help="macOS 기존 후보 버전 증가 방식입니다. 기본값은 build입니다.",
     )
     parser.add_argument(
         "--archive-keep",
@@ -2176,14 +2221,17 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument(
         "--publish-release",
         action="store_true",
-        help="빌드 성공 후 조건이 맞으면 Git 태그와 GitHub Release를 best-effort로 게시합니다.",
+        help="macOS 기존 빌드의 릴리스 게시 옵션입니다.",
     )
     return parser.parse_args(argv)
 
 
 def validate_target_inputs(target: str):
-    if target == "windows-host" and not SPEC_FILE.exists():
-        raise BuildConfigError(f"{SPEC_FILE.name} 파일을 찾을 수 없습니다.")
+    if target == "windows-host":
+        if platform.system() != "Windows":
+            raise BuildConfigError("windows-host 빌드는 Windows 환경에서만 실행할 수 있습니다.")
+        if not SPEC_FILE.exists():
+            raise BuildConfigError(f"{SPEC_FILE.name} 파일을 찾을 수 없습니다.")
     if target == "macos-client" and platform.system() != "Darwin":
         raise BuildConfigError("macos-client 빌드는 macOS 환경에서만 실행할 수 있습니다.")
 
@@ -2228,38 +2276,40 @@ def main(argv: list[str] | None = None):
     configure_console_output()
     effective_argv = list(sys.argv[1:] if argv is None else argv)
     args = parse_args(effective_argv)
-    try:
-        delegated_exit = bootstrap_windows_build_runtime(effective_argv)
-    except BuildConfigError as exc:
-        print(f"[오류] {exc}")
-        return 1
-    if delegated_exit is not None:
-        return delegated_exit
-    # 커스텀 폰트 로딩
+    candidate_config = None
+    version_file = args.version_file or VERSION_CONFIG_FILE
     try:
         target = args.target or select_build_target()
         validate_target_inputs(target)
         if target == "windows-host":
+            if args.version_file or args.bump or args.no_gui or args.publish_release:
+                raise BuildConfigError("Windows 빌드는 동기화된 버전을 사용합니다. 기존 버전, GUI 및 게시 옵션을 빼고 실행하세요.")
+            version_info = load_windows_version_info()
+            delegated_exit = bootstrap_windows_build_runtime(effective_argv)
+            if delegated_exit is not None:
+                return delegated_exit
             validate_windows_build_runtime()
-        version_config = load_version_config(args.version_file)
-        candidate_config = create_candidate_version_config(
-            target,
-            version_config,
-            bump=args.bump,
-            no_gui=args.no_gui,
-        )
-        if candidate_config is None:
-            print("[중단] 버전 선택이 취소되었습니다.")
-            return 1
-        version_info = make_version_info(target, candidate_config)
+        else:
+            version_config = load_version_config(version_file)
+            candidate_config = create_candidate_version_config(
+                target,
+                version_config,
+                bump=args.bump or DEFAULT_VERSION_BUMP,
+                no_gui=args.no_gui,
+            )
+            if candidate_config is None:
+                print("[중단] 버전 선택이 취소되었습니다.")
+                return 1
+            version_info = make_version_info(target, candidate_config)
     except BuildConfigError as exc:
         print(f"[오류] {exc}")
         return 1
 
-    build_gui, has_gui = create_progress_ui(version_info, no_gui=args.no_gui)
+    no_gui = target == "windows-host" or args.no_gui
+    build_gui, has_gui = create_progress_ui(version_info, no_gui=no_gui)
     build_gui.log_section("빌드 설정")
     build_gui.log(f"타깃: {version_info['target']}")
-    build_gui.log(f"버전: {version_info['version']} (build {version_info['build']})")
+    build_gui.log(f"버전: {version_info['version']}")
     build_gui.log(f"릴리스 ID: {version_info['string']}")
     build_gui.log(f"병렬 작업 수: {version_info['jobs']}")
     if version_info["dirty"]:
@@ -2268,14 +2318,14 @@ def main(argv: list[str] | None = None):
     build_thread = run_build_process(
         build_gui,
         version_info,
-        version_config_path=args.version_file,
+        version_config_path=version_file,
         candidate_config=candidate_config,
         publish_release=args.publish_release,
         archive_keep=args.archive_keep,
         archive_days=args.archive_days,
         prune_archives=not args.no_prune_archives,
         deep_clean=args.deep_clean,
-        open_output_folder=not args.no_gui,
+        open_output_folder=not no_gui,
     )
 
     if has_gui:

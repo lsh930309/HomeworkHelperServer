@@ -25,6 +25,8 @@ env/
 **/.env
 **/server/.env
 build.version.json
+version.ledger.json
+version.ledger.lock
 SmartThings_Token
 .codeboarding
 

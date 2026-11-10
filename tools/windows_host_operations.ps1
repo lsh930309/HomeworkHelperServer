@@ -1,7 +1,8 @@
 param(
-    [ValidateSet('inspect','logs','prepare-source','build','install','desktop','verify','media-qa')][string]$Command,
+    [ValidateSet('inspect','logs','prepare-source','build','release-build','install','desktop','verify','media-qa')][string]$Command,
     [string]$Repo, [string]$Owner, [string]$ExpectedComputer,
-    [string]$Commit, [string]$Branch, [string]$Bump, [string]$ArchivedRelease,
+    [string]$Commit, [string]$Branch, [string]$VersionSnapshot, [string]$ArchivedRelease,
+    [string]$ReleaseTag, [string]$ReleaseRepo,
     [string]$ProbeSource, [string]$SessionSource, [string]$VerifySource,
     [int]$LogLines = 80, [string]$Contains = '',
     [int]$Duration = 0, [string]$Scenario = 'observe', [switch]$PrepareRuntime, [switch]$AllowProtectedTime
@@ -16,6 +17,7 @@ $Sid = ([Security.Principal.NTAccount]::new($env:COMPUTERNAME,$Owner)).Translate
 $Profile = (Get-ItemProperty ('HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\'+$Sid)).ProfileImagePath
 $AppData = Join-Path ([Environment]::ExpandEnvironmentVariables($Profile)) 'AppData\Roaming'
 $Python = Join-Path $Repo '.venv\Scripts\python.exe'
+$VersionFile = Join-Path $Repo 'build.version.json'
 if (!(Test-Path $Python)) { throw 'Windows 작업 checkout의 Python 환경이 없습니다' }
 Set-Location $Repo
 
@@ -36,6 +38,98 @@ function Require-Source {
     $Head = Git-Checked @('rev-parse','HEAD')
     if ($Head -ne $Commit) { throw 'Windows 소스 커밋 불일치' }
 }
+function Read-RequestedVersion {
+    if (!$VersionSnapshot) { throw '맥에서 확정한 호스트 빌드 버전이 없습니다' }
+    $Version = $VersionSnapshot | ConvertFrom-Json
+    if ($Version.product -cne 'host' -or $Version.commit -cne $Commit -or !$Version.version -or !$Version.base_version) {
+        throw '맥에서 확정한 호스트 버전 또는 소스 커밋 불일치'
+    }
+    return $Version
+}
+function Require-SyncedVersion {
+    $Version = Read-RequestedVersion
+    if (!(Test-Path -LiteralPath $VersionFile -PathType Leaf)) { throw '맥에서 먼저 Windows 소스를 준비하세요' }
+    $Saved = Get-Content -LiteralPath $VersionFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($Saved.product -cne $Version.product -or $Saved.commit -cne $Version.commit -or
+        $Saved.version -cne $Version.version -or $Saved.base_version -cne $Version.base_version) {
+        throw 'Windows 빌드 버전이 맥의 버전과 다릅니다. 소스를 다시 준비하세요'
+    }
+}
+function Prepare-PublishedSource([switch]$ReleaseBuild) {
+    if ((Git-Checked @('status','--porcelain'))) { throw 'Windows 작업 checkout에 변경 사항이 있습니다' }
+    $null = Read-RequestedVersion
+    $null = Git-Checked @('fetch','origin',('refs/heads/'+$Branch))
+    if ($ReleaseBuild) {
+        if ($Branch -cne 'main' -or (Git-Checked @('rev-list','--first-parent','FETCH_HEAD')).Split("`n") -cnotcontains $Commit) {
+            throw '릴리즈 커밋이 공개 main 이력에 없습니다'
+        }
+    } elseif ((Git-Checked @('rev-parse','FETCH_HEAD')) -cne $Commit) {
+        throw 'Windows origin에서 가져온 커밋이 배포 대상과 다릅니다'
+    }
+    $Temporary = Join-Path $Repo ('.build.version.'+[Guid]::NewGuid().ToString('N')+'.tmp')
+    try {
+        [IO.File]::WriteAllText($Temporary,$VersionSnapshot,[Text.UTF8Encoding]::new($false))
+        if (Test-Path -LiteralPath $VersionFile) {
+            [IO.File]::Replace($Temporary,$VersionFile,[NullString]::Value)
+        } else {
+            [IO.File]::Move($Temporary,$VersionFile)
+        }
+    } finally {
+        if (Test-Path -LiteralPath $Temporary) { Remove-Item -LiteralPath $Temporary -Force }
+    }
+    $null = Git-Checked @('checkout','--detach',$Commit)
+    Require-Source
+}
+function Require-DraftRelease {
+    $Version = Read-RequestedVersion
+    if ($Branch -cne 'main' -or $ReleaseTag -cne ('H/v'+$Version.version) -or
+        $ReleaseTag -cnotmatch '^H/v[0-9]+\.[0-9]+\.0\z' -or
+        $ReleaseRepo -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z') {
+        throw 'Windows 릴리즈 대상, 버전 또는 태그 불일치'
+    }
+    $DraftJson = & gh release view $ReleaseTag --repo ('github.com/'+$ReleaseRepo) --json isDraft,tagName,assets
+    if ($LASTEXITCODE -ne 0) { throw 'Windows에서 GitHub 초안 릴리즈를 확인할 수 없습니다' }
+    $Draft = ($DraftJson -join "`n") | ConvertFrom-Json
+    if ($Draft.isDraft -ne $true -or $Draft.tagName -cne $ReleaseTag) { throw '초안 릴리즈에서만 호스트 패키지를 올릴 수 있습니다' }
+    return $Draft
+}
+function Require-PublishedReleaseTag {
+    $Origin = Git-Checked @('remote','get-url','origin')
+    $Repository = [regex]::Match($Origin,'^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)(?<name>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?\z')
+    if (!$Repository.Success -or $Repository.Groups['name'].Value -ine $ReleaseRepo) {
+        throw 'Windows origin과 GitHub 릴리즈 저장소가 다릅니다'
+    }
+    $Ref = 'refs/tags/'+$ReleaseTag
+    $Peeled = $Ref+'^{}'
+    $DirectCommit = $null
+    $PeeledCommit = $null
+    foreach ($Line in (Git-Checked @('ls-remote','--tags','origin',$Ref,$Peeled)).Split("`n")) {
+        if ($Line -cmatch '^([a-f0-9]{40})\s+(.+)\z') {
+            if ($Matches[2] -ceq $Ref) { $DirectCommit = $Matches[1] }
+            if ($Matches[2] -ceq $Peeled) { $PeeledCommit = $Matches[1] }
+        }
+    }
+    $TagCommit = if ($PeeledCommit) { $PeeledCommit } else { $DirectCommit }
+    if (!$DirectCommit -or $TagCommit -cne $Commit) { throw 'GitHub 릴리즈 태그와 빌드 커밋이 다릅니다' }
+}
+function Invoke-HostBuild {
+    Require-Source
+    Require-SyncedVersion
+    $Signature = Get-AuthenticodeSignature (Join-Path $Install 'homework_helper.exe')
+    if ($Signature.Status -ne 'Valid') { throw '기존 설치본의 서명 인증서를 확인할 수 없습니다' }
+    $env:HH_CERT_THUMBPRINT = $Signature.SignerCertificate.Thumbprint
+    $null = Invoke-Probe 'build'
+    Require-Source
+    Require-SyncedVersion
+}
+function Get-CheckedReleaseFiles {
+    $Files = Invoke-Probe 'release'
+    Require-Source
+    Require-SyncedVersion
+    if ((Get-AuthenticodeSignature -LiteralPath $Files.setup).Status -ne 'Valid') { throw 'Setup 서명 오류' }
+    $null = Invoke-Probe 'payload' $Files.portable
+    return $Files
+}
 function Require-ProductionEnvironment {
     foreach ($Name in @('HH_TEST_APPDATA_DIR','HH_API_PORT','HH_SERVER_MUTEX_NAME','HH_TESTBENCH_SESSION_ID')) {
         if ([Environment]::GetEnvironmentVariable($Name)) { throw '테스트 환경변수가 설정된 셸에서 운영 설치할 수 없습니다' }
@@ -48,9 +142,13 @@ function Require-InstallTime {
 }
 function Invoke-Probe([string]$Kind, [string]$Portable = '') {
     $Code = Decode-Source $ProbeSource
-    $Arguments = @('-', $Kind, '--repo',$Repo,'--appdata',$AppData,'--install',$Install,'--bump',$Bump,'--log-lines',$LogLines)
+    $Arguments = @('-', $Kind, '--repo',$Repo,'--appdata',$AppData,'--install',$Install,'--log-lines',$LogLines)
     if ($Contains) { $Arguments += @('--contains',$Contains) }
     if ($Portable) { $Arguments += @('--portable',$Portable) }
+    if ($Kind -eq 'release') {
+        $Version = Read-RequestedVersion
+        $Arguments += @('--expected-commit',$Version.commit,'--expected-version',$Version.version)
+    }
     $Output = $Code | & $Python @Arguments
     if ($LASTEXITCODE -ne 0) { throw ('Windows 검사 실패: '+$Kind) }
     return ($Output -join "`n") | ConvertFrom-Json
@@ -168,24 +266,51 @@ switch ($Command) {
         $State | Add-Member owner_sid $Sid
         $Service = Get-CimInstance Win32_Service -Filter "Name='HomeworkHelperPrivilege'"
         $State | Add-Member service @{state=$Service.State; account=$Service.StartName; pid=$Service.ProcessId; start_mode=$Service.StartMode}
-        $State | Add-Member build_version (Get-Content 'build.version.json' -Raw | ConvertFrom-Json)
+        $State | Add-Member build_version $(if (Test-Path -LiteralPath $VersionFile) { Get-Content -LiteralPath $VersionFile -Raw -Encoding UTF8 | ConvertFrom-Json })
         $State | ConvertTo-Json -Depth 12
     }
     'prepare-source' {
-        if ((Git-Checked @('status','--porcelain'))) { throw 'Windows 작업 checkout에 변경 사항이 있습니다' }
-        $null = Git-Checked @('fetch','origin',('refs/heads/'+$Branch))
-        if ((Git-Checked @('rev-parse','FETCH_HEAD')) -ne $Commit) { throw 'Windows origin에서 가져온 커밋이 배포 대상과 다릅니다' }
-        $null = Git-Checked @('checkout','--detach',$Commit)
-        Require-Source
-        @{ok=$true; head=$Commit; branch=$Branch} | ConvertTo-Json
+        Prepare-PublishedSource
+        @{ok=$true; head=$Commit; branch=$Branch; version=(Read-RequestedVersion)} | ConvertTo-Json -Depth 5
     }
     'build' {
+        Invoke-HostBuild
+        @{ok=$true; source=$Commit; version=(Read-RequestedVersion); release=(Join-Path $Repo 'release')} | ConvertTo-Json -Depth 5
+    }
+    'release-build' {
+        $Draft = Require-DraftRelease
+        $Files = $null
+        try { $Files = Get-CheckedReleaseFiles } catch {
+            if ($Draft.assets.Count) {
+                throw ('초안의 기존 자산과 대조할 원본 패키지가 없습니다. 원본을 복구하거나 해당 초안의 자산을 직접 정리한 뒤 다시 실행하세요. '+$_.Exception.Message)
+            }
+        }
+        if (!$Files) {
+            Prepare-PublishedSource -ReleaseBuild
+            Invoke-HostBuild
+            $Files = Get-CheckedReleaseFiles
+        }
+        $Draft = Require-DraftRelease
         Require-Source
-        $Signature = Get-AuthenticodeSignature (Join-Path $Install 'homework_helper.exe')
-        if ($Signature.Status -ne 'Valid') { throw '기존 설치본의 서명 인증서를 확인할 수 없습니다' }
-        $env:HH_CERT_THUMBPRINT = $Signature.SignerCertificate.Thumbprint
-        $Build = Invoke-Probe 'build'
-        @{ok=$true; source=$Commit; version=(Get-Content 'build.version.json' -Raw | ConvertFrom-Json); release=(Join-Path $Repo 'release')} | ConvertTo-Json -Depth 5
+        Require-SyncedVersion
+        $Assets = @{}
+        $Pending = @()
+        foreach ($File in @($Files.setup,$Files.portable)) {
+            $Name = [IO.Path]::GetFileName($File)
+            $Digest = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash.ToLowerInvariant()
+            $Assets[$Name] = $Digest
+            $Existing = @($Draft.assets | Where-Object {$_.name -ceq $Name})
+            if (!$Existing.Count) { $Pending += $File }
+            elseif ($Existing.Count -ne 1 -or $Existing[0].state -cne 'uploaded' -or $Existing[0].digest -cne ('sha256:'+$Digest)) {
+                throw ('기존 초안 자산이 원본과 다릅니다. 해당 초안의 자산을 직접 정리한 뒤 다시 실행하세요. '+$Name)
+            }
+        }
+        if ($Pending.Count) {
+            Require-PublishedReleaseTag
+            $null = & gh release upload $ReleaseTag @Pending --repo ('github.com/'+$ReleaseRepo)
+            if ($LASTEXITCODE -ne 0) { throw 'Windows 패키지 업로드 실패' }
+        }
+        @{ok=$true; source=$Commit; version=(Read-RequestedVersion); assets=$Assets} | ConvertTo-Json -Depth 5
     }
     'desktop' {
         $Result = Invoke-Session 'desktop' (Service-Status)
@@ -202,11 +327,11 @@ switch ($Command) {
         $Result | ConvertTo-Json -Depth 20
     }
     'install' {
-        if (!$ArchivedRelease) { Require-Source }
+        if (!$ArchivedRelease) { Require-Source; Require-SyncedVersion }
         Require-ProductionEnvironment
         Require-InstallTime
         if ($ArchivedRelease) {
-            if ($ArchivedRelease -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+_b[1-9][0-9]*_g[0-9a-f]{4,40}$') { throw '보관 릴리스 ID 형식 오류' }
+            if ($ArchivedRelease -cnotmatch '^(?:v[0-9]+\.[0-9]+\.[0-9]+(?:_b[1-9][0-9]*_g[0-9a-f]{4,40})?|dev\.[1-9][0-9]*)\z') { throw '보관 릴리스 ID 형식 오류' }
             $Release = $ArchivedRelease
             $Archive = Join-Path $Repo 'release\archives\windows-host'
             $Setups = @(Get-ChildItem $Archive -File -Recurse -Filter ('HomeworkHelper_'+$Release+'_Setup.exe'))
@@ -215,9 +340,12 @@ switch ($Command) {
             $Setup = $Setups[0].FullName
             $Portable = $Portables[0].FullName
         } else {
-            $Release = (Invoke-Probe 'release').release_id
-            $Setup = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Setup.exe')
-            $Portable = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Portable.zip')
+            $Files = Invoke-Probe 'release'
+            $Release = $Files.release_id
+            $Setup = $Files.setup
+            $Portable = $Files.portable
+            Require-Source
+            Require-SyncedVersion
         }
         if ((Get-AuthenticodeSignature $Setup).Status -ne 'Valid') { throw 'Setup 서명 오류' }
         $Expected = Invoke-Probe 'payload' $Portable

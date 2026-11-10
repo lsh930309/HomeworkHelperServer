@@ -180,7 +180,8 @@ def main(argv=None) -> int:
     p.add_argument("--appdata", type=Path, required=True)
     p.add_argument("--install", type=Path, required=True)
     p.add_argument("--portable", type=Path)
-    p.add_argument("--bump", choices=("build", "patch", "minor", "major", "none"), default="build")
+    p.add_argument("--expected-commit")
+    p.add_argument("--expected-version")
     p.add_argument("--log-lines", type=int, default=80)
     p.add_argument("--contains", default="")
     args = p.parse_args(argv)
@@ -190,9 +191,13 @@ def main(argv=None) -> int:
     elif args.command == "release":
         # Package identity has the same owner as package creation; do not rebuild its naming rules here.
         sys.path.insert(0, str(args.repo))
-        from build import load_version_config, make_version_info
-        version = make_version_info("windows-host", load_version_config(args.repo / "build.version.json"))
-        result = {"release_id": version["string"]}
+        from build import load_windows_version_info, windows_package_paths
+        version = load_windows_version_info(args.repo)
+        if (args.expected_commit is not None or args.expected_version is not None) and (
+                version["git_hash"], version["version"]) != (args.expected_commit, args.expected_version):
+            raise ValueError("Windows 패키지 선택의 요청 커밋 또는 버전과 다릅니다.")
+        setup, portable = windows_package_paths(version, args.repo / "release")
+        result = {"release_id": version["string"], "setup": str(setup), "portable": str(portable)}
     elif args.command == "prepare-runtime":
         import subprocess
         log = args.repo / "artifacts/media-qa-requirements.log"
@@ -206,7 +211,7 @@ def main(argv=None) -> int:
         log = args.repo / "artifacts/host-operations-build.log"
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("wb") as stream:
-            subprocess.run([sys.executable, "build.py", "--no-gui", "--no-prune-archives", "--bump", args.bump],
+            subprocess.run([sys.executable, "build.py", "--no-prune-archives"],
                            cwd=args.repo, stdout=stream, stderr=subprocess.STDOUT, check=True)
         result = {"build_log": str(log)}
     elif args.command == "payload":
