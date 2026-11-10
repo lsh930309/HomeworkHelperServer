@@ -177,24 +177,9 @@ def _build_sections(repo: Path, tree: str) -> list[tuple[str, str, str]] | None:
     sections = []
     for node in nodes:
         scope, name = _build_definition_scope(node)
-        if scope != "archive":
-            body = ast.dump(node)
-            sections.append((scope, name or body, body))
+        body = ast.dump(node)
+        sections.append((scope, name or body, body))
     return sections
-
-
-def _scope_positions(
-    sections: list[tuple[str, str, str]], common: set[tuple[str, str]],
-) -> dict[tuple[str, str], list[set[tuple[str, str]]]]:
-    """Keep the relative order of surviving definitions across scope boundaries."""
-    positions: dict[tuple[str, str], list[set[tuple[str, str]]]] = {}
-    earlier: set[tuple[str, str]] = set()
-    for scope, name, _ in sections:
-        key = (scope, name)
-        if key in common:
-            positions.setdefault(key, []).append({other for other in earlier if other[0] != scope})
-            earlier.add(key)
-    return positions
 
 
 def _build_products(
@@ -204,10 +189,15 @@ def _build_products(
         return set(START_VERSIONS)
     if left == right:
         return set()
+    left_order = [(scope, name) for scope, name, _ in left]
+    right_order = [(scope, name) for scope, name, _ in right]
+    common = set(left_order) & set(right_order)
+    # All surviving definitions take part in module evaluation, including archive helpers.
+    if [key for key in left_order if key in common] != [key for key in right_order if key in common]:
+        return set(START_VERSIONS)
     left_bodies = {scope: [body for owner, _, body in left if scope == owner] for scope in (*START_VERSIONS, "shared")}
     right_bodies = {scope: [body for owner, _, body in right if scope == owner] for scope in (*START_VERSIONS, "shared")}
-    common = {(scope, name) for scope, name, _ in left} & {(scope, name) for scope, name, _ in right}
-    if left_bodies["shared"] != right_bodies["shared"] or _scope_positions(left, common) != _scope_positions(right, common):
+    if left_bodies["shared"] != right_bodies["shared"]:
         return set(START_VERSIONS)
     return {product for product in START_VERSIONS if left_bodies[product] != right_bodies[product]}
 

@@ -471,15 +471,23 @@ def test_windows_pruning_and_legacy_archive_keep_complete_pairs(tmp_path, monkey
     monkeypatch.setattr(build, "RELEASE_DIR", release)
     monkeypatch.setattr(build, "ARCHIVES_DIR", archive)
     legacy = "v1.0.0_b1_gabc1234"
+    old = datetime.now().timestamp() - 60
+    legacy_paths = []
     for suffix, bucket in (("Setup.exe", "installer"), ("Portable.zip", "portable")):
         name = f"HomeworkHelper_{legacy}_{suffix}"
         path = archive / "windows-host" / bucket / "legacy-date" / name
         path.parent.mkdir(parents=True)
         path.write_bytes(b"legacy original")
-        (release / name).write_bytes(b"unpublished rebuild")
+        legacy_paths.append(path)
+        active = release / name
+        active.write_bytes(b"verified current pair")
+        os.utime(active, (old, old))
     build.archive_old_files(_DummyGui(), prune_archives=False)
-    assert not (archive / "windows-host/by-version" / legacy).exists()
-    assert sorted(path.read_bytes() for path in archive.rglob(f"*{legacy}*")) == [b"legacy original"] * 2
+    pair = archive / "windows-host/by-version" / legacy
+    assert {path.name: path.read_bytes() for path in pair.iterdir()} == {
+        path.name: b"verified current pair" for path in legacy_paths
+    }
+    assert [path.read_bytes() for path in legacy_paths] == [b"legacy original"] * 2
 
     now = datetime.now().timestamp()
     for index, release_id in enumerate(("dev.10", "dev.11")):
@@ -492,6 +500,7 @@ def test_windows_pruning_and_legacy_archive_keep_complete_pairs(tmp_path, monkey
     pair_root = archive / "windows-host/by-version"
     assert sorted(folder.name for folder in pair_root.iterdir()) == ["dev.11"]
     assert {path.suffix for path in (pair_root / "dev.11").iterdir()} == {".exe", ".zip"}
+    assert [path.read_bytes() for path in legacy_paths] == [b"legacy original"] * 2
 
 
 def windows_fixture_package(folder, release_id, *, signed=True, portable="valid"):

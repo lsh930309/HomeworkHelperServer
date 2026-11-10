@@ -375,28 +375,22 @@ def _archive_windows_pair(console, release_id: str) -> int:
     if pair_dir.exists():
         if not _complete_windows_pair(windows_package_paths(info, pair_dir)):
             raise BuildConfigError(f"보관된 Windows 패키지 쌍이 불완전합니다: {release_id}")
+    elif _complete_windows_pair(active):
+        pair_dir.parent.mkdir(parents=True, exist_ok=True)
+        # Staging lives outside the Windows archive reader's namespace.
+        with tempfile.TemporaryDirectory(prefix=".pair-stage-", dir=ARCHIVES_DIR) as temporary:
+            staged = Path(temporary)
+            for file in active:
+                shutil.copy2(file, staged / file.name)
+            if _restorable_windows_pair(windows_package_paths(info, staged)):
+                staged.rename(pair_dir)
+                archived = 2
+        if archived:
+            console.log(f"  ✓ {release_id} Setup·Portable 쌍 보관")
+        else:
+            console.log(f"  ⚠ 복원 조건을 충족하지 않는 Windows 산출물 정리: {release_id}", "warning")
     else:
-        # An unambiguous package pair from the previous layout is already a backup.
-        existing = [list(archive.rglob(path.name)) for path in active]
-        has_previous = all(len(paths) == 1 for paths in existing) and _restorable_windows_pair(
-            (existing[0][0], existing[1][0])
-        )
-        if not has_previous and _complete_windows_pair(active):
-            pair_dir.parent.mkdir(parents=True, exist_ok=True)
-            # Staging lives outside the Windows archive reader's namespace.
-            with tempfile.TemporaryDirectory(prefix=".pair-stage-", dir=ARCHIVES_DIR) as temporary:
-                staged = Path(temporary)
-                for file in active:
-                    shutil.copy2(file, staged / file.name)
-                if _restorable_windows_pair(windows_package_paths(info, staged)):
-                    staged.rename(pair_dir)
-                    archived = 2
-            if archived:
-                console.log(f"  ✓ {release_id} Setup·Portable 쌍 보관")
-            else:
-                console.log(f"  ⚠ 복원 조건을 충족하지 않는 Windows 산출물 정리: {release_id}", "warning")
-        elif not has_previous:
-            console.log(f"  ⚠ 미완성 Windows 산출물 정리: {release_id}", "warning")
+        console.log(f"  ⚠ 미완성 Windows 산출물 정리: {release_id}", "warning")
 
     for file in active:
         file.unlink(missing_ok=True)

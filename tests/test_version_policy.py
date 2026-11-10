@@ -232,6 +232,24 @@ def test_reordering_cross_scope_build_definitions_is_shared_but_known_module_kee
     assert policy.changed_products(repo, baseline, moved) == {"host", "client"}
 
 
+def test_archive_definition_value_is_neutral_but_dependency_reordering_is_shared(repo, monkeypatch):
+    release = 'RELEASE_DIR = "release"\n'
+    archives = 'ARCHIVES_DIR = RELEASE_DIR + "/archives"\n'
+    baseline = commit(repo, "build.py", release + archives)
+    git(repo, "update-ref", "refs/remotes/origin/main", baseline)
+    start_policy(repo)
+    git(repo, "switch", "-c", "archive-change")
+    updated = archives.replace("/archives", "/backups")
+    neutral = commit(repo, "build.py", release + updated)
+    assert not policy.changed_products(repo, baseline, neutral)
+
+    (repo / "build.py").write_text(updated + release, encoding="utf-8")
+    git(repo, "add", "build.py")
+    assert check_staged(repo, monkeypatch) == 1
+    git(repo, "commit", "-m", "아카이브 선언 순서 변경")
+    assert policy.changed_products(repo, neutral, git(repo, "rev-parse", "HEAD")) == {"host", "client"}
+
+
 def test_only_the_start_node_can_have_both_product_tags(repo):
     ledger = policy.VersionLedger(repo)
     git(repo, "tag", "H/v1.6.0")
