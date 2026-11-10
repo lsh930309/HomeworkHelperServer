@@ -15,6 +15,7 @@ SIDEBAR_MODE_ALWAYS = "always"
 SIDEBAR_MODE_GAME = "game"
 SIDEBAR_MODE_DISABLED = "disabled"
 SIDEBAR_MODE_VALUES = {SIDEBAR_MODE_ALWAYS, SIDEBAR_MODE_GAME, SIDEBAR_MODE_DISABLED}
+DEFAULT_MEDIA_AUTO_BGM = False
 
 
 def normalize_sidebar_mode(value: object, sidebar_enabled: bool = True) -> str:
@@ -261,7 +262,8 @@ class GlobalSettings:
                  obs_watch_output_dir: bool = True,
                  recording_hold_threshold_ms: int = 800,
                  # Remote server mode
-                 remote_server_mode_enabled: bool = False):
+                 remote_server_mode_enabled: bool = False,
+                 media_auto_bgm: bool = DEFAULT_MEDIA_AUTO_BGM):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
@@ -312,6 +314,7 @@ class GlobalSettings:
         self.recording_hold_threshold_ms = recording_hold_threshold_ms
         # Remote server mode
         self.remote_server_mode_enabled = remote_server_mode_enabled
+        self.media_auto_bgm = media_auto_bgm
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""

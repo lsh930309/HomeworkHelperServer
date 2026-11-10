@@ -54,7 +54,7 @@ from src.utils.windows import (
 )
 from src.core.launcher import Launcher
 from src.core.game_audio import GameAudioTarget
-from src.core.media_center import MediaCenterRuntime, MediaOptions
+from src.core.media_center import MediaCenterRuntime, MediaCenterSnapshot, MediaOptions
 from src.core.launch_target import (
     launcher_candidates, preset_launcher_patterns, resolve_launch_mode,
     resolve_launch_target, resolve_launch_args,
@@ -1546,7 +1546,7 @@ class MainWindow(QMainWindow):
         if self._media_startup_pending:
             self._media_startup_pending = False
             if is_windows():
-                self.configure_media_center(MediaOptions())
+                self.configure_media_center(MediaOptions(auto_bgm=self.data_manager.global_settings.media_auto_bgm))
 
     def _check_and_toggle_game_mode(self):
         """실행 중인 게임이 있는지 확인하고, 그에 따라 창을 숨기거나 표시합니다."""
@@ -2402,8 +2402,21 @@ class MainWindow(QMainWindow):
 
     # ───────── 볼륨 패널 ─────────
 
+    def _on_media_options_changed(self, options: MediaOptions) -> bool:
+        if self._shutting_down or self._beholder_restore_runtime_suspended or self._media_center is None:
+            return False
+        current = self.data_manager.global_settings
+        if options.auto_bgm != current.media_auto_bgm:
+            updated = GlobalSettings.from_dict(current.to_dict())
+            updated.media_auto_bgm = options.auto_bgm
+            saved = self.data_manager.save_global_settings(updated, actor="media_bgm_toggle")
+            if not saved or self.data_manager.global_settings.media_auto_bgm != options.auto_bgm:
+                logger.warning("BGM 자동 재생 설정을 저장하지 못했습니다.")
+                return False
+        return self.configure_media_center(options)
+
     def configure_media_center(self, options: MediaOptions | None) -> bool:
-        """초기화·UI 옵션의 단일 활성화 경계. DB 설정은 변경하지 않는다."""
+        """미디어 기능을 시작하거나 현재 실행에 옵션을 적용한다."""
         if self._shutting_down or self._beholder_restore_runtime_suspended:
             return False
         # 먼저 사용자가 고른 옵션을 이후 초기화의 기본값으로 덮지 않는다.
@@ -2422,7 +2435,7 @@ class MainWindow(QMainWindow):
                 logger.warning("미디어 센터 시작 실패: %s", runtime.snapshot.error)
                 self._media_center = None
                 self._media_center_snapshot = runtime.snapshot
-                self._sidebar_controller.dispatch_media_state(runtime.snapshot)
+                self._sidebar_controller.dispatch_media_state(self.media_center_state())
                 return False
         else:
             if not self._media_center.configure(options):
@@ -2440,9 +2453,15 @@ class MainWindow(QMainWindow):
         runtime = self._media_center
         return bool(runtime is not None and runtime.request(action, session_id, value=value))
 
-    def media_center_state(self):
-        """사이드바가 읽는 불변 투영. 조회로 시작·재생 명령을 보내지 않는다."""
-        return self._media_center_snapshot
+    def media_center_state(self) -> MediaCenterSnapshot | None:
+        """사이드바에 최신 저장 선택과 미디어 관측을 함께 전달한다."""
+        snapshot = self._media_center_snapshot
+        if snapshot is None:
+            return None
+        auto_bgm = self.data_manager.global_settings.media_auto_bgm
+        if snapshot.options.auto_bgm == auto_bgm:
+            return snapshot
+        return replace(snapshot, options=replace(snapshot.options, auto_bgm=auto_bgm))
 
     @Slot(object)
     def _on_media_center_snapshot(self, event) -> None:
@@ -2452,7 +2471,7 @@ class MainWindow(QMainWindow):
         if owner is not self._media_center:
             return
         self._media_center_snapshot = snapshot
-        self._sidebar_controller.dispatch_media_state(snapshot)
+        self._sidebar_controller.dispatch_media_state(self.media_center_state())
 
     def _publish_media_targets(self, changed_process: ManagedProcess | None = None) -> None:
         runtime = getattr(self, "_media_center", None)

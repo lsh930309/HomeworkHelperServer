@@ -124,6 +124,7 @@ FIELD_LABELS: dict[str, str] = {
     "sidebar_clock_enabled": "사이드바 시계 표시",
     "sidebar_playtime_enabled": "사이드바 플레이타임 표시",
     "sidebar_volume_section_enabled": "사이드바 볼륨 영역",
+    "media_auto_bgm": "BGM 자동 재생",
     "screenshot_enabled": "스크린샷 사용",
     "screenshot_save_dir": "스크린샷 저장 폴더",
     "screenshot_gamepad_trigger": "게임패드 스크린샷 트리거",
@@ -170,6 +171,8 @@ def allowed_settings_fields_for_actor(actor: str | None) -> set[str]:
         return set(GLOBAL_DIALOG_FIELDS)
     if actor == "remote_settings_dialog":
         return {"remote_server_mode_enabled"}
+    if actor == "media_bgm_toggle":
+        return {"media_auto_bgm"}
     if actor in {"settings_full_update", "settings_migration", "api_settings_put"}:
         return all_fields
     return set()
@@ -200,6 +203,7 @@ def _actor_label(actor: str | None) -> str:
         "global_settings_dialog": "기존 GUI 전역 설정 창",
         "sidebar_settings_dialog": "기존 GUI 사이드바 설정 창",
         "remote_settings_dialog": "기존 GUI 원격 설정 창",
+        "media_bgm_toggle": "사이드바 BGM 자동 전환",
         "hoyolab_slow_followup": "HoYoLab 지연 반영 재확인",
         "runtime_stamina_tracker": "스태미나 런타임 보정",
     }.get(actor or "", actor or "알 수 없는 경로")
@@ -642,6 +646,8 @@ def _invalid_settings_values(
     for field, (allowed, _label) in SETTINGS_ENUM_RULES.items():
         if field in changed_fields and update_data.get(field) not in allowed:
             invalid.append(field)
+    if "media_auto_bgm" in changed_fields and not isinstance(update_data["media_auto_bgm"], bool):
+        invalid.append("media_auto_bgm")
     for field in ("sleep_start_time_str", "sleep_end_time_str"):
         if field in changed_fields and not _is_hhmm(update_data.get(field)):
             invalid.append(field)

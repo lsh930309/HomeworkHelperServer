@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Optional
+from src.data.data_models import DEFAULT_MEDIA_AUTO_BGM
 
 class ProcessSchema(BaseModel):
     id: Optional[str] = None
@@ -133,6 +134,7 @@ class GlobalSettingsSchema(BaseModel):
     recording_hold_threshold_ms: int = 800
     # Remote server mode
     remote_server_mode_enabled: bool = False
+    media_auto_bgm: bool = DEFAULT_MEDIA_AUTO_BGM
 
 
 class ProcessSessionCreate(BaseModel):

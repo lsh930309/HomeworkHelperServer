@@ -953,6 +953,9 @@ def update_settings(
     if db_settings:
         update_data = _dump_schema(settings)
         supplied_fields = _schema_fields_set(settings)
+        # BGM 설정을 알지 못하는 구버전 요청은 저장된 선택을 덮지 않는다.
+        if "media_auto_bgm" not in supplied_fields:
+            update_data.pop("media_auto_bgm", None)
         if (
             supplied_fields
             and "sidebar_enabled" in supplied_fields

@@ -420,6 +420,7 @@ def test_old_runtime_callback_cannot_replace_new_runtime_projection():
         _media_center=new_owner, _media_center_snapshot=None,
         _sidebar_controller=SimpleNamespace(dispatch_media_state=lambda _snapshot: None),
     )
+    view.media_center_state = lambda: view._media_center_snapshot
     MainWindow._on_media_center_snapshot(view, (old_owner, old_snapshot))
     assert view._media_center_snapshot is None
     MainWindow._on_media_center_snapshot(view, (new_owner, new_snapshot))

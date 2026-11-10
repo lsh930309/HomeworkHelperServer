@@ -1,6 +1,7 @@
 # models.py
 
 from sqlalchemy import Column, Integer, String, Boolean, Float, JSON, Index
+from src.data.data_models import DEFAULT_MEDIA_AUTO_BGM
 from src.data.database import Base
 
 class Process(Base):
@@ -114,6 +115,7 @@ class GlobalSettings(Base):
     recording_hold_threshold_ms = Column(Integer, default=800)
     # Remote server mode
     remote_server_mode_enabled = Column(Boolean, default=False)
+    media_auto_bgm = Column(Boolean, nullable=False, default=DEFAULT_MEDIA_AUTO_BGM)
 
 
 class ProcessSession(Base):

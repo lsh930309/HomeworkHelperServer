@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from src.core.media_center import MediaCenterSnapshot, MediaOptions
+from src.core.media_center import MediaCenterSnapshot
 from src.core.media_sessions import is_spotify_session
 from src.gui.sidebar.controls import VolumeDial
 from src.utils.common import get_bundle_resource_path
@@ -339,8 +339,7 @@ class MediaCenterPanel(QWidget):
         self._snapshot = snapshot
         selected = self._selected()
         ready = snapshot is not None and snapshot.running
-        options = snapshot.options if snapshot is not None else MediaOptions()
-        self._auto_button.setChecked(options.auto_bgm)
+        self._auto_button.setChecked(snapshot is not None and snapshot.options.auto_bgm)
         self._auto_button.setEnabled(ready and self._on_options is not None)
         self._spotify_button.setEnabled(ready and self._on_command is not None)
         spotify = tuple(item for item in snapshot.sessions if is_spotify_session(item)) if snapshot else ()

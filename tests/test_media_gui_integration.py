@@ -1,10 +1,12 @@
 """게임 소리 정책의 GUI 진입점을 가짜 런타임·저장소로 검증한다."""
+import json
 import os
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+import requests
 from PySide6.QtWidgets import QApplication, QPushButton, QSlider
 
 from src.core.game_audio import GameAudioObservation, GameAudioTarget
@@ -66,6 +68,7 @@ def game():
 
 @pytest.fixture
 def window(app, game, monkeypatch, tmp_path):
+    monkeypatch.setattr(requests.Session, "request", forbidden)
     module = _patch_main_window_deps(monkeypatch, tmp_path)
     # 기본 화면 생성은 미디어 런타임을 만들거나 native 오디오를 읽으면 실패한다.
     monkeypatch.setattr(module, "MediaCenterRuntime", forbidden)
@@ -96,20 +99,98 @@ def test_runtime_constructor_and_default_main_window_do_not_start_native_work(wi
     assert not view.request_media_command("play")
 
 
-@pytest.mark.parametrize("windows, accepted", [(True, True), (True, False), (False, True)])
-def test_only_first_successful_process_observation_attempts_start_once(window, monkeypatch, windows, accepted):
+@pytest.mark.parametrize("windows, accepted, saved", [
+    (True, True, {}), (True, False, {"media_auto_bgm": False}),
+    (True, True, {"media_auto_bgm": True}), (False, True, {"media_auto_bgm": True}),
+])
+def test_only_first_successful_process_observation_attempts_start_once(window, monkeypatch, windows, accepted, saved):
     view, module = window
+    view.data_manager.global_settings = GlobalSettings.from_dict(saved.copy())
     calls = []
     monkeypatch.setattr(module, "is_windows", lambda: windows)
     monkeypatch.setattr(view, "configure_media_center", lambda options: calls.append(options) or accepted)
+    monkeypatch.setattr(view.data_manager, "save_global_settings", forbidden)
     assert view._media_startup_pending
     # 생성·조회는 초기 프로세스 감시가 준비되기 전이므로 자동 실행 계기가 아니다.
     assert view.media_center_state() is None and calls == []
     snapshot = ProcessScanSnapshot((), 123.0)
     for _ in range(3):
         view._apply_process_scan_snapshot(snapshot)
-    assert calls == ([MediaOptions()] if windows else [])
+    assert calls == ([MediaOptions(auto_bgm=saved.get("media_auto_bgm", False))] if windows else [])
     assert view._media_startup_pending is False
+
+
+def test_bgm_button_saves_only_its_selection_and_restores_failed_click(window, monkeypatch):
+    from src.api.client import ApiClient
+    from src.gui.sidebar.media_panel import MediaCenterPanel
+
+    view, _module = window
+    activate(window, monkeypatch)
+    runtime = view._media_center
+    view.data_manager.global_settings.theme = "dark"
+    api = object.__new__(ApiClient)
+    api.base_url = "http://testserver"
+    api._pending_beholder_overrides = {}
+    api.latest_beholder_incident = None
+    saved_requests = []
+    accept = True
+
+    def patch(url, **kwargs):
+        assert url == "http://testserver/settings"
+        payload = kwargs["json"]
+        assert set(payload) == {"media_auto_bgm"}
+        assert kwargs["headers"]["X-HH-Beholder-Actor"] == "media_bgm_toggle"
+        saved_requests.append(payload["media_auto_bgm"])
+        response = requests.Response()
+        response.url = url
+        response.status_code = 200 if accept else 503
+        response._content = json.dumps({**api.global_settings.to_dict(), **payload}).encode()
+        return response
+
+    def save(updated, actor):
+        api.global_settings = view.data_manager.global_settings
+        if not api.save_global_settings(updated, actor=actor):
+            return False
+        view.data_manager.global_settings = api.global_settings
+        return True
+
+    monkeypatch.setattr(requests, "patch", patch)
+    monkeypatch.setattr(view.data_manager, "save_global_settings", save)
+    initial = MediaOptions(auto_bgm=False, background_mute=True, auto_focus=False)
+    assert view.configure_media_center(initial)
+    panel = MediaCenterPanel(280, on_options=view._on_media_options_changed, on_command=view.request_media_command)
+    monkeypatch.setattr(view._sidebar_controller, "dispatch_media_state", panel.update_snapshot)
+    try:
+        runtime.on_change(MediaCenterSnapshot(running=True, options=initial))
+        assert not panel._auto_button.isChecked()
+        panel._auto_button.click()
+        assert panel._auto_button.isChecked() and view.data_manager.global_settings.media_auto_bgm
+        assert saved_requests == [True]
+        assert runtime.options[-1] == MediaOptions(auto_bgm=True, background_mute=True, auto_focus=False)
+        stale_off = MediaCenterSnapshot(running=True, options=initial, media_hold=True)
+        runtime.on_change(stale_off)
+        assert panel._auto_button.isChecked() and view.media_center_state().options.auto_bgm
+        assert view._media_center_snapshot is stale_off and view.media_center_state().media_hold
+
+        accept = False
+        options_before = list(runtime.options)
+        panel._auto_button.click()
+        assert saved_requests == [True, False]
+        assert panel._auto_button.isChecked() and view.data_manager.global_settings.media_auto_bgm
+        assert runtime.options == options_before and not runtime.commands
+
+        accept = True
+        panel._auto_button.click()
+        assert not panel._auto_button.isChecked() and not view.data_manager.global_settings.media_auto_bgm
+        assert saved_requests == [True, False, False]
+        assert runtime.options[-1] == initial
+        assert runtime.commands == [("pause_bgm_if_playing", None)]
+        assert view.data_manager.global_settings.theme == "dark"
+        runtime.on_change(MediaCenterSnapshot(running=True, options=MediaOptions(auto_bgm=True)))
+        assert not panel._auto_button.isChecked() and not view.media_center_state().options.auto_bgm
+        assert saved_requests == [True, False, False]
+    finally:
+        panel.close()
 
 
 def test_explicit_options_before_first_scan_are_not_overwritten_by_startup(window, monkeypatch):
@@ -136,6 +217,7 @@ def test_failed_start_is_visible_and_not_retried_by_future_observations(window, 
         view._apply_process_scan_snapshot(ProcessScanSnapshot((), 123.0))
     assert len(constructed) == 1 and view._media_center is None
     assert view.media_center_state().error == "격리된 미디어 준비 실패"
+    assert view.media_center_state().options.auto_bgm is False
     assert not view.request_media_command("play")
 
 
@@ -238,10 +320,10 @@ def test_old_runtime_callback_does_not_overwrite_new_runtime(window, monkeypatch
     old = activate(window, monkeypatch)
     assert view.configure_media_center(None)
     current = activate(window, monkeypatch)
-    fresh = SimpleNamespace(game_audio=())
+    fresh = MediaCenterSnapshot(options=MediaOptions(auto_bgm=False))
     current.on_change(fresh)
     assert view._media_center_snapshot is fresh
-    old.on_change(SimpleNamespace(game_audio=("obsolete",)))
+    old.on_change(MediaCenterSnapshot(error="obsolete"))
     assert view._media_center_snapshot is fresh
 
 

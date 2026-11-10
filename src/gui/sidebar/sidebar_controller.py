@@ -311,7 +311,7 @@ class SidebarController:
                 data_manager=self._data_manager,
                 on_audio_change=getattr(self._main_window, "_on_game_audio_preferences_changed", None),
                 audio_state=getattr(self._main_window, "_media_game_audio_state", None),
-                on_media_options=getattr(self._main_window, "configure_media_center", None),
+                on_media_options=getattr(self._main_window, "_on_media_options_changed", None),
                 on_media_command=getattr(self._main_window, "request_media_command", None),
                 media_state=getattr(self._main_window, "media_center_state", None),
                 auto_hide_ms=auto_hide_ms,

@@ -913,6 +913,64 @@ def test_fresh_and_existing_valid_database_startup_use_real_migrations(monkeypat
     finally: test_engine.dispose()
 
 
+def test_media_bgm_selection_survives_migration_restart_and_legacy_settings_update(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from src.data import beholder, crud, database, schemas
+
+    def open_app_data(root):
+        root.mkdir()
+        path = root / "app_data.db"
+        engine = create_engine(f"sqlite:///{path}")
+        monkeypatch.setattr(database, "db_path", str(path))
+        monkeypatch.setattr(database, "base_dir", str(root))
+        monkeypatch.setattr(database, "engine", engine)
+        monkeypatch.setattr(crud, "base_dir", str(root))
+        return engine, sessionmaker(bind=engine), DatabaseMaintenanceCoordinator(fault_state_path=root / "fault.json")
+
+    engine, session, coordinator = open_app_data(tmp_path / "existing")
+    try:
+        assert database.prepare_database_startup(coordinator)
+        with session() as db:
+            assert crud.get_settings(db).media_auto_bgm is False
+            crud.patch_settings(db, {"theme": "dark"}, actor="global_settings_dialog")
+        # A prior installation has the same settings row and no BGM column.
+        with engine.begin() as connection:
+            connection.exec_driver_sql("ALTER TABLE global_settings DROP COLUMN media_auto_bgm")
+        assert database.prepare_database_startup(coordinator)
+        with session() as db:
+            assert crud.get_settings(db).media_auto_bgm is False
+            assert crud.get_settings(db).theme == "dark"
+            assert crud.patch_settings(db, {"media_auto_bgm": True}, actor="media_bgm_toggle").media_auto_bgm
+            with pytest.raises(beholder.BeholderBlocked):
+                crud.patch_settings(db, {"theme": "light"}, actor="media_bgm_toggle")
+        engine.dispose()
+        assert database.prepare_database_startup(coordinator)
+        with session() as db:
+            reloaded = crud.get_settings(db)
+            assert reloaded.media_auto_bgm is True and reloaded.theme == "dark"
+            payload = schemas.GlobalSettingsSchema.model_validate(reloaded, from_attributes=True).model_dump(
+                exclude={"media_auto_bgm"})
+            payload["always_on_top"] = True
+            saved = crud.update_settings(db, schemas.GlobalSettingsSchema(**payload))
+            assert saved.always_on_top and saved.media_auto_bgm
+            crud.patch_settings(db, {"media_auto_bgm": False}, actor="media_bgm_toggle")
+        engine.dispose()
+        with session() as db:
+            assert crud.get_settings(db).media_auto_bgm is False
+            assert crud.patch_settings(db, {"media_auto_bgm": True}, actor="media_bgm_toggle").media_auto_bgm
+    finally:
+        engine.dispose()
+
+    fresh_engine, fresh_session, fresh_coordinator = open_app_data(tmp_path / "new-after-removal")
+    try:
+        assert database.prepare_database_startup(fresh_coordinator)
+        with fresh_session() as db:
+            assert crud.get_settings(db).media_auto_bgm is False
+    finally:
+        fresh_engine.dispose()
+
+
 def test_page_damage_that_passes_select_one_still_blocks_startup(monkeypatch, tmp_path):
     import src.data.database as database
     from src.data.database_coordination import DatabaseMaintenanceCoordinator
