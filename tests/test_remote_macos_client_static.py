@@ -449,7 +449,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     progress_meter_source = app.split("struct MenuBarProgressMeter", 1)[1].split("struct MenuBarProgressBadge", 1)[0]
     assert "progressTone" not in progress_meter_source
     assert "Color.accentColor.opacity(0.72)" in progress_meter_source
-    assert "Color.accentColor.opacity(0.08)" in progress_meter_source
     assert "viewModel.progressMeterDisplayText(progress)" in progress_meter_source
     assert "MenuBarProgressVisuals.percentageText" not in progress_meter_source
     progress_badge_source = app.split("struct MenuBarProgressBadge", 1)[1].split("struct MenuBarGameStatusBadges", 1)[0]

@@ -5,7 +5,6 @@ enum RemoteGlassMetrics {
     static let windowCornerRadius: CGFloat = RemoteWindowLayout.windowCornerRadius
     static let sectionCornerRadius: CGFloat = 20
     static let cardCornerRadius: CGFloat = 16
-    static let pillCornerRadius: CGFloat = 999
     static let buttonCornerRadius: CGFloat = 12
 }
 
@@ -13,7 +12,6 @@ enum RemoteGlassRole {
     case window
     case section
     case card
-    case pill
     case button
     case settings
 }
@@ -37,8 +35,6 @@ struct RemoteGlassSurface: ViewModifier {
             return RemoteGlassMetrics.cardCornerRadius
         case .button:
             return RemoteGlassMetrics.buttonCornerRadius
-        case .pill:
-            return RemoteGlassMetrics.pillCornerRadius
         }
     }
 

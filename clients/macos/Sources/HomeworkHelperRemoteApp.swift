@@ -934,7 +934,6 @@ struct MenuBarProgressMeter: View {
         .frame(maxWidth: .infinity)
         .frame(height: RemotePopoverLayout.progressMeterHeight)
         .clipShape(Capsule())
-        .remoteGlass(.pill, tint: Color.accentColor.opacity(0.08))
         .accessibilityLabel("진행률 \(viewModel.progressMeterDisplayText(progress))")
         .help(viewModel.progressMeterDisplayText(progress))
     }
@@ -959,7 +958,6 @@ struct MenuBarProgressBadge: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)
-            .remoteGlass(.pill, tint: tone.opacity(0.15))
             .help(viewModel.trackBadgeDisplayText(progress))
     }
 }
@@ -987,7 +985,6 @@ struct HostStatusPill: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .foregroundStyle(viewModel.hostStatusColor)
-            .remoteGlass(.pill, tint: viewModel.hostStatusColor.opacity(0.20))
     }
 }
 
