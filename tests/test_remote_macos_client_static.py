@@ -373,6 +373,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "schedulePlaceholderHide()" in app
     assert "Window(RemoteAppDelegate.placeholderWindowTitle, id: RemoteAppDelegate.placeholderWindowIdentifier)" in app
     scene_source = app.split("var body: some Scene", 1)[1].split("struct GameIconView", 1)[0]
+    placeholder_scene_source = scene_source.split(".commands {", 1)[0]
+    assert ".defaultLaunchBehavior(.presented)" in placeholder_scene_source
+    assert ".restorationBehavior(.disabled)" in placeholder_scene_source
     assert "RemoteDashboardView(viewModel" not in scene_source
     assert "SidebarCommands()" not in scene_source
     assert "homeworkHelperRemoteToggleSidebar" not in scene_source

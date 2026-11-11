@@ -76,6 +76,9 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         DispatchQueue.main.async {
             Self.schedulePlaceholderHide()
         }
+        if Self.pendingSettingsOpen {
+            presentSettingsWindow()
+        }
         if RemoteUITestFlags.openSettings {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 Self.showSettingsWindow()
@@ -461,22 +464,21 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     static func showSettingsWindow() {
-        guard let shared else {
-            pendingSettingsOpen = true
-            return
-        }
-        shared.presentSettingsWindow()
+        pendingSettingsOpen = true
+        shared?.presentSettingsWindow()
     }
 
     static func installSettingsOpener(_ opener: @escaping @MainActor () -> Void) {
         settingsOpener = opener
         guard pendingSettingsOpen else { return }
-        pendingSettingsOpen = false
         shared?.presentSettingsWindow()
     }
 
     static func registerSettingsWindow(_ window: NSWindow) {
-        shared?.settingsWindow = window
+        guard let shared else { return }
+        shared.settingsWindow = window
+        guard pendingSettingsOpen else { return }
+        shared.presentSettingsWindow()
     }
 
     private func presentSettingsWindow() {
@@ -486,6 +488,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             NSApp.activate(ignoringOtherApps: true)
             settingsWindow.makeKeyAndOrderFront(nil)
             settingsWindow.orderFrontRegardless()
+            Self.pendingSettingsOpen = false
             return
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -535,6 +538,8 @@ struct HomeworkHelperRemoteApp: App {
                 }
         }
         .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.presented)
+        .restorationBehavior(.disabled)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("설정…") {
