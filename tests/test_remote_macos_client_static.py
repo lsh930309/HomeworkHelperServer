@@ -400,12 +400,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "NSGlassEffectView" in liquid_glass
     assert "NSGlassEffectContainerView" in liquid_glass
     assert "glassEffect" in liquid_glass
-    assert "enum RemotePopoverGlassTransparency" in liquid_glass
-    assert "case standard" in liquid_glass
-    assert "case high" in liquid_glass
-    assert "return Glass.regular" in liquid_glass
-    assert "return Glass.clear" in liquid_glass
-    assert "variant: Glass? = nil" in liquid_glass
+    assert "RemotePopoverGlassTransparency" not in liquid_glass
+    assert "case popover" not in liquid_glass
+    assert "Glass.regular" in liquid_glass
+    assert ".remoteGlass(.settings)" in app
+    assert ".remoteGlass(.popover" not in app
     assert "GroupBox(" not in app.replace("RemoteGlassGroupBox", "")
     assert ".thinMaterial" not in app
 
@@ -573,15 +572,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "mirrorPollIntervalSecondsKey" in view_model
     assert "loadMirrorPollIntervalSeconds" in view_model
     assert "saveMirrorPollIntervalSeconds" in view_model
-    assert "popoverGlassTransparencyKey" in view_model
-    assert "remote.popoverGlassTransparency" in view_model
-    assert "loadPopoverGlassTransparency" in view_model
-    assert "savePopoverGlassTransparency" in view_model
-    assert "@Published var popoverGlassTransparency" in view_model
-    assert 'SettingsControlRow("Popover 투명도")' in app
-    assert 'Picker("", selection: $viewModel.popoverGlassTransparency)' in app
-    assert "ForEach(RemotePopoverGlassTransparency.allCases)" in app
-    assert ".remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)" in app
+    assert "popoverGlassTransparency" not in view_model
+    assert "loadPopoverGlassTransparency" not in view_model
+    assert "savePopoverGlassTransparency" not in view_model
+    assert "popoverGlassTransparency" not in app
     assert "RemoteHostAvailabilityState" in supervisor
     assert "case agentUnavailable" in supervisor
     assert 'case .goingOffline: return "종료 대기 중"' in supervisor
@@ -671,7 +665,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "loginLaunchShowsWindowKey" not in view_model
     assert "플레이 요약 표시" in app
     assert "비 HoYoLab 진행률 표시" in app
-    assert "Popover 투명도" in app
+    assert "Popover 투명도" not in app
     assert "메뉴바 아이콘" in app
     assert "Popover 전역 단축키 사용" in app
     assert "$viewModel.popoverGlobalShortcutEnabled" in app

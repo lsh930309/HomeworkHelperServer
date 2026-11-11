@@ -1058,7 +1058,6 @@ struct MenuBarPopoverView: View {
                 .frame(height: 34)
             }
             .padding(14)
-            .remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)
             .buttonStyle(.glass)
             .frame(width: RemotePopoverLayout.contentWidth(processes: viewModel.displayProcesses) - 20)
         }
@@ -1709,18 +1708,6 @@ struct RemoteSettingsView: View {
                         .labelsHidden()
                         .pickerStyle(.segmented)
                     }
-                    SettingsControlRow("Popover 투명도") {
-                        Picker("", selection: $viewModel.popoverGlassTransparency) {
-                            ForEach(RemotePopoverGlassTransparency.allCases) { option in
-                                Text(option.label).tag(option)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                    }
-                    Text(viewModel.popoverGlassTransparency.description)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                     MenuBarIconPickerRow(title: "대기 상태 아이콘", selection: $viewModel.menuBarIdleIconSymbol)
                     MenuBarIconPickerRow(title: "실행 중 아이콘", selection: $viewModel.menuBarRunningIconSymbol)
                     MenuBarIconPickerRow(title: "오프라인/Standalone 아이콘", selection: $viewModel.menuBarOfflineIconSymbol)

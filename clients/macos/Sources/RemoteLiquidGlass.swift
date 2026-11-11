@@ -15,49 +15,13 @@ enum RemoteGlassRole {
     case card
     case pill
     case button
-    case popover
     case settings
-}
-
-enum RemotePopoverGlassTransparency: String, CaseIterable, Identifiable {
-    case standard
-    case high
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .standard:
-            return "기본"
-        case .high:
-            return "높음"
-        }
-    }
-
-    var description: String {
-        switch self {
-        case .standard:
-            return "기존 Liquid Glass 투명도를 유지합니다."
-        case .high:
-            return "더 투명한 순정 clear glass variant를 popover 배경에 적용합니다."
-        }
-    }
-
-    var glass: Glass {
-        switch self {
-        case .standard:
-            return Glass.regular
-        case .high:
-            return Glass.clear
-        }
-    }
 }
 
 struct RemoteGlassSurface: ViewModifier {
     let role: RemoteGlassRole
     var interactive = false
     var tint: Color? = nil
-    var variant: Glass? = nil
 
     func body(content: Content) -> some View {
         content.glassEffect(glass, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
@@ -67,7 +31,7 @@ struct RemoteGlassSurface: ViewModifier {
         switch role {
         case .window:
             return RemoteGlassMetrics.windowCornerRadius
-        case .section, .settings, .popover:
+        case .section, .settings:
             return RemoteGlassMetrics.sectionCornerRadius
         case .card:
             return RemoteGlassMetrics.cardCornerRadius
@@ -79,15 +43,15 @@ struct RemoteGlassSurface: ViewModifier {
     }
 
     private var glass: Glass {
-        (variant ?? Glass.regular)
+        Glass.regular
             .tint(tint)
             .interactive(interactive)
     }
 }
 
 extension View {
-    func remoteGlass(_ role: RemoteGlassRole, interactive: Bool = false, tint: Color? = nil, variant: Glass? = nil) -> some View {
-        modifier(RemoteGlassSurface(role: role, interactive: interactive, tint: tint, variant: variant))
+    func remoteGlass(_ role: RemoteGlassRole, interactive: Bool = false, tint: Color? = nil) -> some View {
+        modifier(RemoteGlassSurface(role: role, interactive: interactive, tint: tint))
     }
 }
 

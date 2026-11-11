@@ -88,7 +88,7 @@ helper or manually assemble a deployment bundle.
 
 Primary UX contract:
 
-- Menu-bar popover is the normal control surface.
+- The menu-bar popover is the normal control surface and uses the system background.
 - Settings opens only through explicit settings actions or the app shortcut.
 - Pairing state, host reachability, Remote Agent auth, game/process state, and Moonlight desktop-session state must update the popover immediately enough for user decisions.
 - Moonlight state is client-observed as well as app-command-observed; a visible Moonlight desktop session should be reflected even if it was launched externally.
