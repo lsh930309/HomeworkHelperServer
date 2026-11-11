@@ -234,6 +234,9 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     func applicationDidResignActive(_ notification: Notification) {
+        if popover.isShown, popover.behavior == .semitransient {
+            return
+        }
         closePopoverForFocusLoss()
     }
 
@@ -295,6 +298,12 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     private func showPopover(relativeTo button: NSStatusBarButton) {
+        if !popover.isShown {
+            let options = NSApp.currentSystemPresentationOptions
+            let hasHiddenMenuBarPolicy = options.contains(.autoHideMenuBar) || options.contains(.hideMenuBar)
+            // 활성화로 시스템 정책이 바뀌기 전에 이번 표시의 닫기 정책을 정한다.
+            popover.behavior = options.contains(.fullScreen) && hasHiddenMenuBarPolicy ? .semitransient : .transient
+        }
         RemoteSharedModel.viewModel.connectionScreenVisibilityChanged(true)
         RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()
         updatePopoverContentSize()
