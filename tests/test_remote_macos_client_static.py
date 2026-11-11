@@ -315,10 +315,21 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "DispatchQueue.main.async { [weak self, weak button] in" in app
     assert "NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown])" in app
     assert "func applicationDidResignActive" in app
-    assert "closePopoverForFocusLoss()" in app
+    resign_source = app.split("func applicationDidResignActive", 1)[1].split("\n    }", 1)[0]
+    assert "closePopoverForFocusLoss" not in resign_source
+    assert "performClose" not in resign_source
+    outside_click_source = app.split("private func installPopoverOutsideClickMonitor()", 1)[1].split("private func installPopoverKeyDownMonitor()", 1)[0]
+    assert 'closePopoverForFocusLoss(origin: "outsideClick")' in outside_click_source
+    toggle_source = app.split("private func togglePopover", 1)[1].split("private func showPopover(relativeTo", 1)[0]
+    assert 'closePopoverForFocusLoss(origin: "statusToggle")' in toggle_source
     assert "func popoverDidClose" in app
     assert "removePopoverOutsideClickMonitor()" in app
     assert "focusPopoverWindow()" in app
+    did_show_source = app.split("func popoverDidShow", 1)[1].split("\n    }", 1)[0]
+    assert "DispatchQueue.main.async" in did_show_source
+    assert "focusPopoverWindow()" in did_show_source
+    focus_source = app.split("private func focusPopoverWindow()", 1)[1].split("\n    }", 1)[0]
+    assert "window.isVisible" in focus_source
     assert "window.makeKeyAndOrderFront(nil)" in app
     assert "clickStatusItemForUITest()" in app
     assert "NSApp.activate(ignoringOtherApps: true)" in app
@@ -339,7 +350,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "private func presentSettingsWindow()" in app
     assert "private func makeSettingsWindow() -> NSWindow" not in app
     settings_open_source = app.split("private func presentSettingsWindow()", 1)[1].split("static func hideSettingsWindow", 1)[0]
-    assert "closePopoverForFocusLoss()" in settings_open_source
+    assert 'closePopoverForFocusLoss(origin: "settings")' in settings_open_source
     assert "NSApp.setActivationPolicy(.accessory)" in settings_open_source
     assert "if let settingsWindow" in settings_open_source
     assert "settingsWindow.makeKeyAndOrderFront(nil)" in settings_open_source
@@ -368,7 +379,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)" in app
     show_popover_body = app.split("private func showPopover(relativeTo button: NSStatusBarButton)", 1)[1].split("private func focusPopoverWindow", 1)[0]
     assert "RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()" in show_popover_body
-    assert "popover.behavior = .transient" in app
+    assert "popover.behavior = .semitransient" in app
+    assert "popover.behavior = .transient" not in app
+    assert "popover.behavior =" not in show_popover_body
     assert "RemotePlaceholderWindowAccessor" in app
     assert "schedulePlaceholderHide()" in app
     assert "Window(RemoteAppDelegate.placeholderWindowTitle, id: RemoteAppDelegate.placeholderWindowIdentifier)" in app
