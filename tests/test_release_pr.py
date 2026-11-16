@@ -60,6 +60,9 @@ class SimulatedRelease(release_pr.ReleaseCommand):
         if args[:3] == ("gh", "pr", "view"):
             return response(json.dumps(self.pr_data))
         if args[:3] == ("gh", "repo", "view"):
+            assert args == (
+                "gh", "repo", "view", "github.com/fixture/repository", "--json", "viewerPermission",
+            )
             return response(json.dumps({"viewerPermission": self.viewer_permission}))
         if args[:3] == ("gh", "pr", "merge"):
             assert args[args.index("--match-head-commit") + 1] == self.pr_data["headRefOid"]
@@ -162,6 +165,23 @@ def test_stale_pr_head_and_dry_run_cannot_merge_or_publish(repo):
     assert not command.ledger.path.exists()
     assert not command.ledger.path.with_suffix(".lock").exists()
     assert not any(call[:3] == ("gh", "repo", "view") or "release-preflight" in call for call in command.calls)
+
+
+@pytest.mark.parametrize("product", [None, "client", "host"])
+def test_merge_access_uses_repo_view_positional_repository(repo, product):
+    paths = {None: "docs/feature.md", "client": "clients/macos/Sources/App.swift", "host": "src/feature.py"}
+    command, args = prepare_pr(repo, path=paths[product])
+
+    command.require_merge_access(args, product)
+
+    views = [call for call in command.calls if call[:3] == ("gh", "repo", "view")]
+    assert views == [(
+        "gh", "repo", "view", "github.com/fixture/repository", "--json", "viewerPermission",
+    )]
+    assert all("--repo" not in call for call in views)
+    assert any("release-preflight" in call for call in command.calls) == (product == "host")
+    assert not any(call[:3] in {("gh", "pr", "merge"), ("gh", "release", "create")} for call in command.calls)
+    assert not any(call[:2] == ("git", "push") for call in command.calls)
 
 
 @pytest.mark.parametrize(("mode", "message"), [

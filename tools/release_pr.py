@@ -192,7 +192,9 @@ class ReleaseCommand:
     def require_merge_access(self, args: argparse.Namespace, product: str | None) -> None:
         error = "맥 GitHub CLI의 인증과 대상 저장소 쓰기 권한을 확인할 수 없습니다."
         try:
-            repository = json.loads(self.gh("repo", "view", "--json", "viewerPermission"))
+            repository = json.loads(self.output(self.run(
+                "gh", "repo", "view", f"github.com/{self.github_repo}", "--json", "viewerPermission"
+            )))
         except (ValueError, RuntimeError, OSError, subprocess.SubprocessError):
             raise ValueError(error) from None
         if not isinstance(repository, dict) or repository.get("viewerPermission") not in ("WRITE", "MAINTAIN", "ADMIN"):
