@@ -309,8 +309,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "app.bundleIdentifier == Self.moonlightBundleIdentifier" in app
     assert "statusItemClicked(_ sender: Any?)" in app
     assert "sendAction(on: [.leftMouseDown])" in app
-    assert "installStatusItemClickMonitor()" in app
-    assert "event.window === button.window" in app
+    assert "installLocalMouseClickMonitor()" in app
+    assert "clickedWindow === button.window" in app
+    local_click_source = app.split("private func installLocalMouseClickMonitor()", 1)[1].split("private func removeLocalMouseClickMonitor()", 1)[0]
+    assert 'closePopoverForFocusLoss(origin: "localOutsideClick")' in local_click_source
+    assert "return event" in local_click_source
     assert "scheduleStatusItemToggle(relativeTo: button)" in app
     assert "DispatchQueue.main.async { [weak self, weak button] in" in app
     assert "NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown])" in app
@@ -324,11 +327,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'closePopoverForFocusLoss(origin: "statusToggle")' in toggle_source
     assert "func popoverDidClose" in app
     assert "removePopoverOutsideClickMonitor()" in app
-    assert "focusPopoverWindow()" in app
+    assert "focusPopoverWindow(for:" in app
     did_show_source = app.split("func popoverDidShow", 1)[1].split("\n    }", 1)[0]
     assert "DispatchQueue.main.async" in did_show_source
-    assert "focusPopoverWindow()" in did_show_source
-    focus_source = app.split("private func focusPopoverWindow()", 1)[1].split("\n    }", 1)[0]
+    assert "focusPopoverWindow(for:" in did_show_source
+    focus_source = app.split("private func focusPopoverWindow(", 1)[1].split("\n    }", 1)[0]
     assert "window.isVisible" in focus_source
     assert "window.makeKeyAndOrderFront(nil)" in app
     assert "clickStatusItemForUITest()" in app

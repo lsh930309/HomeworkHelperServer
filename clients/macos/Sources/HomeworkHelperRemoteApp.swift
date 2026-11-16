@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CoreGraphics
 import OSLog
 
 extension Notification.Name {
@@ -27,6 +28,14 @@ enum RemoteSharedModel {
 
 @MainActor
 final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+    private final class PopoverFocusIntent {
+        let inputCounters: [UInt32]
+
+        init(inputCounters: [UInt32]) {
+            self.inputCounters = inputCounters
+        }
+    }
+
     static let mainWindowIdentifier = "HomeworkHelperRemoteMainWindow"
     static let mainWindowTitle = "HomeworkHelper Remote"
     static let placeholderWindowIdentifier = "HomeworkHelperRemotePlaceholderWindow"
@@ -40,13 +49,14 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     private static var uiTestPopoverWindow: NSWindow?
 
     private var statusItem: NSStatusItem?
-    private var statusItemClickMonitor: Any?
+    private var localMouseClickMonitor: Any?
     private var popoverOutsideClickMonitor: Any?
     private var popoverKeyDownMonitor: Any?
     private var settingsWindow: NSWindow?
     private static var settingsOpener: (@MainActor () -> Void)?
     private static var pendingSettingsOpen = false
     private let popover = NSPopover()
+    private var popoverFocusIntent: PopoverFocusIntent?
     private let popoverLogger = Logger(subsystem: "dev.homeworkhelper.remote.macos", category: "popup-lifecycle")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -101,7 +111,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        removeStatusItemClickMonitor()
+        removeLocalMouseClickMonitor()
         removePopoverOutsideClickMonitor()
         removePopoverKeyDownMonitor()
         NotificationCenter.default.removeObserver(self)
@@ -121,7 +131,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         item.button?.sendAction(on: [.leftMouseDown])
         item.button?.isEnabled = true
         statusItem = item
-        installStatusItemClickMonitor()
+        installLocalMouseClickMonitor()
 
         popover.behavior = .semitransient
         popover.delegate = self
@@ -175,23 +185,36 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         statusItemClicked(button)
     }
 
-    private func installStatusItemClickMonitor() {
-        guard statusItemClickMonitor == nil else { return }
-        statusItemClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self,
-                  let button = self.statusItem?.button,
-                  event.window === button.window else {
+    private func installLocalMouseClickMonitor() {
+        guard localMouseClickMonitor == nil else { return }
+        localMouseClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, let clickedWindow = event.window else {
                 return event
             }
-            self.scheduleStatusItemToggle(relativeTo: button)
-            return nil
+            if let button = self.statusItem?.button, clickedWindow === button.window {
+                self.scheduleStatusItemToggle(relativeTo: button)
+                return nil
+            }
+            guard self.popover.isShown,
+                  let popoverWindow = self.popover.contentViewController?.viewIfLoaded?.window else {
+                return event
+            }
+            var window: NSWindow? = clickedWindow
+            while let current = window {
+                if current === popoverWindow {
+                    return event
+                }
+                window = current.parent
+            }
+            self.closePopoverForFocusLoss(origin: "localOutsideClick")
+            return event
         }
     }
 
-    private func removeStatusItemClickMonitor() {
-        if let monitor = statusItemClickMonitor {
+    private func removeLocalMouseClickMonitor() {
+        if let monitor = localMouseClickMonitor {
             NSEvent.removeMonitor(monitor)
-            statusItemClickMonitor = nil
+            localMouseClickMonitor = nil
         }
     }
 
@@ -249,12 +272,14 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     func popoverDidShow(_ notification: Notification) {
         tracePopover("popover.didShow")
+        guard let intent = popoverFocusIntent else { return }
         DispatchQueue.main.async { [weak self] in
-            self?.focusPopoverWindow()
+            self?.focusPopoverWindow(for: intent)
         }
     }
 
     func popoverWillClose(_ notification: Notification) {
+        popoverFocusIntent = nil
         let reason = notification.userInfo?[NSPopover.closeReasonUserInfoKey] as? String
         let reasonCode = reason == NSPopover.CloseReason.standard.rawValue ? 0
             : reason == NSPopover.CloseReason.detachToWindow.rawValue ? 1 : -1
@@ -262,6 +287,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     func popoverDidClose(_ notification: Notification) {
+        popoverFocusIntent = nil
         tracePopover("popover.didClose")
         RemoteSharedModel.viewModel.connectionScreenVisibilityChanged(false)
         removePopoverOutsideClickMonitor()
@@ -271,6 +297,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     private func closePopoverForFocusLoss(origin: String) {
+        popoverFocusIntent = nil
         tracePopover("close.request.\(origin)")
         guard popover.isShown else {
             removePopoverOutsideClickMonitor()
@@ -348,6 +375,8 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     private func showPopover(relativeTo button: NSStatusBarButton) {
         let wasShown = popover.isShown
+        let intent = PopoverFocusIntent(inputCounters: Self.popoverFocusInputCounters())
+        popoverFocusIntent = intent
         tracePopover("show.enter")
         RemoteSharedModel.viewModel.connectionScreenVisibilityChanged(true)
         RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()
@@ -366,13 +395,27 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             RemoteSharedModel.viewModel.updateMoonlightPreferredScreen(self?.popover.contentViewController?.view.window?.screen ?? button.window?.screen ?? NSScreen.main)
             RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()
             if wasShown {
-                self?.focusPopoverWindow()
+                self?.focusPopoverWindow(for: intent)
             }
         }
     }
 
-    private func focusPopoverWindow() {
+    private static func popoverFocusInputCounters() -> [UInt32] {
+        let types: [CGEventType] = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]
+        return types.map { CGEventSource.counterForEventType(.combinedSessionState, eventType: $0) }
+    }
+
+    private func focusPopoverWindow(for intent: PopoverFocusIntent) {
         tracePopover("focus.enter")
+        guard popoverFocusIntent === intent else {
+            tracePopover("focus.skipped.staleIntent")
+            return
+        }
+        guard intent.inputCounters == Self.popoverFocusInputCounters() else {
+            popoverFocusIntent = nil
+            tracePopover("focus.skipped.followupInput")
+            return
+        }
         guard popover.isShown,
               let window = popover.contentViewController?.view.window,
               window.isVisible else {
