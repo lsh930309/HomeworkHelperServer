@@ -88,7 +88,11 @@ helper or manually assemble a deployment bundle.
 
 Primary UX contract:
 
-- Menu-bar popover is the normal control surface.
+- The menu-bar popover is the normal control surface and uses the system background.
+- 전체 화면에서 메뉴 막대가 숨겨져 있어도 전역 단축키 한 번으로 팝오버를 표시할 수 있어야 한다. 표시 요청 뒤 추가 입력이 없으면 표시 완료 후 키보드 포커스를 받아 `Esc`로 닫을 수 있어야 한다.
+- 닫힌 요청이나 새 표시 요청으로 대체된 요청의 예약된 포커스 이동은 실행하지 않는다.
+- 앱의 비활성화 자체를 팝오버 닫기 조건으로 사용하지 않는다. 일반 데스크톱에서도 `Cmd+Tab`으로 다른 앱으로 전환하는 것만으로는 닫히지 않을 수 있다.
+- 다른 앱이나 앱 자신의 다른 창을 클릭하면 팝오버를 닫고, 팝오버 자체와 자식 창에서의 클릭은 그대로 전달한다. 상태 아이템 재클릭과 명시적인 설정 열기의 기존 닫기 경로를 유지한다.
 - Settings opens only through explicit settings actions or the app shortcut.
 - Pairing state, host reachability, Remote Agent auth, game/process state, and Moonlight desktop-session state must update the popover immediately enough for user decisions.
 - Moonlight state is client-observed as well as app-command-observed; a visible Moonlight desktop session should be reflected even if it was launched externally.

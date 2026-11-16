@@ -1,5 +1,7 @@
 import SwiftUI
 import AppKit
+import CoreGraphics
+import OSLog
 
 extension Notification.Name {
     static let homeworkHelperRemoteMainWindowWillShow = Notification.Name("HomeworkHelperRemoteMainWindowWillShow")
@@ -26,6 +28,14 @@ enum RemoteSharedModel {
 
 @MainActor
 final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+    private final class PopoverFocusIntent {
+        let inputCounters: [UInt32]
+
+        init(inputCounters: [UInt32]) {
+            self.inputCounters = inputCounters
+        }
+    }
+
     static let mainWindowIdentifier = "HomeworkHelperRemoteMainWindow"
     static let mainWindowTitle = "HomeworkHelper Remote"
     static let placeholderWindowIdentifier = "HomeworkHelperRemotePlaceholderWindow"
@@ -39,13 +49,15 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     private static var uiTestPopoverWindow: NSWindow?
 
     private var statusItem: NSStatusItem?
-    private var statusItemClickMonitor: Any?
+    private var localMouseClickMonitor: Any?
     private var popoverOutsideClickMonitor: Any?
     private var popoverKeyDownMonitor: Any?
     private var settingsWindow: NSWindow?
     private static var settingsOpener: (@MainActor () -> Void)?
     private static var pendingSettingsOpen = false
     private let popover = NSPopover()
+    private var popoverFocusIntent: PopoverFocusIntent?
+    private let popoverLogger = Logger(subsystem: "dev.homeworkhelper.remote.macos", category: "popup-lifecycle")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
@@ -76,6 +88,9 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         DispatchQueue.main.async {
             Self.schedulePlaceholderHide()
         }
+        if Self.pendingSettingsOpen {
+            presentSettingsWindow()
+        }
         if RemoteUITestFlags.openSettings {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 Self.showSettingsWindow()
@@ -96,7 +111,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        removeStatusItemClickMonitor()
+        removeLocalMouseClickMonitor()
         removePopoverOutsideClickMonitor()
         removePopoverKeyDownMonitor()
         NotificationCenter.default.removeObserver(self)
@@ -116,9 +131,9 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         item.button?.sendAction(on: [.leftMouseDown])
         item.button?.isEnabled = true
         statusItem = item
-        installStatusItemClickMonitor()
+        installLocalMouseClickMonitor()
 
-        popover.behavior = .transient
+        popover.behavior = .semitransient
         popover.delegate = self
         popover.contentViewController = Self.makePopoverController()
         updatePopoverContentSize()
@@ -170,23 +185,36 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         statusItemClicked(button)
     }
 
-    private func installStatusItemClickMonitor() {
-        guard statusItemClickMonitor == nil else { return }
-        statusItemClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self,
-                  let button = self.statusItem?.button,
-                  event.window === button.window else {
+    private func installLocalMouseClickMonitor() {
+        guard localMouseClickMonitor == nil else { return }
+        localMouseClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, let clickedWindow = event.window else {
                 return event
             }
-            self.scheduleStatusItemToggle(relativeTo: button)
-            return nil
+            if let button = self.statusItem?.button, clickedWindow === button.window {
+                self.scheduleStatusItemToggle(relativeTo: button)
+                return nil
+            }
+            guard self.popover.isShown,
+                  let popoverWindow = self.popover.contentViewController?.viewIfLoaded?.window else {
+                return event
+            }
+            var window: NSWindow? = clickedWindow
+            while let current = window {
+                if current === popoverWindow {
+                    return event
+                }
+                window = current.parent
+            }
+            self.closePopoverForFocusLoss(origin: "localOutsideClick")
+            return event
         }
     }
 
-    private func removeStatusItemClickMonitor() {
-        if let monitor = statusItemClickMonitor {
+    private func removeLocalMouseClickMonitor() {
+        if let monitor = localMouseClickMonitor {
             NSEvent.removeMonitor(monitor)
-            statusItemClickMonitor = nil
+            localMouseClickMonitor = nil
         }
     }
 
@@ -194,7 +222,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         guard popoverOutsideClickMonitor == nil else { return }
         popoverOutsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             Task { @MainActor in
-                self?.closePopoverForFocusLoss()
+                self?.closePopoverForFocusLoss(origin: "outsideClick")
             }
         }
     }
@@ -230,25 +258,79 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         }
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        tracePopover("app.didBecomeActive")
+    }
+
     func applicationDidResignActive(_ notification: Notification) {
-        closePopoverForFocusLoss()
+        tracePopover("app.didResignActive")
+    }
+
+    func popoverWillShow(_ notification: Notification) {
+        tracePopover("popover.willShow")
+    }
+
+    func popoverDidShow(_ notification: Notification) {
+        tracePopover("popover.didShow")
+        guard let intent = popoverFocusIntent else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.focusPopoverWindow(for: intent)
+        }
+    }
+
+    func popoverWillClose(_ notification: Notification) {
+        popoverFocusIntent = nil
+        let reason = notification.userInfo?[NSPopover.closeReasonUserInfoKey] as? String
+        let reasonCode = reason == NSPopover.CloseReason.standard.rawValue ? 0
+            : reason == NSPopover.CloseReason.detachToWindow.rawValue ? 1 : -1
+        tracePopover("popover.willClose", closeReason: reasonCode)
     }
 
     func popoverDidClose(_ notification: Notification) {
+        popoverFocusIntent = nil
+        tracePopover("popover.didClose")
         RemoteSharedModel.viewModel.connectionScreenVisibilityChanged(false)
         removePopoverOutsideClickMonitor()
         removePopoverKeyDownMonitor()
         NSApp.setActivationPolicy(.accessory)
+        tracePopover("popover.didClose.cleaned")
     }
 
-    private func closePopoverForFocusLoss() {
+    private func closePopoverForFocusLoss(origin: String) {
+        popoverFocusIntent = nil
+        tracePopover("close.request.\(origin)")
         guard popover.isShown else {
             removePopoverOutsideClickMonitor()
+            tracePopover("close.hiddenCleanup.\(origin)")
             return
         }
         popover.performClose(nil)
         removePopoverOutsideClickMonitor()
         removePopoverKeyDownMonitor()
+        tracePopover("close.return.\(origin)")
+    }
+
+    private func tracePopover(
+        _ event: String,
+        closeReason: Int = -1
+    ) {
+        let options = NSApp.currentSystemPresentationOptions
+        let anchor = statusItem?.button?.window
+        let window = popover.contentViewController?.viewIfLoaded?.window
+        let uptime = ProcessInfo.processInfo.systemUptime
+        popoverLogger.notice(
+            """
+            event=\(event, privacy: .public) uptime=\(uptime) active=\(NSApp.isActive) \
+            options=\(options.rawValue) behavior=\(self.popover.behavior.rawValue) shown=\(self.popover.isShown) \
+            anchorExists=\(anchor != nil) anchorNumber=\(anchor?.windowNumber ?? 0) \
+            anchorVisible=\(anchor?.isVisible ?? false) anchorKey=\(anchor?.isKeyWindow ?? false) \
+            anchorActiveSpace=\(anchor?.isOnActiveSpace ?? false) anchorOcclusion=\(anchor?.occlusionState.rawValue ?? 0) \
+            windowExists=\(window != nil) windowNumber=\(window?.windowNumber ?? 0) \
+            windowVisible=\(window?.isVisible ?? false) windowKey=\(window?.isKeyWindow ?? false) \
+            windowActiveSpace=\(window?.isOnActiveSpace ?? false) windowOcclusion=\(window?.occlusionState.rawValue ?? 0) \
+            collection=\(window?.collectionBehavior.rawValue ?? 0) closeReason=\(closeReason)
+            """
+        )
     }
 
     private func scheduleStatusItemToggle(relativeTo button: NSStatusBarButton) {
@@ -285,36 +367,65 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     private func togglePopover(relativeTo button: NSStatusBarButton) {
         if popover.isShown {
-            closePopoverForFocusLoss()
+            closePopoverForFocusLoss(origin: "statusToggle")
             return
         }
         showPopover(relativeTo: button)
     }
 
     private func showPopover(relativeTo button: NSStatusBarButton) {
+        let wasShown = popover.isShown
+        let intent = PopoverFocusIntent(inputCounters: Self.popoverFocusInputCounters())
+        popoverFocusIntent = intent
+        tracePopover("show.enter")
         RemoteSharedModel.viewModel.connectionScreenVisibilityChanged(true)
         RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()
         updatePopoverContentSize()
         NSApp.setActivationPolicy(.accessory)
+        tracePopover("show.beforeActivate")
         NSApp.activate(ignoringOtherApps: true)
+        tracePopover("show.afterActivate")
         installPopoverOutsideClickMonitor()
         installPopoverKeyDownMonitor()
         RemoteSharedModel.viewModel.updateMoonlightPreferredScreen(button.window?.screen ?? NSScreen.main)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        tracePopover("show.return")
         DispatchQueue.main.async { [weak self] in
+            self?.tracePopover("show.nextTurn")
             RemoteSharedModel.viewModel.updateMoonlightPreferredScreen(self?.popover.contentViewController?.view.window?.screen ?? button.window?.screen ?? NSScreen.main)
             RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()
-            self?.focusPopoverWindow()
+            if wasShown {
+                self?.focusPopoverWindow(for: intent)
+            }
         }
     }
 
-    private func focusPopoverWindow() {
+    private static func popoverFocusInputCounters() -> [UInt32] {
+        let types: [CGEventType] = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]
+        return types.map { CGEventSource.counterForEventType(.combinedSessionState, eventType: $0) }
+    }
+
+    private func focusPopoverWindow(for intent: PopoverFocusIntent) {
+        tracePopover("focus.enter")
+        guard popoverFocusIntent === intent else {
+            tracePopover("focus.skipped.staleIntent")
+            return
+        }
+        guard intent.inputCounters == Self.popoverFocusInputCounters() else {
+            popoverFocusIntent = nil
+            tracePopover("focus.skipped.followupInput")
+            return
+        }
         guard popover.isShown,
-              let window = popover.contentViewController?.view.window else {
+              let window = popover.contentViewController?.view.window,
+              window.isVisible else {
+            tracePopover("focus.guardFailed")
             return
         }
         NSApp.activate(ignoringOtherApps: true)
+        tracePopover("focus.afterActivate")
         window.makeKeyAndOrderFront(nil)
+        tracePopover("focus.return")
     }
 
     @objc private func menuBarIconDidChange(_ notification: Notification) {
@@ -461,31 +572,31 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     static func showSettingsWindow() {
-        guard let shared else {
-            pendingSettingsOpen = true
-            return
-        }
-        shared.presentSettingsWindow()
+        pendingSettingsOpen = true
+        shared?.presentSettingsWindow()
     }
 
     static func installSettingsOpener(_ opener: @escaping @MainActor () -> Void) {
         settingsOpener = opener
         guard pendingSettingsOpen else { return }
-        pendingSettingsOpen = false
         shared?.presentSettingsWindow()
     }
 
     static func registerSettingsWindow(_ window: NSWindow) {
-        shared?.settingsWindow = window
+        guard let shared else { return }
+        shared.settingsWindow = window
+        guard pendingSettingsOpen else { return }
+        shared.presentSettingsWindow()
     }
 
     private func presentSettingsWindow() {
-        closePopoverForFocusLoss()
+        closePopoverForFocusLoss(origin: "settings")
         NSApp.setActivationPolicy(.accessory)
         if let settingsWindow {
             NSApp.activate(ignoringOtherApps: true)
             settingsWindow.makeKeyAndOrderFront(nil)
             settingsWindow.orderFrontRegardless()
+            Self.pendingSettingsOpen = false
             return
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -535,6 +646,8 @@ struct HomeworkHelperRemoteApp: App {
                 }
         }
         .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.presented)
+        .restorationBehavior(.disabled)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("설정…") {
@@ -929,7 +1042,6 @@ struct MenuBarProgressMeter: View {
         .frame(maxWidth: .infinity)
         .frame(height: RemotePopoverLayout.progressMeterHeight)
         .clipShape(Capsule())
-        .remoteGlass(.pill, tint: Color.accentColor.opacity(0.08))
         .accessibilityLabel("진행률 \(viewModel.progressMeterDisplayText(progress))")
         .help(viewModel.progressMeterDisplayText(progress))
     }
@@ -954,7 +1066,6 @@ struct MenuBarProgressBadge: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)
-            .remoteGlass(.pill, tint: tone.opacity(0.15))
             .help(viewModel.trackBadgeDisplayText(progress))
     }
 }
@@ -982,7 +1093,6 @@ struct HostStatusPill: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .foregroundStyle(viewModel.hostStatusColor)
-            .remoteGlass(.pill, tint: viewModel.hostStatusColor.opacity(0.20))
     }
 }
 
@@ -1058,7 +1168,6 @@ struct MenuBarPopoverView: View {
                 .frame(height: 34)
             }
             .padding(14)
-            .remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)
             .buttonStyle(.glass)
             .frame(width: RemotePopoverLayout.contentWidth(processes: viewModel.displayProcesses) - 20)
         }
@@ -1709,18 +1818,6 @@ struct RemoteSettingsView: View {
                         .labelsHidden()
                         .pickerStyle(.segmented)
                     }
-                    SettingsControlRow("Popover 투명도") {
-                        Picker("", selection: $viewModel.popoverGlassTransparency) {
-                            ForEach(RemotePopoverGlassTransparency.allCases) { option in
-                                Text(option.label).tag(option)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                    }
-                    Text(viewModel.popoverGlassTransparency.description)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                     MenuBarIconPickerRow(title: "대기 상태 아이콘", selection: $viewModel.menuBarIdleIconSymbol)
                     MenuBarIconPickerRow(title: "실행 중 아이콘", selection: $viewModel.menuBarRunningIconSymbol)
                     MenuBarIconPickerRow(title: "오프라인/Standalone 아이콘", selection: $viewModel.menuBarOfflineIconSymbol)

@@ -309,16 +309,30 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "app.bundleIdentifier == Self.moonlightBundleIdentifier" in app
     assert "statusItemClicked(_ sender: Any?)" in app
     assert "sendAction(on: [.leftMouseDown])" in app
-    assert "installStatusItemClickMonitor()" in app
-    assert "event.window === button.window" in app
+    assert "installLocalMouseClickMonitor()" in app
+    assert "clickedWindow === button.window" in app
+    local_click_source = app.split("private func installLocalMouseClickMonitor()", 1)[1].split("private func removeLocalMouseClickMonitor()", 1)[0]
+    assert 'closePopoverForFocusLoss(origin: "localOutsideClick")' in local_click_source
+    assert "return event" in local_click_source
     assert "scheduleStatusItemToggle(relativeTo: button)" in app
     assert "DispatchQueue.main.async { [weak self, weak button] in" in app
     assert "NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown])" in app
     assert "func applicationDidResignActive" in app
-    assert "closePopoverForFocusLoss()" in app
+    resign_source = app.split("func applicationDidResignActive", 1)[1].split("\n    }", 1)[0]
+    assert "closePopoverForFocusLoss" not in resign_source
+    assert "performClose" not in resign_source
+    outside_click_source = app.split("private func installPopoverOutsideClickMonitor()", 1)[1].split("private func installPopoverKeyDownMonitor()", 1)[0]
+    assert 'closePopoverForFocusLoss(origin: "outsideClick")' in outside_click_source
+    toggle_source = app.split("private func togglePopover", 1)[1].split("private func showPopover(relativeTo", 1)[0]
+    assert 'closePopoverForFocusLoss(origin: "statusToggle")' in toggle_source
     assert "func popoverDidClose" in app
     assert "removePopoverOutsideClickMonitor()" in app
-    assert "focusPopoverWindow()" in app
+    assert "focusPopoverWindow(for:" in app
+    did_show_source = app.split("func popoverDidShow", 1)[1].split("\n    }", 1)[0]
+    assert "DispatchQueue.main.async" in did_show_source
+    assert "focusPopoverWindow(for:" in did_show_source
+    focus_source = app.split("private func focusPopoverWindow(", 1)[1].split("\n    }", 1)[0]
+    assert "window.isVisible" in focus_source
     assert "window.makeKeyAndOrderFront(nil)" in app
     assert "clickStatusItemForUITest()" in app
     assert "NSApp.activate(ignoringOtherApps: true)" in app
@@ -339,7 +353,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "private func presentSettingsWindow()" in app
     assert "private func makeSettingsWindow() -> NSWindow" not in app
     settings_open_source = app.split("private func presentSettingsWindow()", 1)[1].split("static func hideSettingsWindow", 1)[0]
-    assert "closePopoverForFocusLoss()" in settings_open_source
+    assert 'closePopoverForFocusLoss(origin: "settings")' in settings_open_source
     assert "NSApp.setActivationPolicy(.accessory)" in settings_open_source
     assert "if let settingsWindow" in settings_open_source
     assert "settingsWindow.makeKeyAndOrderFront(nil)" in settings_open_source
@@ -368,11 +382,16 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)" in app
     show_popover_body = app.split("private func showPopover(relativeTo button: NSStatusBarButton)", 1)[1].split("private func focusPopoverWindow", 1)[0]
     assert "RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()" in show_popover_body
-    assert "popover.behavior = .transient" in app
+    assert "popover.behavior = .semitransient" in app
+    assert "popover.behavior = .transient" not in app
+    assert "popover.behavior =" not in show_popover_body
     assert "RemotePlaceholderWindowAccessor" in app
     assert "schedulePlaceholderHide()" in app
     assert "Window(RemoteAppDelegate.placeholderWindowTitle, id: RemoteAppDelegate.placeholderWindowIdentifier)" in app
     scene_source = app.split("var body: some Scene", 1)[1].split("struct GameIconView", 1)[0]
+    placeholder_scene_source = scene_source.split(".commands {", 1)[0]
+    assert ".defaultLaunchBehavior(.presented)" in placeholder_scene_source
+    assert ".restorationBehavior(.disabled)" in placeholder_scene_source
     assert "RemoteDashboardView(viewModel" not in scene_source
     assert "SidebarCommands()" not in scene_source
     assert "homeworkHelperRemoteToggleSidebar" not in scene_source
@@ -400,12 +419,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "NSGlassEffectView" in liquid_glass
     assert "NSGlassEffectContainerView" in liquid_glass
     assert "glassEffect" in liquid_glass
-    assert "enum RemotePopoverGlassTransparency" in liquid_glass
-    assert "case standard" in liquid_glass
-    assert "case high" in liquid_glass
-    assert "return Glass.regular" in liquid_glass
-    assert "return Glass.clear" in liquid_glass
-    assert "variant: Glass? = nil" in liquid_glass
+    assert "RemotePopoverGlassTransparency" not in liquid_glass
+    assert "case popover" not in liquid_glass
+    assert "Glass.regular" in liquid_glass
+    assert ".remoteGlass(.settings)" in app
+    assert ".remoteGlass(.popover" not in app
     assert "GroupBox(" not in app.replace("RemoteGlassGroupBox", "")
     assert ".thinMaterial" not in app
 
@@ -447,7 +465,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     progress_meter_source = app.split("struct MenuBarProgressMeter", 1)[1].split("struct MenuBarProgressBadge", 1)[0]
     assert "progressTone" not in progress_meter_source
     assert "Color.accentColor.opacity(0.72)" in progress_meter_source
-    assert "Color.accentColor.opacity(0.08)" in progress_meter_source
     assert "viewModel.progressMeterDisplayText(progress)" in progress_meter_source
     assert "MenuBarProgressVisuals.percentageText" not in progress_meter_source
     progress_badge_source = app.split("struct MenuBarProgressBadge", 1)[1].split("struct MenuBarGameStatusBadges", 1)[0]
@@ -573,15 +590,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "mirrorPollIntervalSecondsKey" in view_model
     assert "loadMirrorPollIntervalSeconds" in view_model
     assert "saveMirrorPollIntervalSeconds" in view_model
-    assert "popoverGlassTransparencyKey" in view_model
-    assert "remote.popoverGlassTransparency" in view_model
-    assert "loadPopoverGlassTransparency" in view_model
-    assert "savePopoverGlassTransparency" in view_model
-    assert "@Published var popoverGlassTransparency" in view_model
-    assert 'SettingsControlRow("Popover 투명도")' in app
-    assert 'Picker("", selection: $viewModel.popoverGlassTransparency)' in app
-    assert "ForEach(RemotePopoverGlassTransparency.allCases)" in app
-    assert ".remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)" in app
+    assert "popoverGlassTransparency" not in view_model
+    assert "loadPopoverGlassTransparency" not in view_model
+    assert "savePopoverGlassTransparency" not in view_model
+    assert "popoverGlassTransparency" not in app
     assert "RemoteHostAvailabilityState" in supervisor
     assert "case agentUnavailable" in supervisor
     assert 'case .goingOffline: return "종료 대기 중"' in supervisor
@@ -671,7 +683,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "loginLaunchShowsWindowKey" not in view_model
     assert "플레이 요약 표시" in app
     assert "비 HoYoLab 진행률 표시" in app
-    assert "Popover 투명도" in app
+    assert "Popover 투명도" not in app
     assert "메뉴바 아이콘" in app
     assert "Popover 전역 단축키 사용" in app
     assert "$viewModel.popoverGlobalShortcutEnabled" in app

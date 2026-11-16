@@ -100,7 +100,6 @@ private enum RemoteClientPreferences {
     private static let showPlaySummaryKey = "remote.showPlaySummary"
     private static let cycleProgressDisplayModeKey = "remote.cycleProgressDisplayMode"
     private static let mirrorPollIntervalSecondsKey = "remote.mirrorPollIntervalSeconds"
-    private static let popoverGlassTransparencyKey = "remote.popoverGlassTransparency"
     private static let popoverGlobalShortcutEnabledKey = "remote.popoverGlobalShortcutEnabled"
     private static let moonlightPublicIPCacheKey = "remote.moonlight.hostPublicIPCache"
     private static let moonlightBindingEnabledKey = "remote.moonlight.bindingEnabled"
@@ -220,15 +219,6 @@ private enum RemoteClientPreferences {
 
     static func saveCycleProgressDisplayMode(_ mode: CycleProgressDisplayMode) {
         defaults.set(mode.rawValue, forKey: cycleProgressDisplayModeKey)
-    }
-
-    static func loadPopoverGlassTransparency() -> RemotePopoverGlassTransparency {
-        let stored = defaults.string(forKey: popoverGlassTransparencyKey) ?? ""
-        return RemotePopoverGlassTransparency(rawValue: stored) ?? .standard
-    }
-
-    static func savePopoverGlassTransparency(_ transparency: RemotePopoverGlassTransparency) {
-        defaults.set(transparency.rawValue, forKey: popoverGlassTransparencyKey)
     }
 
     static func loadPopoverGlobalShortcutEnabled() -> Bool {
@@ -625,9 +615,6 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
     @Published var cycleProgressDisplayMode = RemoteClientPreferences.loadCycleProgressDisplayMode() {
         didSet { RemoteClientPreferences.saveCycleProgressDisplayMode(cycleProgressDisplayMode) }
-    }
-    @Published var popoverGlassTransparency = RemoteClientPreferences.loadPopoverGlassTransparency() {
-        didSet { RemoteClientPreferences.savePopoverGlassTransparency(popoverGlassTransparency) }
     }
     @Published var popoverGlobalShortcutEnabled = RemoteClientPreferences.loadPopoverGlobalShortcutEnabled() {
         didSet {
