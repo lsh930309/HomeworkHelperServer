@@ -8,10 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 
-pytestmark = pytest.mark.usefixtures("resource_test_isolation")
+pytestmark = pytest.mark.usefixtures("wuwa_config_memory")
 TOKEN = "qa_wuwa_service_token_never_output"
 ROLE_ID = "799900001"
-RESOURCE_KEY = f"waveplate@Asia@{ROLE_ID}"
+RESOURCE_KEY = "waveplate"
+ACCOUNT_KEY = f"waveplate@Asia@{ROLE_ID}"
 VALUES = {"Energy": 120, "MaxEnergy": 240, "StoreEnergy": 80, "MaxStoreEnergy": 480}
 NOW = dt.datetime(2026, 11, 17, 10, tzinfo=dt.timezone.utc).timestamp()
 
@@ -26,7 +27,7 @@ def test_shared_isolation_blocks_both_real_gateway_entry_points_before_default_u
 
 
 @pytest.fixture
-def provider():
+def provider(wuwa_config_memory):
     from src.services.wuwa import WuwaService
 
     state = SimpleNamespace(
@@ -68,7 +69,7 @@ def provider():
 def test_wuwa_discovery_returns_role_identity_without_auth_value(provider):
     discovery = provider.service.discover_accounts()
     assert discovery.status == "ok"
-    assert [account.resource_key for account in discovery.accounts] == [RESOURCE_KEY]
+    assert [account.resource_key for account in discovery.accounts] == [ACCOUNT_KEY]
     assert TOKEN not in repr(discovery)
     assert all(call[0] == "queryPlayerInfo" for call in provider.calls)
 

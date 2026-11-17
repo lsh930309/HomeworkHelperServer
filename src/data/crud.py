@@ -186,6 +186,74 @@ def update_process(
         db.refresh(db_process)
     return db_process
 
+def configure_wuwa_link(
+    db: Session, selected_resource_key: str | None = None, *, migrate: bool = False, config=None,
+) -> dict[str, Any]:
+    """명시적 계정 저장/구버전 이동. GUI 없이도 같은 보호·백업 경계로 실행한다."""
+    from src.utils.resource_tracking import WUWA_PROVIDER, WUWA_WAVEPLATE_RESOURCE_KEY, wuwa_role_id
+    from src.utils.wuwa_config import WuwaConfig
+
+    config = config if config is not None else WuwaConfig()
+    existed = config.exists()
+    previous_account = config.load_selected_resource_key()
+    rows = db.query(models.Process).filter(models.Process.resource_provider == WUWA_PROVIDER).all()
+    candidates = {row.resource_key for row in rows if wuwa_role_id(row.resource_key) is not None}
+    if migrate:
+        selected_resource_key = previous_account if existed else next(iter(candidates)) if len(candidates) == 1 else None
+    elif selected_resource_key is not None and wuwa_role_id(selected_resource_key) is None:
+        raise ValueError("연결할 명조 계정 정보가 올바르지 않습니다.")
+
+    changed_rows = []
+    normalized_count = cleared_count = 0
+    quantity_fields = {"resource_percent", "resource_updated_at", "resource_status", "resource_label",
+                       "resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max"}
+    for row in rows:
+        legacy_account = row.resource_key if wuwa_role_id(row.resource_key) is not None else None
+        if legacy_account is None and row.resource_key != WUWA_WAVEPLATE_RESOURCE_KEY:
+            continue
+        values = {"resource_key": WUWA_WAVEPLATE_RESOURCE_KEY}
+        account_for_values = legacy_account if legacy_account is not None else previous_account
+        if selected_resource_key is None or account_for_values != selected_resource_key:
+            values.update({field: None for field in quantity_fields})
+        changed = {field for field, value in values.items() if getattr(row, field) != value}
+        if not changed:
+            continue
+        operation = beholder.BeholderOperation(
+            kind="wuwa_link_migration" if migrate else "wuwa_link_update", actor="resource_settings",
+            allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"resource_key"} | quantity_fields},
+            evidence={"changed_fields": sorted(changed), "context": {"process_id": row.id}},
+        )
+        beholder.guard_process_update(db, row, values, operation, changed)
+        _backup_model_snapshot_or_raise(row, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation.kind)
+        normalized_count += int("resource_key" in changed)
+        cleared_count += int(bool(changed & quantity_fields))
+        changed_rows.append((row, values))
+
+    write_config = not existed or previous_account != selected_resource_key
+    config_written = False
+    try:
+        for row, values in changed_rows:
+            for field, value in values.items():
+                setattr(row, field, value)
+        db.flush()
+        if write_config:
+            if not config.save_account(selected_resource_key):
+                raise ValueError("명조 연결 설정을 저장하지 못했습니다. 기존 데이터를 유지했습니다.")
+            config_written = True
+        db.commit()
+    except Exception:
+        db.rollback()
+        if config_written:
+            restored = config.save_account(previous_account) if existed else config.remove_created_account()
+            if not restored:
+                raise RuntimeError("명조 연결 저장에 실패했고 이전 연결도 복원하지 못했습니다. 앱을 종료한 뒤 복구가 필요합니다.") from None
+        raise
+    return {"connected": selected_resource_key is not None, "migrated": bool(migrate and not existed),
+            "selection_required": selected_resource_key is None and len(candidates) > 1,
+            "normalized_count": normalized_count, "cleared_count": cleared_count}
+
+
 def _stamina_observation_values(
     process: models.Process,
     current: int | None,

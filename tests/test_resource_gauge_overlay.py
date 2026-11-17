@@ -46,7 +46,7 @@ def test_cycle_api_duration_and_gui_percentage_keep_their_existing_meanings(elap
 @pytest.mark.parametrize("reserve,text", [(0, "240/240"), (120, "120/480")])
 def test_resource_api_and_gui_captions_remain_identical_after_cycle_projection_separation(reserve, text):
     process = ManagedProcess(id="wuwa", name="명조", monitoring_path="/fixture/wuwa.exe", launch_path="/fixture/wuwa.exe",
-                             resource_tracking_enabled=True, resource_provider="wuwa", resource_key="waveplate@Asia@799900001",
+                             resource_tracking_enabled=True, resource_provider="wuwa", resource_key="waveplate",
                              resource_current=240, resource_max=240, resource_reserve_current=reserve, resource_reserve_max=480,
                              resource_status="ok")
     actual = calculate_process_progress(process, NOW)
@@ -66,7 +66,7 @@ def test_all_provider_progress_uses_common_presentation_once_without_changing_ra
     process = ManagedProcess(
         id="fixture", name="게임", monitoring_path="/fixture/game.exe", launch_path="/fixture/game.exe",
         resource_tracking_enabled=provider != "hoyolab", resource_provider=provider,
-        resource_key="waveplate@Asia@799900001" if provider == "wuwa" else "nikke_outpost_storage",
+        resource_key="waveplate" if provider == "wuwa" else "nikke_outpost_storage",
         resource_status="ok", resource_percent=100 if full else 50, resource_updated_at=NOW.timestamp(),
         resource_current=current if provider == "wuwa" else None,
         resource_max=240 if provider == "wuwa" else None,

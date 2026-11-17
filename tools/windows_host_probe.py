@@ -1,8 +1,9 @@
-"""Windows runtime observation; no application DB initialization or write paths."""
+"""Windows 관측과 명시적으로 요청한 백업·명조 오프라인 복구를 수행한다."""
 from __future__ import annotations
 
 import argparse
 import configparser
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -43,7 +44,19 @@ def database_state(path: Path) -> dict:
             settings = {key: row[key] for key in SAFE_SETTINGS if row and key in row.keys()}
             opened = [dict(row) for row in connection.execute(
                 "SELECT id,process_id,start_timestamp FROM process_sessions WHERE end_timestamp IS NULL")]
-            return {"available": True, "open_sessions": opened, "settings": settings}
+            fields = ("resource_tracking_enabled", "resource_key", "resource_current", "resource_max",
+                      "resource_reserve_current", "resource_reserve_max", "resource_status", "resource_updated_at")
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(managed_processes)")}
+            supported = {"resource_provider", *fields} <= columns
+            resources = []
+            if supported:
+                for resource in connection.execute(
+                        "SELECT " + ",".join(fields) + " FROM managed_processes WHERE resource_provider='wuwa'"):
+                    resources.append({"tracking_enabled": bool(resource["resource_tracking_enabled"]),
+                                      "fixed_resource_key": resource["resource_key"] == "waveplate",
+                                      **{key: resource[key] for key in fields[2:]}})
+            return {"available": True, "open_sessions": opened, "settings": settings,
+                    "wuwa_resources": {"supported": supported, "rows": resources}}
         finally:
             connection.close()
     except sqlite3.Error as error:
@@ -173,9 +186,78 @@ def snapshot(repo: Path, appdata: Path, install: Path) -> dict:
             "installed_payload": files, "obs_settings_files": settings_files}
 
 
+def repair_wuwa_link(repo: Path, appdata: Path, install: Path) -> dict:
+    """수정본 설치 후 앱이 없는 상태에서 기존 계정 사실만 옮긴다."""
+    import io
+    from contextlib import closing, redirect_stdout
+
+    processes = process_rows(install)
+    if any(row.get("error") or row.get("name") == "homework_helper.exe" for row in processes):
+        raise ValueError("호스트 GUI/API 종료를 확인할 수 없어 오프라인 복구를 중단합니다.")
+    expected = appdata / "HomeworkHelper/homework_helper_data/app_data.db"
+    backup = appdata / "HomeworkHelper/backups/app_data.backup.1.db"
+    if not expected.is_file() or not backup.is_file():
+        raise ValueError("기존 운영 DB와 설치 전 정상 백업이 모두 필요합니다.")
+
+    def read_rows(path):
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as connection:
+            if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+                raise ValueError("DB 무결성 검사가 실패하여 오프라인 복구를 중단합니다.")
+            connection.row_factory = sqlite3.Row
+            return {table: [dict(row) for row in connection.execute(f'SELECT * FROM "{table}" ORDER BY id')]
+                    for table in ("managed_processes", "process_sessions", "global_settings")}
+
+    read_rows(backup)
+    backup_original = backup.read_bytes()
+    before = read_rows(expected)
+    sys.path.insert(0, str(repo))
+    try:
+        with redirect_stdout(io.StringIO()):
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import Session
+            from src.data import crud, database
+            from src.utils.wuwa_config import WuwaConfig
+            if Path(database.db_path).resolve() != expected.resolve():
+                raise ValueError("운영 DB 경로 불일치")
+            engine = create_engine("sqlite:///" + expected.as_posix(), connect_args={"timeout": 5})
+            try:
+                with Session(engine) as session:
+                    migration = crud.configure_wuwa_link(session, migrate=True, config=WuwaConfig(expected.parent.parent))
+            finally:
+                engine.dispose()
+    except Exception:
+        raise ValueError("명조 오프라인 복구 writer가 실패했습니다. 앱을 시작하지 않습니다.") from None
+    after = read_rows(expected)
+    allowed = {"resource_key", "resource_percent", "resource_updated_at", "resource_status", "resource_label",
+               "resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max"}
+    before_processes = {row["id"]: row for row in before["managed_processes"]}
+    after_processes = {row["id"]: row for row in after["managed_processes"]}
+    ids_preserved = before_processes.keys() == after_processes.keys()
+    other_data_preserved = ids_preserved and all(
+        row == after_processes[key] if row.get("resource_provider") != "wuwa" else
+        {k: v for k, v in row.items() if k not in allowed} ==
+        {k: v for k, v in after_processes[key].items() if k not in allowed}
+        for key, row in before_processes.items()
+    )
+    preserved = {"game_ids": ids_preserved, "sessions": before["process_sessions"] == after["process_sessions"],
+                 "settings": before["global_settings"] == after["global_settings"],
+                 "unrelated_process_data": other_data_preserved, "backup": backup.read_bytes() == backup_original}
+    if not all(preserved.values()):
+        raise ValueError("명조 오프라인 복구 후 기존 데이터 보존 검사가 실패했습니다. 앱을 시작하지 않습니다.")
+    if any(row.get("error") or row.get("name") == "homework_helper.exe" for row in process_rows(install)):
+        raise ValueError("오프라인 복구 중 호스트 앱 실행이 감지되었습니다. 자동 시작하지 않습니다.")
+    if migration.get("connected") is not True or migration.get("selection_required") is not False:
+        raise ValueError("명조 연결 계정을 확정하지 못했습니다. 앱을 시작하지 않습니다.")
+    migration_summary = {key: migration[key] for key in (
+        "connected", "migrated", "selection_required", "normalized_count", "cleared_count")}
+    return {"ok": True, "migration": migration_summary, "preserved": preserved,
+            "completed_at_utc": datetime.now(timezone.utc).isoformat(), "gui_api_absent": True,
+            "process_count": len(after_processes), "session_count": len(after["process_sessions"])}
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("inspect", "logs", "preflight", "release", "payload", "backup", "build", "prepare-runtime"))
+    p.add_argument("command", choices=("inspect", "logs", "preflight", "release", "payload", "backup", "build", "prepare-runtime", "repair-wuwa-link"))
     p.add_argument("--repo", type=Path, required=True)
     p.add_argument("--appdata", type=Path, required=True)
     p.add_argument("--install", type=Path, required=True)
@@ -230,6 +312,8 @@ def main(argv=None) -> int:
             if not backup_database():
                 raise ValueError("정상 DB 백업 실패")
         result = {"backup": str(args.appdata / "HomeworkHelper/backups/app_data.backup.1.db")}
+    elif args.command == "repair-wuwa-link":
+        result = repair_wuwa_link(args.repo, args.appdata, args.install)
     else:
         result = snapshot(args.repo, args.appdata, args.install)
         if args.command == "preflight":

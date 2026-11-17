@@ -24,6 +24,7 @@ def resource_test_isolation(monkeypatch, tmp_path):
     from src.utils.nikke_config import NikkeConfig
     from src.utils.browser_cookie_extractor import BrowserCookieExtractor
     from src.services.wuwa import WuwaGateway
+    from src.utils.wuwa_config import WuwaConfig
     import aiohttp
     import requests
 
@@ -53,6 +54,8 @@ def resource_test_isolation(monkeypatch, tmp_path):
     # 명조는 별도 token store 없이 런처 캐시를 읽는다. 새 단일 입구도 실조회 전에 막는다.
     monkeypatch.setattr(WuwaGateway, "read_accounts", blocked)
     monkeypatch.setattr(WuwaGateway, "post_json", blocked)
+    for name in ("load_selected_resource_key", "save_account", "clear_account", "exists", "remove_created_account"):
+        monkeypatch.setattr(WuwaConfig, name, blocked)
 
     monkeypatch.setattr(requests.sessions.Session, "request", blocked)
     monkeypatch.setattr(aiohttp.ClientSession, "_request", blocked)
@@ -71,3 +74,26 @@ def resource_test_isolation(monkeypatch, tmp_path):
     # 운영 engine/session은 fixture로 사용하지 않는다. 검사는 별도 in-memory DB를 주입한다.
     monkeypatch.setattr(database.engine, "connect", blocked)
     monkeypatch.setattr(crud, "base_dir", str(tmp_path / "mutation-backups"))
+
+
+@pytest.fixture
+def wuwa_config_memory(resource_test_isolation, monkeypatch):
+    """실제 설정 입구 차단 뒤에만 명조의 앱 소유 선택을 메모리로 주입한다."""
+    from types import SimpleNamespace
+    from src.utils.wuwa_config import WuwaConfig
+    state = SimpleNamespace(selected="waveplate@Asia@799900001", exists=True, writes=[], fail_write=False)
+    def save(_self, selected_resource_key):
+        if state.fail_write:
+            return False
+        state.selected, state.exists = selected_resource_key, True
+        state.writes.append(selected_resource_key)
+        return True
+    monkeypatch.setattr(WuwaConfig, "load_selected_resource_key", lambda self: state.selected)
+    monkeypatch.setattr(WuwaConfig, "exists", lambda self: state.exists)
+    monkeypatch.setattr(WuwaConfig, "save_account", save)
+    monkeypatch.setattr(WuwaConfig, "clear_account", lambda self: save(self, None))
+    def remove_created(_self):
+        state.selected, state.exists = None, False
+        return True
+    monkeypatch.setattr(WuwaConfig, "remove_created_account", remove_created)
+    return state

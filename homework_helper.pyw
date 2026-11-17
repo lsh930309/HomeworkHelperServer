@@ -1058,6 +1058,12 @@ def run_server_main(shutdown_event=None):
         class Config:
             extra = "forbid"
 
+    class WuwaLinkRequest(BaseModel):
+        selected_resource_key: str | None = None
+
+        class Config:
+            extra = "forbid"
+
     def _daily_checkin_process_payload(process, descriptor, setting=None, latest_log=None) -> dict[str, Any]:
         from src.core import daily_checkin
 
@@ -1577,6 +1583,17 @@ def run_server_main(shutdown_event=None):
                 session_factory=SessionLocal,
                 is_cancelled=lambda: shutdown_event.is_set() or database_coordinator.snapshot().mode != "normal",
             )
+
+    @app.post("/resource-providers/wuwa/link")
+    def update_wuwa_link(request: WuwaLinkRequest, db: Session = Depends(get_db)):
+        try:
+            return crud.configure_wuwa_link(db, request.selected_resource_key)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from None
+
+    @app.post("/resource-providers/wuwa/migrate-link")
+    def migrate_wuwa_link(db: Session = Depends(get_db)):
+        return crud.configure_wuwa_link(db, migrate=True)
 
     @app.patch("/processes/{process_id}/stamina", response_model=schemas.ProcessSchema)
     def update_process_stamina(

@@ -24,7 +24,7 @@ from src.core import credential_health
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
 from src.utils.resource_tracking import (
-    NIKKE_OUTPOST_LABEL, WUWA_PROVIDER, WUWA_WAVEPLATE_LABEL,
+    NIKKE_OUTPOST_LABEL, WUWA_PROVIDER, WUWA_WAVEPLATE_LABEL, WUWA_WAVEPLATE_RESOURCE_KEY,
     is_wuwa_waveplate_resource, wuwa_role_id,
     predict_nikke_outpost_percent, predict_stamina_value,
 )
@@ -43,6 +43,11 @@ def _query_wuwa_account(resource_key=None):
         return None
     finally:
         service.close()
+
+
+def _selected_wuwa_account():
+    from src.utils.wuwa_config import WuwaConfig
+    return WuwaConfig().load_selected_resource_key()
 
 
 class _RemoteSettingsWorker(QThread):
@@ -916,7 +921,7 @@ class ProcessDialog(QDialog):
         hoyolab_game_id = tracking_target if is_hoyoverse else None
         resource_tracking_enabled = tracking_enabled and tracking_target in {"nikke_outpost_storage", "wuwa_waveplate"}
         resource_provider = (WUWA_PROVIDER if tracking_target == "wuwa_waveplate" else "nikke_blablalink") if resource_tracking_enabled else None
-        resource_key = "nikke_outpost_storage" if resource_tracking_enabled and tracking_target == "nikke_outpost_storage" else None
+        resource_key = (WUWA_WAVEPLATE_RESOURCE_KEY if tracking_target == "wuwa_waveplate" else "nikke_outpost_storage") if resource_tracking_enabled else None
         resource_label = (WUWA_WAVEPLATE_LABEL if tracking_target == "wuwa_waveplate" else NIKKE_OUTPOST_LABEL) if resource_tracking_enabled else None
 
         # 프리셋 데이터 구성 (모든 필드 명시적 포함)
@@ -1148,23 +1153,10 @@ class ProcessDialog(QDialog):
         hoyolab_game_layout.addStretch()
         stamina_layout.addLayout(hoyolab_game_layout)
 
-        self.wuwa_account_widget = QWidget()
-        wuwa_account_layout = QVBoxLayout(self.wuwa_account_widget)
-        wuwa_account_layout.setContentsMargins(0, 0, 0, 0)
-        role_row = QHBoxLayout()
-        role_row.addWidget(QLabel("연결 계정:"))
-        self.wuwa_account_combo = QComboBox()
-        self.wuwa_account_combo.addItem("런처에서 연결할 계정을 확인하세요", None)
-        role_row.addWidget(self.wuwa_account_combo, 1)
-        self.wuwa_connect_button = QPushButton("런처에서 연결")
-        self.wuwa_connect_button.clicked.connect(self._discover_wuwa_accounts)
-        role_row.addWidget(self.wuwa_connect_button)
-        wuwa_account_layout.addLayout(role_row)
-        self.wuwa_status_label = QLabel("명조 공식 런처에 로그인한 계정을 사용합니다.")
+        self.wuwa_status_label = QLabel()
         self.wuwa_status_label.setWordWrap(True)
-        wuwa_account_layout.addWidget(self.wuwa_status_label)
-        stamina_layout.addWidget(self.wuwa_account_widget)
-        self.wuwa_account_widget.setVisible(False)
+        stamina_layout.addWidget(self.wuwa_status_label)
+        self.wuwa_status_label.setVisible(False)
 
         # 스태미나 조회 테스트 버튼
         self.stamina_test_button = QPushButton("조회 테스트")
@@ -1194,49 +1186,51 @@ class ProcessDialog(QDialog):
             self._wuwa_work.invalidate_telemetry(self._wuwa_work_key)
 
     def _on_tracking_target_changed(self, _index):
-        if hasattr(self, "wuwa_account_widget"):
-            self.wuwa_account_widget.setVisible(self.hoyolab_game_combo.currentData() == "wuwa_waveplate")
+        if hasattr(self, "wuwa_status_label"):
+            selected = self.hoyolab_game_combo.currentData() == "wuwa_waveplate"
+            self.wuwa_status_label.setVisible(selected)
+            if selected:
+                self.wuwa_status_label.setText(
+                    "자원/출석 관리에서 연결한 명조 계정을 사용합니다."
+                    if _selected_wuwa_account() else "자원/출석 관리에서 명조 계정을 연결하세요."
+                )
 
-    def _start_wuwa_work(self, operation, resource_key=None):
+    def _start_wuwa_work(self, operation, resource_key):
         if self._resource_query_pending:
             return
         if self._wuwa_work is None:
-            self.wuwa_status_label.setText("메인 창에서 게임 설정을 열어 다시 연결하세요.")
+            self.wuwa_status_label.setText("메인 창에서 게임 설정을 열어 다시 조회하세요.")
             return
         parent = self.parent()
         if getattr(parent, "_beholder_restore_runtime_suspended", False) or getattr(parent, "_shutting_down", False):
-            self.wuwa_status_label.setText("앱을 다시 시작한 뒤 연결하세요.")
+            self.wuwa_status_label.setText("앱을 다시 시작한 뒤 조회하세요.")
             return
-        self._wuwa_operation = (operation, resource_key)
+        self._wuwa_operation = (operation, _selected_wuwa_account())
         self._resource_query_pending = True
-        self.wuwa_connect_button.setEnabled(False)
         self.stamina_test_button.setEnabled(False)
         self.stamina_test_button.setText("조회 중...")
-        self.wuwa_status_label.setText("런처 계정 확인 중..." if operation == "discover" else "서버 자원 조회 중...")
+        self.wuwa_status_label.setText("서버 자원 조회 중...")
         if self._wuwa_work.submit_telemetry(self._wuwa_work_key, _query_wuwa_account, resource_key) is None:
             self._finish_wuwa_work()
 
     def _finish_wuwa_work(self):
         self._resource_query_pending = False
-        self.wuwa_connect_button.setEnabled(True)
         self.stamina_test_button.setEnabled(True)
         self.stamina_test_button.setText("조회 테스트")
-
-    def _discover_wuwa_accounts(self):
-        self._start_wuwa_work("discover")
 
     def _on_wuwa_work_error(self, error):
         if error.key != self._wuwa_work_key or self._resource_dialog_closed:
             return
         self._finish_wuwa_work()
-        self.wuwa_status_label.setText("명조 계정을 확인하지 못했습니다. 런처 로그인과 연결 상태를 확인하세요.")
+        self.wuwa_status_label.setText("명조 자원을 확인하지 못했습니다. 런처 로그인과 연결 상태를 확인하세요.")
 
     def _on_wuwa_work_result(self, result):
         if result.key != self._wuwa_work_key or self._resource_dialog_closed:
             return
         self._finish_wuwa_work()
-        operation, resource_key = self._wuwa_operation
-        if self.hoyolab_game_combo.currentData() != "wuwa_waveplate":
+        _operation, selected_account = self._wuwa_operation
+        if (self.hoyolab_game_combo.currentData() != "wuwa_waveplate"
+                or _selected_wuwa_account() != selected_account):
             return
         if getattr(self.parent(), "_beholder_restore_runtime_suspended", False) or getattr(self.parent(), "_shutting_down", False):
             return
@@ -1244,34 +1238,26 @@ class ProcessDialog(QDialog):
         if response is None or getattr(response, "status", None) != "ok":
             self.wuwa_status_label.setText(getattr(response, "message", "") or "런처 로그인과 연결 상태를 확인하세요.")
             return
-        if operation == "discover":
-            previous = self.wuwa_account_combo.currentData()
-            accounts = response.accounts
-            self.wuwa_account_combo.clear()
-            self.wuwa_account_combo.addItem("연결할 계정을 선택하세요", None)
-            for account in accounts:
-                self.wuwa_account_combo.addItem(account.label, account.resource_key)
-            index = self.wuwa_account_combo.findData(previous) if previous else -1
-            if previous and index < 0:
-                role_id = wuwa_role_id(previous)
-                self.wuwa_account_combo.addItem(f"기존 연결 · …{role_id[-4:]} (런처 확인 필요)", previous)
-                index = self.wuwa_account_combo.count() - 1
-            if index > 0:
-                self.wuwa_account_combo.setCurrentIndex(index)
-            elif len(accounts) == 1:
-                self.wuwa_account_combo.setCurrentIndex(1)
-            self.wuwa_status_label.setText("계정을 확인했습니다. 조회 테스트로 자원을 확인하세요." if len(accounts) == 1 else "조회 가능한 계정이 여러 개입니다. 연결할 계정을 선택하세요.")
-        elif self.wuwa_account_combo.currentData() == resource_key:
-            self._show_resource_test_result("wuwa_waveplate", {"snapshot": response}, stored=False)
+        self._show_resource_test_result("wuwa_waveplate", {"snapshot": response}, stored=False)
 
     def _test_wuwa_connection(self):
-        resource_key = self.wuwa_account_combo.currentData()
-        if not resource_key:
-            self._discover_wuwa_accounts()
-            return
+        selected_account = _selected_wuwa_account()
+        if not selected_account:
+            reply = QMessageBox.question(
+                self, "계정 연결 필요", "명조 계정이 연결되지 않았습니다. 자원/출석 관리를 여시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            HoYoLabSettingsDialog(self).exec()
+            selected_account = _selected_wuwa_account()
+            self._on_tracking_target_changed(self.hoyolab_game_combo.currentIndex())
+            if not selected_account:
+                return
         process = self._registered_tracking_process("wuwa_waveplate")
         if process is None:
-            self._start_wuwa_work("preview", resource_key)
+            self._start_wuwa_work("preview", WUWA_WAVEPLATE_RESOURCE_KEY)
             return
         coordinator = getattr(self.parent(), "_wuwa_resource_reconcile")
         dialog_ref = weakref.ref(self)
@@ -1284,14 +1270,13 @@ class ProcessDialog(QDialog):
             dialog._finish_wuwa_work()
             current = dialog._registered_tracking_process("wuwa_waveplate")
             if (dialog.hoyolab_game_combo.currentData() != "wuwa_waveplate"
-                    or dialog.wuwa_account_combo.currentData() != resource_key
+                    or _selected_wuwa_account() != selected_account
                     or current is None or current.id != process_id
                     or payload.get("process_id") != process_id):
                 return
             dialog._show_resource_test_result("wuwa_waveplate", payload, stored=True)
 
         self._resource_query_pending = True
-        self.wuwa_connect_button.setEnabled(False)
         self.stamina_test_button.setEnabled(False)
         self.stamina_test_button.setText("조회 중...")
         if not coordinator.request_refresh(process_id, completed):
@@ -1311,7 +1296,7 @@ class ProcessDialog(QDialog):
             return None
         if target == "wuwa_waveplate":
             matches = (process.resource_tracking_enabled and process.resource_provider == WUWA_PROVIDER
-                       and process.resource_key == self.wuwa_account_combo.currentData())
+                       and process.resource_key == WUWA_WAVEPLATE_RESOURCE_KEY and bool(_selected_wuwa_account()))
         elif target == "nikke_outpost_storage":
             matches = (
                 process.resource_tracking_enabled
@@ -1546,9 +1531,6 @@ class ProcessDialog(QDialog):
         selected_tracking_target = None
         if is_wuwa_waveplate_resource(getattr(self.existing_process, "resource_provider", None), getattr(self.existing_process, "resource_key", None)):
             selected_tracking_target = "wuwa_waveplate"
-            role_key = self.existing_process.resource_key
-            self.wuwa_account_combo.addItem(f"글로벌 아시아 · …{wuwa_role_id(role_key)[-4:]}", role_key)
-            self.wuwa_account_combo.setCurrentIndex(self.wuwa_account_combo.count() - 1)
         elif getattr(self.existing_process, 'resource_provider', None) == 'nikke_blablalink' and getattr(self.existing_process, 'resource_key', None) == 'nikke_outpost_storage':
             selected_tracking_target = 'nikke_outpost_storage'
         elif hasattr(self.existing_process, 'hoyolab_game_id') and self.existing_process.hoyolab_game_id:
@@ -1686,10 +1668,6 @@ class ProcessDialog(QDialog):
         if len(launch_args) > self.MAX_LAUNCH_ARGS_LENGTH:
             QMessageBox.warning(self, "입력 오류", f"직접 실행 인자는 {self.MAX_LAUNCH_ARGS_LENGTH}자 이하로 입력해야 합니다.")
             return
-        if (self.stamina_tracking_checkbox.isChecked() and self.hoyolab_game_combo.currentData() == "wuwa_waveplate"
-                and not self.wuwa_account_combo.currentData()):
-            QMessageBox.warning(self, "계정 연결 필요", "런처에서 명조 계정을 확인하고 연결할 계정을 선택하세요.")
-            return
         self.accept()
 
     def get_data(self) -> Optional[Dict[str, Any]]:
@@ -1736,9 +1714,7 @@ class ProcessDialog(QDialog):
         resource_label = None
 
         if tracking_checked and tracking_target == "wuwa_waveplate":
-            resource_key = self.wuwa_account_combo.currentData()
-            if not is_wuwa_waveplate_resource(WUWA_PROVIDER, resource_key):
-                return None
+            resource_key = WUWA_WAVEPLATE_RESOURCE_KEY
             resource_tracking_enabled = True
             resource_provider = WUWA_PROVIDER
             resource_label = WUWA_WAVEPLATE_LABEL
@@ -2327,7 +2303,7 @@ class HoYoLabSettingsDialog(QDialog):
 
         info_label = QLabel(
             "HoYoLab/BlablaLink 로그인은 자원 추적과 자동 출석에 사용합니다.\n"
-            "명조는 이 호스트의 공식 런처 로그인을 사용하며, 게임 편집에서 추적 계정을 선택합니다."
+            "명조는 이 호스트의 공식 런처 로그인에서 연결할 계정을 선택합니다."
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -2392,56 +2368,129 @@ class HoYoLabSettingsDialog(QDialog):
     def _build_wuwa_section(self, root: QVBoxLayout) -> None:
         group = QGroupBox("명조 / 글로벌 아시아")
         layout = QVBoxLayout(group)
-        info = QLabel("공식 런처에 로그인한 계정을 확인합니다. 인증값을 별도로 복사하거나 저장하지 않습니다.")
+        info = QLabel("공식 런처의 로그인 계정으로 연결합니다. 인증값은 별도로 복사하거나 저장하지 않습니다.")
         info.setWordWrap(True)
         layout.addWidget(info)
         row = QHBoxLayout()
-        self.wuwa_connect_button = QPushButton("런처 계정 확인")
+        self.wuwa_connect_button = QPushButton("런처에서 계정 확인")
         self.wuwa_connect_button.clicked.connect(self._connect_wuwa_accounts)
         row.addWidget(self.wuwa_connect_button)
+        self.wuwa_clear_button = QPushButton("연동 해제")
+        self.wuwa_clear_button.clicked.connect(self._clear_wuwa_connection)
+        row.addWidget(self.wuwa_clear_button)
         row.addStretch(1)
         layout.addLayout(row)
-        self.wuwa_status_label = QLabel("명조 게임 편집에서 자원 추적을 켜고 연결할 계정을 선택하세요.")
+        selection_row = QHBoxLayout()
+        selection_row.addWidget(QLabel("연결 계정:"))
+        self.wuwa_account_combo = QComboBox()
+        self.wuwa_account_combo.currentIndexChanged.connect(
+            lambda _index: self.wuwa_apply_button.setEnabled(bool(self.wuwa_account_combo.currentData()))
+        )
+        selection_row.addWidget(self.wuwa_account_combo, 1)
+        self.wuwa_apply_button = QPushButton("선택 계정 연결")
+        self.wuwa_apply_button.clicked.connect(self._apply_wuwa_connection)
+        selection_row.addWidget(self.wuwa_apply_button)
+        layout.addLayout(selection_row)
+        self.wuwa_status_label = QLabel()
         self.wuwa_status_label.setWordWrap(True)
         layout.addWidget(self.wuwa_status_label)
         root.addWidget(group)
+        self._update_wuwa_status()
+
+    def _update_wuwa_status(self):
+        selected = _selected_wuwa_account()
+        self.wuwa_clear_button.setEnabled(bool(selected))
+        self.wuwa_apply_button.setEnabled(bool(self.wuwa_account_combo.currentData()))
+        if selected:
+            index = self.wuwa_account_combo.findData(selected)
+            if index < 0:
+                self.wuwa_account_combo.addItem(f"글로벌 아시아 · …{wuwa_role_id(selected)[-4:]}", selected)
+                index = self.wuwa_account_combo.count() - 1
+            self.wuwa_account_combo.setCurrentIndex(index)
+            self.wuwa_status_label.setText("명조 계정이 연결되어 있습니다. 추적 중인 게임은 서버 자원을 자동으로 갱신합니다.")
+        else:
+            self.wuwa_status_label.setText("연결된 계정이 없습니다. 런처 계정을 확인한 뒤 연결하세요.")
+        self.wuwa_apply_button.setEnabled(bool(self.wuwa_account_combo.currentData()))
 
     def _on_wuwa_dialog_finished(self, _result):
         self._wuwa_dialog_closed = True
         if self._wuwa_work is not None:
             self._wuwa_work.invalidate_telemetry(self._wuwa_work_key)
 
+    def _set_wuwa_busy(self, busy):
+        self.wuwa_connect_button.setEnabled(not busy)
+        self.wuwa_apply_button.setEnabled(not busy and bool(self.wuwa_account_combo.currentData()))
+        self.wuwa_clear_button.setEnabled(not busy and bool(_selected_wuwa_account()))
+        self.wuwa_account_combo.setEnabled(not busy)
+
     def _connect_wuwa_accounts(self):
         if self._wuwa_work is None:
             self.wuwa_status_label.setText("메인 창에서 자원/출석 관리를 열어 다시 확인하세요.")
             return
-        parent = self.parent()
-        if getattr(parent, "_beholder_restore_runtime_suspended", False) or getattr(parent, "_shutting_down", False):
+        owner = self._wuwa_owner_window()
+        if owner is None or getattr(owner, "_beholder_restore_runtime_suspended", False) or getattr(owner, "_shutting_down", False):
             self.wuwa_status_label.setText("앱을 다시 시작한 뒤 계정을 확인하세요.")
             return
-        self.wuwa_connect_button.setEnabled(False)
+        self._set_wuwa_busy(True)
         self.wuwa_status_label.setText("런처 계정 확인 중...")
         if self._wuwa_work.submit_telemetry(self._wuwa_work_key, _query_wuwa_account) is None:
-            self.wuwa_connect_button.setEnabled(True)
+            self._set_wuwa_busy(False)
 
     def _on_wuwa_account_error(self, error):
         if error.key != self._wuwa_work_key or self._wuwa_dialog_closed:
             return
-        self.wuwa_connect_button.setEnabled(True)
+        self._set_wuwa_busy(False)
         self.wuwa_status_label.setText("런처 로그인과 연결 상태를 확인하세요.")
 
     def _on_wuwa_account_result(self, result):
         if result.key != self._wuwa_work_key or self._wuwa_dialog_closed:
             return
-        self.wuwa_connect_button.setEnabled(True)
-        if getattr(self.parent(), "_beholder_restore_runtime_suspended", False) or getattr(self.parent(), "_shutting_down", False):
+        self._set_wuwa_busy(False)
+        owner = self._wuwa_owner_window()
+        if owner is None or getattr(owner, "_beholder_restore_runtime_suspended", False) or getattr(owner, "_shutting_down", False):
             return
         discovery = result.value
         if discovery is None or getattr(discovery, "status", None) != "ok":
             self.wuwa_status_label.setText(getattr(discovery, "message", "") or "런처 로그인과 연결 상태를 확인하세요.")
             return
-        labels = " / ".join(account.label for account in discovery.accounts)
-        self.wuwa_status_label.setText(f"연결 가능한 계정: {labels}\n명조 게임 편집에서 이 계정의 자원 추적을 설정하세요.")
+        selected = _selected_wuwa_account()
+        self.wuwa_account_combo.clear()
+        for account in discovery.accounts:
+            self.wuwa_account_combo.addItem(account.label, account.resource_key)
+        index = self.wuwa_account_combo.findData(selected) if selected else -1
+        if index >= 0:
+            self.wuwa_account_combo.setCurrentIndex(index)
+        elif len(discovery.accounts) > 1:
+            self.wuwa_account_combo.insertItem(0, "연결할 계정을 선택하세요", None)
+            self.wuwa_account_combo.setCurrentIndex(0)
+        self.wuwa_apply_button.setEnabled(bool(self.wuwa_account_combo.currentData()))
+        self.wuwa_status_label.setText("연결할 계정을 선택한 뒤 ‘선택 계정 연결’을 누르세요.")
+
+    def _wuwa_owner_window(self):
+        owner = self.parent()
+        while owner is not None:
+            if callable(getattr(owner, "apply_wuwa_account_selection", None)):
+                return owner
+            owner = owner.parent()
+        return None
+
+    def _save_wuwa_selection(self, selected):
+        owner = self._wuwa_owner_window()
+        if owner is None or not owner.apply_wuwa_account_selection(selected):
+            QMessageBox.warning(self, "저장 실패", "명조 연결 설정을 저장하지 못했습니다. 기존 연결을 확인한 뒤 다시 시도하세요.")
+            return False
+        self._update_wuwa_status()
+        return True
+
+    def _apply_wuwa_connection(self):
+        selected = self.wuwa_account_combo.currentData()
+        if selected:
+            self._save_wuwa_selection(selected)
+
+    def _clear_wuwa_connection(self):
+        if self._save_wuwa_selection(None):
+            self.wuwa_account_combo.clear()
+            self.wuwa_apply_button.setEnabled(False)
 
     def _build_hoyolab_section(self, root: QVBoxLayout) -> None:
         auto_group = QGroupBox("HoYoLab")

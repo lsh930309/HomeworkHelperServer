@@ -14,13 +14,13 @@ from src.data.data_models import ManagedProcess
 from src.gui.dialogs import ProcessDialog
 
 
-pytestmark = pytest.mark.usefixtures("resource_test_isolation")
-KEY = "waveplate@Asia@799900001"
+pytestmark = pytest.mark.usefixtures("wuwa_config_memory")
+KEY = "waveplate"
 OTHER_KEY = "waveplate@Asia@799900002"
 
 
 @pytest.fixture
-def gui(monkeypatch):
+def gui(monkeypatch, wuwa_config_memory):
     import src.utils.game_preset_manager as preset_module
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(preset_module, "GamePresetManager", lambda: SimpleNamespace(get_all_presets=lambda: []))
@@ -47,7 +47,8 @@ def gui(monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *args: popups.append(args[1:]))
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: popups.append(args[1:]))
     dialog = ProcessDialog(parent, existing_process=process)
-    state = SimpleNamespace(app=app, dialog=dialog, process=process, parent=parent, work=work, requests=requests, popups=popups)
+    state = SimpleNamespace(app=app, dialog=dialog, process=process, parent=parent, work=work, requests=requests,
+                            popups=popups, config=wuwa_config_memory)
     yield state
     dialog.reject()
     parent.deleteLater()
@@ -75,8 +76,7 @@ def test_registered_wuwa_query_discards_late_result_after_identity_or_lifetime_c
     if change == "close":
         gui.dialog.reject()
     elif change == "account":
-        gui.dialog.wuwa_account_combo.addItem("다른 계정", OTHER_KEY)
-        gui.dialog.wuwa_account_combo.setCurrentIndex(gui.dialog.wuwa_account_combo.count() - 1)
+        gui.config.selected = OTHER_KEY
     else:
         gui.dialog.hoyolab_game_combo.setCurrentIndex(gui.dialog.hoyolab_game_combo.findData("honkai_starrail"))
     gui.requests[0][1](payload())
@@ -85,22 +85,20 @@ def test_registered_wuwa_query_discards_late_result_after_identity_or_lifetime_c
 
 def test_unsaved_wuwa_account_uses_read_only_background_preview_and_discards_changed_selection(gui):
     before = gui.process.to_dict()
-    gui.dialog.wuwa_account_combo.addItem("다른 계정", OTHER_KEY)
-    gui.dialog.wuwa_account_combo.setCurrentIndex(gui.dialog.wuwa_account_combo.count() - 1)
+    gui.dialog.existing_process = None
     gui.dialog._test_stamina_connection()
     assert gui.requests == [] and gui.process.to_dict() == before
-    assert gui.work.submitted[0][2] == (OTHER_KEY,)
-    gui.dialog.wuwa_account_combo.setCurrentIndex(gui.dialog.wuwa_account_combo.findData(KEY))
+    assert gui.work.submitted[0][2] == (KEY,)
+    gui.config.selected = OTHER_KEY
     gui.work.result_ready.emit(SimpleNamespace(key=gui.dialog._wuwa_work_key, value=SimpleNamespace(
         status="ok", current=240, maximum=240, reserve_current=120, reserve_max=480)))
     assert gui.popups == [] and gui.process.to_dict() == before
 
 
-def test_discovery_does_not_replace_existing_missing_account_with_another_account(gui):
-    gui.dialog._discover_wuwa_accounts()
-    gui.work.result_ready.emit(SimpleNamespace(key=gui.dialog._wuwa_work_key, value=SimpleNamespace(
-        status="ok", accounts=[SimpleNamespace(resource_key=OTHER_KEY, label="다른 계정")], message="")))
-    assert gui.dialog.wuwa_account_combo.currentData() == KEY
+def test_game_editor_only_selects_resource_target_without_an_account_picker(gui):
+    assert not hasattr(gui.dialog, 'wuwa_account_combo')
+    assert not hasattr(gui.dialog, 'wuwa_connect_button')
+    assert gui.dialog.hoyolab_game_combo.currentData() == 'wuwa_waveplate'
 
 
 def test_simultaneous_wuwa_workers_use_separate_service_instances_and_close_them(monkeypatch):

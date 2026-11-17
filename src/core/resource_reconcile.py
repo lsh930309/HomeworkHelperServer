@@ -436,14 +436,18 @@ class WuwaResourceReconcileCoordinator(NikkeResourceReconcileCoordinator):
         if getattr(process, "resource_tracking_enabled", False) and is_wuwa_waveplate_resource(
             getattr(process, "resource_provider", None), getattr(process, "resource_key", None),
         ):
-            return process.resource_provider, process.resource_key
+            from src.utils.wuwa_config import WuwaConfig
+            account = WuwaConfig().load_selected_resource_key()
+            return (process.resource_provider, process.resource_key, account) if account is not None else None
         return None
 
     def _event_target(self, event):
         if getattr(event, "resource_tracking_enabled", False) and is_wuwa_waveplate_resource(
             getattr(event, "resource_provider", None), getattr(event, "resource_key", None),
         ):
-            return event.resource_provider, event.resource_key
+            from src.utils.wuwa_config import WuwaConfig
+            account = WuwaConfig().load_selected_resource_key()
+            return (event.resource_provider, event.resource_key, account) if account is not None else None
         return None
 
     def _apply_process_row(self, process, row):

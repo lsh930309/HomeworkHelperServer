@@ -72,6 +72,8 @@ class QueuedPool:
 
 @pytest.fixture(params=["hoyolab", "nikke", "wuwa"])
 def tracking(request, monkeypatch, app):
+    if request.param == "wuwa":
+        request.getfixturevalue("wuwa_config_memory")
     monkeypatch.setattr(resource_module, "QTimer", FakeTimer)
     clock = SimpleNamespace(monotonic=1000.0, wall=_TIMESTAMP_BASE + 1000.0)
     monkeypatch.setattr(resource_module.time, "monotonic", lambda: clock.monotonic)
@@ -83,7 +85,7 @@ def tracking(request, monkeypatch, app):
         stamina_current=100, stamina_max=240, stamina_updated_at=_TIMESTAMP_BASE + 100.0,
         resource_tracking_enabled=request.param != "hoyolab",
         resource_provider="wuwa" if request.param == "wuwa" else "nikke_blablalink" if request.param == "nikke" else None,
-        resource_key="waveplate@Asia@799900001" if request.param == "wuwa" else "nikke_outpost_storage" if request.param == "nikke" else None,
+        resource_key="waveplate" if request.param == "wuwa" else "nikke_outpost_storage" if request.param == "nikke" else None,
         resource_percent=25.0, resource_updated_at=_TIMESTAMP_BASE + 100.0, resource_status="ok",
         resource_current=60 if request.param == "wuwa" else None,
         resource_max=240 if request.param == "wuwa" else None,

@@ -11,9 +11,10 @@ from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from src.utils.resource_tracking import (
-    GameResourceSnapshot, WUWA_PROVIDER, WUWA_WAVEPLATE_LABEL,
+    GameResourceSnapshot, WUWA_PROVIDER, WUWA_WAVEPLATE_LABEL, WUWA_WAVEPLATE_RESOURCE_KEY,
     resource_quantity_percent, wuwa_role_id, wuwa_role_key,
 )
+from src.utils.wuwa_config import WuwaConfig
 
 
 class WuwaError(Exception):
@@ -128,8 +129,10 @@ class WuwaGateway:
 class WuwaService:
     MAX_REQUESTS = 5
 
-    def __init__(self, gateway=None, timeout: float = 10.0, *, sleep=time.sleep, clock=time.time, monotonic=time.monotonic):
+    def __init__(self, gateway=None, timeout: float = 10.0, *, config=None, sleep=time.sleep, clock=time.time, monotonic=time.monotonic):
         self._gateway = gateway or WuwaGateway()
+        self._config = config if config is not None else WuwaConfig()
+        self.selected_resource_key = self._config.load_selected_resource_key()
         self._timeout = min(max(float(timeout), 0.001), 10.0)
         self._sleep = sleep
         self._clock = clock
@@ -145,6 +148,8 @@ class WuwaService:
         return True
 
     def is_configured(self) -> bool:
+        if self.selected_resource_key is None:
+            return False
         try:
             self._accounts = tuple(self._gateway.read_accounts())
             return bool(self._accounts)
@@ -152,6 +157,8 @@ class WuwaService:
             return False
 
     def is_current(self) -> bool:
+        if self._config.load_selected_resource_key() != self.selected_resource_key:
+            return False
         if self._accounts is None:
             return True
         try:
@@ -232,17 +239,19 @@ class WuwaService:
         def failed(status, message):
             return GameResourceSnapshot(WUWA_PROVIDER, resource_key, WUWA_WAVEPLATE_LABEL, None, status,
                                         datetime.fromtimestamp(self._clock()), message)
-        if wuwa_role_id(resource_key) is None:
-            return failed("role_not_found", "연결할 글로벌 아시아 캐릭터를 선택하세요.")
+        if resource_key != WUWA_WAVEPLATE_RESOURCE_KEY or self.selected_resource_key is None:
+            return failed("auth_required", "자원/출석 관리에서 명조 계정을 연결하세요.")
         self.close()
         self._deadline = self._monotonic() + 30.0
         try:
-            roles = self._discover(before_prepare, resource_key)
-            token = roles.get(resource_key)
+            roles = self._discover(before_prepare, self.selected_resource_key)
+            token = roles.get(self.selected_resource_key)
             if token is None:
                 raise WuwaError("role_not_found", "연결한 캐릭터의 로그인을 찾을 수 없습니다. 런처에서 로그인한 뒤 다시 연결하세요.")
-            role = self._query("queryRole", {"oauthCode": token, "playerId": wuwa_role_id(resource_key), "region": "Asia"},
+            role = self._query("queryRole", {"oauthCode": token, "playerId": wuwa_role_id(self.selected_resource_key), "region": "Asia"},
                                before_fetch=before_fetch)
+            if not self.is_current():
+                raise WuwaError("cancelled", "연결 계정이 변경되어 이전 조회 결과를 적용하지 않았습니다.")
             base = role.get("Base")
             values = [base.get(field) for field in ("Energy", "MaxEnergy", "StoreEnergy", "MaxStoreEnergy")] if isinstance(base, dict) else []
             if len(values) != 4 or any(type(value) is not int or not 0 <= value < 2**63 for value in values):
@@ -266,3 +275,10 @@ def get_wuwa_service() -> WuwaService:
     if _wuwa_service is None:
         _wuwa_service = WuwaService()
     return _wuwa_service
+
+
+def reset_wuwa_service() -> None:
+    global _wuwa_service
+    if _wuwa_service is not None:
+        _wuwa_service.close()
+    _wuwa_service = None

@@ -112,6 +112,8 @@ def remote_script(args, commit: str = "", branch: str = "", version: BuildVersio
         invocation += " -AllowProtectedTime"
     if args.prepare_runtime:
         invocation += " -PrepareRuntime"
+    if args.repair_wuwa_link:
+        invocation += " -RepairWuwaLink"
     return "& {\n" + script + "\n} " + invocation
 
 
@@ -147,6 +149,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--computer", default="LSH_DESKTOP")
     p.add_argument("--commit", help="Published local HEAD (defaults to current HEAD)")
     p.add_argument("--archived-release", help="install only: reinstall this exact release from build.py archives")
+    p.add_argument("--repair-wuwa-link", action="store_true",
+                   help="install 전용: 수정본 실행 전에 구버전 명조 연결 정보를 오프라인으로 복구합니다.")
     p.add_argument("--release-tag", help="release-build only: tag of the existing draft release")
     p.add_argument("--release-repo", help="release-preflight and release-build only: owner/repository of the release")
     p.add_argument("--duration", type=int, choices=range(0, 121), default=0,
@@ -170,6 +174,8 @@ def main(argv=None) -> int:
         argument_parser.error("--prepare-runtime은 media-qa에서만 사용할 수 있습니다.")
     if args.archived_release and (args.command != "install" or args.commit):
         argument_parser.error("--archived-release는 install에서만 사용하며 --commit과 함께 지정하지 않습니다.")
+    if args.repair_wuwa_link and (args.command != "install" or args.archived_release):
+        argument_parser.error("--repair-wuwa-link는 새 수정본의 install에서만 사용할 수 있습니다.")
     if args.command == "release-build":
         if not (args.commit and args.release_tag and args.release_repo):
             argument_parser.error("release-build에는 --commit, --release-tag, --release-repo가 필요합니다.")

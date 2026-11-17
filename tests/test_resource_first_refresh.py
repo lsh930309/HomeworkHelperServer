@@ -14,6 +14,7 @@ import requests
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QWidget
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -25,9 +26,10 @@ from src.data.data_models import GlobalSettings, ManagedProcess
 from src.data.database_coordination import DatabaseMaintenanceCoordinator
 
 
-pytestmark = pytest.mark.usefixtures("resource_test_isolation")
-KEY = "waveplate@Asia@799900001"
-OTHER_KEY = "waveplate@Asia@799900002"
+pytestmark = pytest.mark.usefixtures("wuwa_config_memory")
+KEY = "waveplate"
+ACCOUNT_KEY = "waveplate@Asia@799900001"
+OTHER_ACCOUNT_KEY = "waveplate@Asia@799900002"
 
 
 class Queue:
@@ -38,7 +40,7 @@ class Queue:
 
 
 @pytest.fixture
-def flow(monkeypatch, tmp_path):
+def flow(monkeypatch, tmp_path, wuwa_config_memory):
     import src.core.resource_reconcile as reconciliation
     import src.gui.main_window as main
     import src.gui.sidebar.sidebar_widget as sidebar_module
@@ -57,11 +59,12 @@ def flow(monkeypatch, tmp_path):
     api = FastAPI()
     def get_db():
         with sessions() as db: yield db
-    names = {"get_all_processes", "get_process_by_id", "create_new_process", "update_existing_process", "observe_process_resource"}
+    names = {"get_all_processes", "get_process_by_id", "create_new_process", "update_existing_process", "observe_process_resource",
+             "update_wuwa_link", "migrate_wuwa_link"}
     tree = ast.parse(Path("homework_helper.pyw").read_text(encoding="utf-8"))
-    nodes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "ResourceObservationRequest"]
+    nodes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name in {"ResourceObservationRequest", "WuwaLinkRequest"}]
     nodes += [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in names]
-    assert len(nodes) == 6
+    assert len(nodes) == 9
     scope = dict(app=api, List=List, schemas=schemas, crud=crud, Session=Session, Depends=Depends,
                  Header=Header, HTTPException=HTTPException, BaseModel=BaseModel, get_db=get_db,
                  database_coordinator=DatabaseMaintenanceCoordinator(), SessionLocal=sessions,
@@ -104,9 +107,13 @@ def flow(monkeypatch, tmp_path):
     monkeypatch.setattr(nikke, "_service_instance", None)
 
     class Host(QWidget):
+        _shutting_down = False
+        _beholder_restore_runtime_suspended = False
         def _get_stamina_icon_path(self, process): return None
         def _adjust_window_size_to_content(self): pass
         def _record_status_event(self, *args): state.statuses.append(args)
+        def apply_wuwa_account_selection(self, selected):
+            return main.MainWindow.apply_wuwa_account_selection(self, selected)
         def populate_process_list(self):
             # 실제 GUI 데이터 모델을 서버의 canonical DTO로 다시 채운다.
             client.managed_processes = client._fetch_all_processes()
@@ -117,6 +124,21 @@ def flow(monkeypatch, tmp_path):
     host = Host()
     host.data_manager = client
     host.process_monitor = SimpleNamespace(active_monitored_processes={})
+    class Work(QObject):
+        result_ready = Signal(object)
+        error_ready = Signal(object)
+        def __init__(self):
+            super().__init__()
+            self.tasks = []
+        def submit_telemetry(self, key, function, *args, **kwargs):
+            self.tasks.append((key, function, args, kwargs))
+            return len(self.tasks)
+        def invalidate_telemetry(self, key):
+            self.tasks = [task for task in self.tasks if task[0] != key]
+        def run_next(self):
+            key, function, args, kwargs = self.tasks.pop(0)
+            self.result_ready.emit(SimpleNamespace(key=key, value=function(*args, **kwargs)))
+    host._work_coordinator = Work()
     coordinators = [HoYoStaminaReconcileCoordinator(client, host.process_monitor),
                     reconciliation.NikkeResourceReconcileCoordinator(client, host.process_monitor),
                     reconciliation.WuwaResourceReconcileCoordinator(client, host.process_monitor)]
@@ -158,10 +180,22 @@ def flow(monkeypatch, tmp_path):
             while owner._pool.tasks: owner._pool.tasks.pop(0).run()
     def observed_requests():
         return [r for r in state.http if r[1].endswith("/resource-observation")]
-    state.client, state.host, state.sessions = client, host, sessions
+    state.client, state.host, state.sessions, state.config = client, host, sessions, wuwa_config_memory
     state.form, state.create, state.edit, state.drain = form, create, edit, drain
     state.coordinators, state.observed_requests, state.bar_type = coordinators, observed_requests, CapsuleProgressBar
+    state.management_dialogs = []
+    def management():
+        from src.gui.dialogs import HoYoLabSettingsDialog
+        # 관련 없는 HoYo/Nikke credentials·출석 조회는 공용 차단을 유지한다.
+        for name in ('_update_status', '_update_nikke_status', '_load_provider_health_labels',
+                     '_load_daily_checkin_games', '_load_daily_checkin_logs'):
+            monkeypatch.setattr(HoYoLabSettingsDialog, name, lambda self: None)
+        dialog = HoYoLabSettingsDialog(host)
+        state.management_dialogs.append(dialog)
+        return dialog
+    state.management = management
     yield state
+    for dialog in state.management_dialogs: dialog.reject()
     for owner in coordinators: owner.shutdown()
     host.sidebar.cleanup(deadline_ms=1000)
     host.sidebar.close()
@@ -192,6 +226,81 @@ def test_new_registration_observes_server_uuid_and_renders_canonical_values(flow
     row = flow.host.sidebar._games_list_layout.itemAt(0).widget()
     assert row.findChild(flow.bar_type, "gameProgressBar").format() == "120/480"
     assert flow.cells[0].findChild(QLabel, "progressText").text() == "120/480"
+
+
+def test_management_save_resets_service_and_fills_existing_game_through_real_api(flow):
+    flow.config.selected = None
+    flow.form()
+    saved = flow.create()
+    import src.services.wuwa as wuwa
+    old_service = wuwa.get_wuwa_service()
+    assert flow.coordinators[2]._jobs == {}
+    dialog = flow.management()
+    dialog._connect_wuwa_accounts()
+    flow.host._work_coordinator.run_next()
+    assert flow.config.selected is None and flow.config.writes == []
+    dialog.wuwa_account_combo.setCurrentIndex(dialog.wuwa_account_combo.findData(ACCOUNT_KEY))
+    dialog._apply_wuwa_connection()
+    assert flow.config.selected == ACCOUNT_KEY and flow.config.writes == [ACCOUNT_KEY]
+    assert wuwa.get_wuwa_service() is not old_service
+    assert list(flow.coordinators[2]._jobs) == [(saved.id, None)]
+    flow.drain()
+    assert len(flow.observed_requests()) == 1
+    with flow.sessions() as db:
+        row = db.get(models.Process, saved.id)
+        assert row.resource_key == KEY and row.resource_current == 240 and row.resource_reserve_current == 120
+        assert db.query(models.ProcessSession).count() == 0
+    assert flow.cells[0].findChild(QLabel, 'progressText').text() == '120/480'
+    row = flow.host.sidebar._games_list_layout.itemAt(0).widget()
+    assert row.findChild(flow.bar_type, 'gameProgressBar').format() == '120/480'
+    reopened = flow.management()
+    assert reopened.wuwa_account_combo.currentData() == ACCOUNT_KEY
+
+
+def test_management_clear_cancels_queued_result_clears_current_and_stays_disconnected(flow):
+    flow.form(); saved = flow.create(); flow.drain()
+    owner = flow.coordinators[2]
+    assert owner.request_refresh(saved.id)
+    old_job = owner._jobs[(saved.id, None)]
+    owner._start_attempt(old_job)
+    dialog = flow.management()
+    dialog._clear_wuwa_connection()
+    assert flow.config.exists and flow.config.selected is None and old_job.cancelled.is_set()
+    flow.drain()
+    assert len(flow.observed_requests()) == 1 and owner._jobs == {}
+    with flow.sessions() as db:
+        row = db.get(models.Process, saved.id)
+        assert row.resource_key == KEY and row.resource_current is None and row.resource_reserve_current is None
+    assert flow.management().wuwa_account_combo.currentData() is None
+    assert flow.client.migrate_wuwa_link() and flow.config.selected is None
+
+
+def test_management_failed_account_change_preserves_existing_selection_and_current(flow):
+    flow.form(); saved = flow.create(); flow.drain()
+    flow.config.fail_write = True
+    dialog = flow.management()
+    dialog.wuwa_account_combo.addItem('다른 계정', OTHER_ACCOUNT_KEY)
+    dialog.wuwa_account_combo.setCurrentIndex(dialog.wuwa_account_combo.findData(OTHER_ACCOUNT_KEY))
+    dialog._apply_wuwa_connection()
+    assert flow.config.selected == ACCOUNT_KEY and not flow.coordinators[2]._jobs
+    with flow.sessions() as db:
+        row = db.get(models.Process, saved.id)
+        assert row.resource_current == 240 and row.resource_reserve_current == 120
+    assert len(flow.observed_requests()) == 1
+
+
+def test_get_processes_never_migrates_or_creates_provider_selection(flow):
+    flow.config.selected, flow.config.exists = None, False
+    with flow.sessions() as db:
+        db.add(models.Process(id='legacy', name='구버전 명조', monitoring_path='/fixture/wuwa.exe', launch_path='/fixture/wuwa.exe',
+                              resource_tracking_enabled=True, resource_provider='wuwa', resource_key=ACCOUNT_KEY,
+                              resource_current=240, resource_max=240))
+        db.commit()
+    rows = flow.client._fetch_all_processes()
+    assert rows[0].resource_key == ACCOUNT_KEY
+    assert flow.config.writes == [] and not flow.config.exists
+    with flow.sessions() as db:
+        assert db.get(models.Process, 'legacy').resource_key == ACCOUNT_KEY
 
 
 def test_existing_unlinked_game_gets_first_canonical_observation_after_activation(flow):
@@ -252,12 +361,17 @@ def test_changed_target_cancels_queued_old_identity_and_observes_new_target_once
     owner = flow.coordinators[2]
     old = owner._jobs[(saved.id, None)]
     owner._start_attempt(old)
-    flow.role = '799900002'; flow.form(OTHER_KEY); flow.edit(saved.id)
+    flow.role = '799900002'
+    flow.config.selected = OTHER_ACCOUNT_KEY
+    import src.services.wuwa as wuwa
+    wuwa.reset_wuwa_service()
+    owner.cancel_changed_targets()
+    assert owner.request_refresh(saved.id)
     assert old.cancelled.is_set() and owner._jobs[(saved.id, None)] is not old
     flow.drain()
     assert len(flow.observed_requests()) == 1
     fresh = flow.client.get_process_by_id(saved.id)
-    assert fresh.resource_key == OTHER_KEY and fresh.resource_current == 240
+    assert fresh.resource_key == KEY and fresh.resource_current == 240
 
 
 def test_disabling_tracking_cancels_initial_job_without_starting_another(flow):

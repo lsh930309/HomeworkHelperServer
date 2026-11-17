@@ -476,7 +476,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
         QTimer.singleShot(1800, self._nikke_resource_reconcile.schedule_startup_refreshes)
-        QTimer.singleShot(2000, self._wuwa_resource_reconcile.schedule_startup_refreshes)
+        QTimer.singleShot(2000, self._prepare_wuwa_tracking)
         QTimer.singleShot(2200, self._daily_checkin.schedule_startup_check)
         QTimer.singleShot(800, self._refresh_remote_readiness_indicators)
 
@@ -1448,6 +1448,38 @@ class MainWindow(QMainWindow):
         self._hoyolab_reconcile.cancel_changed_targets()
         self._nikke_resource_reconcile.cancel_changed_targets()
         self._wuwa_resource_reconcile.cancel_changed_targets()
+
+    def _prepare_wuwa_tracking(self):
+        """이전 게임별 계정 선택을 제공자 설정으로 옮긴 뒤 기동 조회한다."""
+        if self._shutting_down or getattr(self, "_beholder_restore_runtime_suspended", False):
+            return
+        if not self.data_manager.migrate_wuwa_link():
+            logger.warning("명조 연결 설정을 이전하지 못했습니다. 기존 데이터는 유지됩니다.")
+            self._record_status_event("명조 연결 설정을 복구하지 못했습니다. 자원/출석 관리에서 확인하세요.", 5000)
+            return
+        from src.services.wuwa import reset_wuwa_service
+        reset_wuwa_service()
+        self._wuwa_resource_reconcile.cancel_changed_targets()
+        self.populate_process_list()
+        self._wuwa_resource_reconcile.schedule_startup_refreshes()
+
+    def apply_wuwa_account_selection(self, selected_resource_key):
+        """관리창의 계정 확정·해제를 저장하고 기존 현재 자원 조회로 연결한다."""
+        if self._shutting_down or getattr(self, "_beholder_restore_runtime_suspended", False):
+            return False
+        if not self.data_manager.update_wuwa_link(selected_resource_key):
+            return False
+        from src.services.wuwa import reset_wuwa_service
+        from src.utils.resource_tracking import WUWA_PROVIDER, WUWA_WAVEPLATE_RESOURCE_KEY
+        reset_wuwa_service()
+        self._wuwa_resource_reconcile.cancel_changed_targets()
+        self.populate_process_list()
+        if selected_resource_key:
+            for process in self.data_manager.managed_processes:
+                if (process.resource_tracking_enabled and process.resource_provider == WUWA_PROVIDER
+                        and process.resource_key == WUWA_WAVEPLATE_RESOURCE_KEY):
+                    self._wuwa_resource_reconcile.request_refresh(process.id)
+        return True
 
     def apply_startup_setting(self):
         """DB 설정을 로그인 시 서비스가 읽으며 GUI는 별도 writer를 만들지 않습니다."""

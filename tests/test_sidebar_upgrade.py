@@ -76,7 +76,7 @@ def test_sidebar_resource_overlay_follows_canonical_quantities_without_changing_
     view, game, _settings, writes = sidebar
     game.resource_tracking_enabled = True
     game.resource_provider = "wuwa"
-    game.resource_key = "waveplate@Asia@799900001"
+    game.resource_key = "waveplate"
     game.resource_status = "ok"
     game.resource_current = 239
     game.resource_reserve_current = 7

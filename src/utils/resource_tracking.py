@@ -13,6 +13,7 @@ NIKKE_OUTPOST_LABEL = "전초기지 방어 보상"
 NIKKE_OUTPOST_FULL_CHARGE_SECONDS = 24 * 60 * 60
 STAMINA_RECOVERY_SECONDS_PER_UNIT = 360
 WUWA_PROVIDER = "wuwa"
+WUWA_WAVEPLATE_RESOURCE_KEY = "waveplate"
 WUWA_WAVEPLATE_LABEL = "웨이브플레이트"
 
 
@@ -44,7 +45,7 @@ def wuwa_role_id(resource_key: Any) -> str | None:
 
 
 def is_wuwa_waveplate_resource(provider: Any, resource_key: Any) -> bool:
-    return provider == WUWA_PROVIDER and wuwa_role_id(resource_key) is not None
+    return provider == WUWA_PROVIDER and resource_key == WUWA_WAVEPLATE_RESOURCE_KEY
 
 
 def resource_quantity_percent(current: Any, maximum: Any) -> float | None:

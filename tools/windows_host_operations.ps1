@@ -5,7 +5,8 @@ param(
     [string]$ReleaseTag, [string]$ReleaseRepo,
     [string]$ProbeSource, [string]$SessionSource, [string]$VerifySource,
     [int]$LogLines = 80, [string]$Contains = '',
-    [int]$Duration = 0, [string]$Scenario = 'observe', [switch]$PrepareRuntime, [switch]$AllowProtectedTime
+    [int]$Duration = 0, [string]$Scenario = 'observe', [switch]$PrepareRuntime, [switch]$AllowProtectedTime,
+    [switch]$RepairWuwaLink
 )
 $ErrorActionPreference = 'Stop'
 $env:PYTHONUTF8 = '1'
@@ -20,6 +21,7 @@ $Python = Join-Path $Repo '.venv\Scripts\python.exe'
 $VersionFile = Join-Path $Repo 'build.version.json'
 if (!(Test-Path $Python)) { throw 'Windows 작업 checkout의 Python 환경이 없습니다' }
 Set-Location $Repo
+if ($RepairWuwaLink -and ($Command -ne 'install' -or $ArchivedRelease)) { throw '명조 오프라인 복구는 새 수정본 설치에서만 사용합니다' }
 
 function Decode-Source([string]$Payload) {
     $Buffer = [IO.MemoryStream]::new([Convert]::FromBase64String($Payload))
@@ -417,6 +419,13 @@ switch ($Command) {
         if ((Get-CimInstance Win32_Service -Filter "Name='HomeworkHelperPrivilege'").StartName -ne 'LocalSystem') { throw '서비스 SYSTEM 실행 확인 실패' }
         $Status = Service-Status
         if ((User-Session $Status) -ne $Session) { throw '설치 중 지정 사용자 세션 변경' }
+        $Repair = $null
+        if ($RepairWuwaLink) {
+            Require-Source
+            Require-SyncedVersion
+            $Repair = Invoke-Probe 'repair-wuwa-link'
+            if (!$Repair.ok) { throw '명조 오프라인 데이터 복구 실패: 앱을 시작하지 않습니다' }
+        }
         Start-UserApp $Status
         $Deadline = (Get-Date).AddSeconds(30)
         $Ready = $false
@@ -432,6 +441,6 @@ switch ($Command) {
         $Apps = @($After.processes | Where-Object {$_.path -eq (Join-Path $Install 'homework_helper.exe')})
         if (!$Apps.Count -or @($Apps | Where-Object {$_.sid -ne $Sid -or $_.session -ne $Session -or $_.elevated -ne $false}).Count) { throw '호스트 앱 사용자/세션/일반 권한 확인 실패' }
         if (($Before.database.settings | ConvertTo-Json -Compress) -ne ($After.database.settings | ConvertTo-Json -Compress)) { throw '설치 전후 사용자 설정이 변경됨' }
-        @{ok=$true; release=$Release; backup=$Backup; log=$Log; runtime=$After; user_acceptance='pending'} | ConvertTo-Json -Depth 12
+        @{ok=$true; release=$Release; backup=$Backup; repair=$Repair; log=$Log; runtime=$After; user_acceptance='pending'} | ConvertTo-Json -Depth 12
     }
 }

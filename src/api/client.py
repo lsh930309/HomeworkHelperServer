@@ -527,6 +527,31 @@ class ApiClient:
             print(f"프로세스 업데이트에 실패했습니다: {e}")
             return False
 
+    def update_wuwa_link(self, selected_resource_key: str | None) -> bool:
+        """계정 선택과 해당 제공자의 게임 정규화를 한 API writer에 맡긴다."""
+        try:
+            response = requests.post(
+                f"{self.base_url}/resource-providers/wuwa/link",
+                json={"selected_resource_key": selected_resource_key}, timeout=10,
+            )
+            self._raise_for_status(response)
+            self.managed_processes = self._fetch_all_processes()
+            return True
+        except requests.RequestException:
+            print("명조 연결 설정 저장에 실패했습니다.")
+            return False
+
+    def migrate_wuwa_link(self) -> bool:
+        """앱 초기화의 명시적 쓰기 단계에서만 구버전 계정 선택을 이동한다."""
+        try:
+            response = requests.post(f"{self.base_url}/resource-providers/wuwa/migrate-link", timeout=10)
+            self._raise_for_status(response)
+            self.managed_processes = self._fetch_all_processes()
+            return True
+        except requests.RequestException:
+            print("기존 명조 연결 설정 이동에 실패했습니다.")
+            return False
+
     def update_process_runtime_state(self, updated_process: ManagedProcess) -> bool:
         """Persist the monitor-owned last-played value, without cached resource fields."""
         actor, operation = "process_monitor", "process_runtime_state_update"

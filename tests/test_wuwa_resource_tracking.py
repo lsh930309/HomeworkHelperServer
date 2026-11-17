@@ -13,16 +13,16 @@ from sqlalchemy.pool import StaticPool
 from src.data import crud, models, schemas
 
 
-pytestmark = pytest.mark.usefixtures("resource_test_isolation")
+pytestmark = pytest.mark.usefixtures("wuwa_config_memory")
 END = dt.datetime(2026, 11, 17, 10, tzinfo=dt.timezone.utc).timestamp()
 TOKEN = "qa_wuwa_tracking_token_never_output"
 OTHER_TOKEN = "qa_wuwa_other_tracking_token_never_output"
 ROLE_ID = "799900001"
-KEY = f"waveplate@Asia@{ROLE_ID}"
+KEY = "waveplate"
 
 
 @pytest.fixture
-def tracked(monkeypatch, tmp_path):
+def tracked(monkeypatch, tmp_path, wuwa_config_memory):
     from src.core.resource_observation import observe_process_resource
     from src.services.wuwa import WuwaService
 
@@ -141,8 +141,13 @@ def test_wuwa_account_preparation_does_not_authorize_late_resource_request(track
     assert tracked.values() == before
 
 
-def test_wuwa_account_change_discards_late_observation(tracked):
-    tracked.after_role = lambda: setattr(tracked, "accounts", [OTHER_TOKEN])
+@pytest.mark.parametrize('change', ['launcher', 'selected', 'clear'])
+def test_wuwa_account_change_discards_late_observation(tracked, wuwa_config_memory, change):
+    if change == 'launcher':
+        tracked.after_role = lambda: setattr(tracked, "accounts", [OTHER_TOKEN])
+    else:
+        tracked.after_role = lambda: setattr(wuwa_config_memory, 'selected',
+            'waveplate@Asia@799900002' if change == 'selected' else None)
     before = tracked.values()
     result = tracked.observe()
     assert result.get("cancelled") is True

@@ -30,7 +30,11 @@ def resource_target(process) -> tuple[str, ...] | None:
         return "hoyolab", process.hoyolab_game_id
     if getattr(process, "resource_tracking_enabled", False):
         provider, key = getattr(process, "resource_provider", None), getattr(process, "resource_key", None)
-        if is_nikke_outpost_resource(provider, key) or is_wuwa_waveplate_resource(provider, key):
+        if is_wuwa_waveplate_resource(provider, key):
+            from src.utils.wuwa_config import WuwaConfig
+            account = WuwaConfig().load_selected_resource_key()
+            return (provider, key, account) if account is not None else None
+        if is_nikke_outpost_resource(provider, key):
             return provider, key
     return None
 
@@ -264,6 +268,7 @@ def observe_process_resource(
                 )
                 if result.get("expired") or result.get("cancelled"):
                     return result
+                require_current()
                 result.update(provider_status=snapshot.status, error=snapshot.message or None, fetched_at=snapshot.updated_at.timestamp())
                 if snapshot.status != "ok":
                     return result
