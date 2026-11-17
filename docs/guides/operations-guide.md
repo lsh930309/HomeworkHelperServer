@@ -14,6 +14,7 @@
 | `tools/windows_session_probe.py` | 일회성 InteractiveToken에서 비활성 데스크톱 관찰 또는 설치에 필요한 OBS 정상 종료. SYSTEM 토큰 복제·강제 종료 없음 |
 | `tools/windows_media_probe.py` | 설치 전 미디어·음량·포커스 검수와 격리된 실제 사이드바 렌더링. 운영 DB는 표시 필드만 읽고 조작은 명시한 시나리오만 수행 |
 | `tools/ssh_host_testbench.py` | 설치 패키지 shadow copy의 격리 API 시험. 운영 설치·서비스·전원·게임 시험에 사용하지 않음 |
+| `tools/wuwa_resource_testbench.py` | 명조 글로벌 아시아 런처 인증을 호스트 안에서만 사용해 일반·초과 자원 필드를 1회 읽고 허용한 수치·상태만 출력 |
 | `tools/verify_remote_controller.py`, `tools/smoke_*.py` | 기존 원격 계약 자동 검증. 변경 범위에 필요한 검사만 선택 |
 | `tools/diagnose_button.py` | 명시적으로 요청된 Windows 입력 이벤트 조사. 일반 진단에서 자동 실행하지 않음 |
 | `tools/validate_commit_message.py` | 한국어 계층형 메시지 검사 |
@@ -141,6 +142,27 @@ inspect 결과에는 로컬 HEAD·실제 공개 브랜치 HEAD와 Windows source
 service.log가 있다고 추측하지 않는다.
 문자열 필터는 과거 오류도 찾을 수 있다. 반환된 로그 시각을 현재 상태와 구분하고 최근 상태는
 해당 날짜를 contains로 지정하거나 현재 실행 시각 이후의 행에서 확인한다.
+
+### 명조 글로벌 아시아 자원 읽기 시험
+
+기본 실행은 캐시·네트워크·SSH에 접근하지 않는 dry-run이다. 실계정 읽기 시험이 승인된
+경우에만 `--live`를 붙이고, 기존 SSH 대상·사용자와 런처 캐시를 소유한 Windows 사용자를
+`--host`, `--user`, `--owner`로 명시한다. 이 도구는 위 공용 SSH 경계와 고정 저장소의
+`.venv` Python을 재사용하며 동일 소스를 stdin으로 전달한다. 원격 파일·checkout·예약 작업을
+만들지 않고, 지정 사용자의 SID·프로필에서 Roaming AppData를 확인한다.
+
+```bash
+./.venv/bin/python tools/wuwa_resource_testbench.py
+./.venv/bin/python tools/wuwa_resource_testbench.py --live \
+  --host "$HOST_TARGET" --user "$SSH_USER" --owner "$WINDOWS_OWNER"
+```
+
+실행은 고정 글로벌 서버의 계정 조회·아시아 자원 조회 두 번으로 제한한다. 여러 캐시 계정이
+있으면 `account_selection_required`로 중단하며 `--account-index`에 1부터 시작하는 번호를
+명시해야 한다. 각 HTTPS 대기 제한은 기본 10초(`--timeout`, 1~20초)이며 자동 재시도·로그인·
+토큰 갱신·게임 조작·DB/캐시 저장은 하지 않는다. 인증값·UID·닉네임·캐시 경로·원본 응답·
+전송 예외는 출력하지 않는다. 성공은 일반·저장 자원의 수량·최대치·회복 관련 시간 6개 필드가
+모두 숫자로 확인된 경우이며, 회복 시간의 단위·응답 신선도·인증 수명까지 검증했다는 뜻은 아니다.
 
 ## 소스 준비·빌드·설치
 
