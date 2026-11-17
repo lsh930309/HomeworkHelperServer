@@ -30,7 +30,7 @@ def observed(request, monkeypatch, tmp_path):
         observed_at=END + 60.0, current=130, percent=40.0,
         credentials={"ltuid": 1, "ltoken_v2": "fixture-token", "starrail_uid": 2},
         login={"cookies": {"session_id": "fixture-session"}, "intl_open_id": "fixture-role", "nikke_area_id": 1},
-        requests=[], before_request=None, after_request=None,
+        requests=[], before_request=None, after_request=None, reserve=None, reserve_max=None,
     )
     with session_factory() as db:
         db.add(models.Process(
@@ -90,6 +90,7 @@ def observed(request, monkeypatch, tmp_path):
                 provider="nikke_blablalink", resource_key="nikke_outpost_storage",
                 percent=state.percent, status="ok", label="전초기지 방어 보상", message="",
                 updated_at=dt.datetime.fromtimestamp(state.observed_at, tz=dt.timezone.utc),
+                reserve_current=state.reserve, reserve_max=state.reserve_max,
             )
 
         def get_stamina(self, game_id, *, before_fetch=None):
@@ -126,6 +127,40 @@ def observed(request, monkeypatch, tmp_path):
     state.observe, state.values = observe, values
     yield state
     engine.dispose()
+
+
+@pytest.mark.parametrize("observed", ["hoyolab"], indirect=True)
+@pytest.mark.parametrize("reserve,reserve_max", [(None, None), (0, 2400), (120, 2400)])
+def test_successful_hsr_snapshot_replaces_nullable_reserve_as_one_observation(observed, reserve, reserve_max):
+    with observed.sessions() as db:
+        row = db.get(models.Process, "game")
+        row.resource_reserve_current, row.resource_reserve_max = 80, 2400
+        db.commit()
+    observed.reserve, observed.reserve_max = reserve, reserve_max
+    result = observed.observe(None)
+    assert result["observation_succeeded"] is True
+    with observed.sessions() as db:
+        row = db.get(models.Process, "game")
+        assert (row.stamina_current, row.stamina_max) == (130, 240)
+        assert (row.resource_reserve_current, row.resource_reserve_max) == (reserve, reserve_max)
+        assert (row.resource_current, row.resource_max) == (None, None)
+
+
+@pytest.mark.parametrize("observed", ["hoyolab"], indirect=True)
+def test_failed_hsr_snapshot_preserves_both_normal_and_reserve(observed):
+    with observed.sessions() as db:
+        row = db.get(models.Process, "game")
+        row.resource_reserve_current, row.resource_reserve_max = 80, 2400
+        db.commit()
+    def fail():
+        raise RuntimeError("격리 서버 오류")
+    observed.before_request = fail
+    result = observed.observe(None)
+    assert result["observation_succeeded"] is False
+    with observed.sessions() as db:
+        row = db.get(models.Process, "game")
+        assert (row.stamina_current, row.stamina_max, row.stamina_updated_at) == (100, 240, END - 60)
+        assert (row.resource_reserve_current, row.resource_reserve_max) == (80, 2400)
 
 
 def test_authorized_observation_updates_current_and_only_its_fixed_session(observed):

@@ -1045,7 +1045,7 @@ def test_resource_icon_label_centers_pixmap_in_fixed_space(monkeypatch, tmp_path
         _stop_window(window, app)
 
 
-def test_progress_cell_uses_full_width_bar_and_only_real_resource_icon(monkeypatch, tmp_path):
+def test_progress_cell_uses_full_width_bar_and_only_real_resource_icon(monkeypatch, tmp_path, resource_test_isolation):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     process = ManagedProcess(id="a", name="Alpha", monitoring_path="a.exe", launch_path="a.exe")
@@ -1058,16 +1058,19 @@ def test_progress_cell_uses_full_width_bar_and_only_real_resource_icon(monkeypat
     with_icon = None
     try:
         monkeypatch.setattr(window, "_get_stamina_icon_path", lambda _process: None)
-        without_icon = window._create_progress_bar_widget(process, 50.0, "50분")
+        progress = {"percentage": 50.0, "display_text": "50분", "gauge_text": "50.0%", "status": "ok"}
+        without_icon = window._create_progress_bar_widget(process, progress)
         without_icon.resize(240, window._TABLE_ROW_HEIGHT)
         without_icon.show()
         app.processEvents()
         assert len(without_icon.findChildren(QLabel)) == 1
         assert without_icon.findChild(QLabel, "progressText").alignment() & Qt.AlignmentFlag.AlignRight
+        assert without_icon.findChild(QLabel, "progressText").text() == "50.0%"
+        assert without_icon.findChild(QProgressBar).format() == "50.0%"
         assert without_icon.findChild(QProgressBar).width() == without_icon.contentsRect().width()
 
         monkeypatch.setattr(window, "_get_stamina_icon_path", lambda _process: str(icon_path))
-        with_icon = window._create_progress_bar_widget(process, 50.0, "50분")
+        with_icon = window._create_progress_bar_widget(process, progress)
         with_icon.resize(240, window._TABLE_ROW_HEIGHT)
         with_icon.show()
         app.processEvents()
@@ -2216,6 +2219,7 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
         ),
         _hoyolab_reconcile=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("hoyo") or True),
         _nikke_resource_reconcile=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("nikke") or True),
+        _wuwa_resource_reconcile=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("wuwa") or True),
         _daily_checkin=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("checkin") or True),
     )
 
@@ -2229,7 +2233,7 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
     assert heartbeat_timer.stop_calls == 1
     assert monitor_timer.start_calls == []
     assert scheduler_timer.start_calls == []
-    assert resource_shutdown_calls == ["hoyo", "nikke", "checkin", "work"]
+    assert resource_shutdown_calls == ["hoyo", "nikke", "wuwa", "checkin", "work"]
     assert window._lifecycle_shutdown_event.is_set()
 
 

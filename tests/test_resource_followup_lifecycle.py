@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication
 import src.core.resource_reconcile as resource_module
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
 from src.core.process_monitor import ProcessLifecycleEvent
-from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
+from src.core.resource_reconcile import NikkeResourceReconcileCoordinator, WuwaResourceReconcileCoordinator
 from src.data.data_models import ManagedProcess
 
 
@@ -70,7 +70,7 @@ class QueuedPool:
         return True
 
 
-@pytest.fixture(params=["hoyolab", "nikke"])
+@pytest.fixture(params=["hoyolab", "nikke", "wuwa"])
 def tracking(request, monkeypatch, app):
     monkeypatch.setattr(resource_module, "QTimer", FakeTimer)
     clock = SimpleNamespace(monotonic=1000.0, wall=_TIMESTAMP_BASE + 1000.0)
@@ -81,10 +81,14 @@ def tracking(request, monkeypatch, app):
         stamina_tracking_enabled=request.param == "hoyolab",
         hoyolab_game_id="honkai_starrail" if request.param == "hoyolab" else None,
         stamina_current=100, stamina_max=240, stamina_updated_at=_TIMESTAMP_BASE + 100.0,
-        resource_tracking_enabled=request.param == "nikke",
-        resource_provider="nikke_blablalink" if request.param == "nikke" else None,
-        resource_key="nikke_outpost_storage" if request.param == "nikke" else None,
+        resource_tracking_enabled=request.param != "hoyolab",
+        resource_provider="wuwa" if request.param == "wuwa" else "nikke_blablalink" if request.param == "nikke" else None,
+        resource_key="waveplate@Asia@799900001" if request.param == "wuwa" else "nikke_outpost_storage" if request.param == "nikke" else None,
         resource_percent=25.0, resource_updated_at=_TIMESTAMP_BASE + 100.0, resource_status="ok",
+        resource_current=60 if request.param == "wuwa" else None,
+        resource_max=240 if request.param == "wuwa" else None,
+        resource_reserve_current=7 if request.param == "wuwa" else None,
+        resource_reserve_max=480 if request.param == "wuwa" else None,
     )
     manager = SimpleNamespace(
         managed_processes=[process],
@@ -93,8 +97,14 @@ def tracking(request, monkeypatch, app):
     monitor = SimpleNamespace(active_monitored_processes={})
     calls = []
     current_service = SimpleNamespace(value=object())
-    coordinator_type = HoYoStaminaReconcileCoordinator if request.param == "hoyolab" else NikkeResourceReconcileCoordinator
-    monkeypatch.setattr(coordinator_type, "_get_service", lambda self: current_service.value)
+    coordinator_type = {"hoyolab": HoYoStaminaReconcileCoordinator, "nikke": NikkeResourceReconcileCoordinator,
+                        "wuwa": WuwaResourceReconcileCoordinator}[request.param]
+    if request.param == "wuwa":
+        # 실제 getter가 같은 coordinator identity를 반환하는지도 함께 검증한다.
+        import src.services.wuwa as wuwa
+        monkeypatch.setattr(wuwa, "_wuwa_service", current_service.value)
+    else:
+        monkeypatch.setattr(coordinator_type, "_get_service", lambda self: current_service.value)
     coordinator = coordinator_type(manager, monitor)
     coordinator._pool = QueuedPool()
     coordinator._health_pool = QueuedPool()
@@ -110,6 +120,8 @@ def tracking(request, monkeypatch, app):
                     "stamina_updated_at": _TIMESTAMP_BASE + 100.0,
                     "resource_percent": 25.0, "resource_updated_at": _TIMESTAMP_BASE + 100.0,
                     "resource_status": "ok", "resource_label": "전초기지 방어 보상",
+                    "resource_current": 60, "resource_max": 240,
+                    "resource_reserve_current": 7, "resource_reserve_max": 480,
                 },
             }
 
@@ -265,6 +277,9 @@ def test_account_service_reset_during_fetch_ignores_late_projection(tracking):
     def changing_account(current_job):
         result = fetch(current_job)
         state.current_service.value = object()
+        if state.provider == "wuwa":
+            import src.services.wuwa as wuwa
+            wuwa._wuwa_service = state.current_service.value
         return result
 
     state.coordinator._pool.tasks[0]._fetch = changing_account
@@ -372,6 +387,7 @@ def _periodic_window(start, coordinators):
     window = SimpleNamespace(
         _shutting_down=False, _beholder_restore_runtime_suspended=False,
         _hoyolab_reconcile=coordinators[0], _nikke_resource_reconcile=coordinators[1],
+        _wuwa_resource_reconcile=coordinators[2] if len(coordinators) > 2 else coordinators[1],
         _resource_monitoring_slot=MainWindow._resource_monitoring_slot,
         _last_resource_monitoring_slot=MainWindow._resource_monitoring_slot(start),
     )
@@ -388,11 +404,11 @@ def test_kst_half_hour_slots_are_fixed_and_duplicate_ticks_do_not_repeat(resourc
     assert calls == []
     tick(start.replace(minute=30))
     tick(start.replace(minute=30, second=45))
-    assert len(calls) == 2  # 두 제공자 각각 한 번
+    assert len(calls) == 3  # 세 제공자 각각 한 번
     tick(start.replace(minute=47))
-    assert len(calls) == 2
+    assert len(calls) == 3
     tick(start.replace(hour=11, minute=0))
-    assert len(calls) == 4
+    assert len(calls) == 6
 
 
 def test_kst_schedule_has_48_daily_slots_even_with_utc_input(resource_test_isolation):
@@ -403,7 +419,7 @@ def test_kst_schedule_has_48_daily_slots_even_with_utc_input(resource_test_isola
     _, tick = _periodic_window(midnight - dt.timedelta(minutes=1), (owner, owner))
     for minute in range(0, 24 * 60, 30):
         tick((midnight + dt.timedelta(minutes=minute)).astimezone(dt.timezone.utc))
-    assert len(calls) == 48 * 2
+    assert len(calls) == 48 * 3
 
 
 def test_game_end_1025_skips_1030_without_catchup_then_resumes_1100(tracking):

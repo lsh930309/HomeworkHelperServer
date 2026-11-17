@@ -34,6 +34,8 @@ class StaminaInfo:
     recover_time: int      # 완전 회복까지 남은 시간(초)
     full_time: Optional[datetime]  # 스태미나 완전 회복 예상 시각
     updated_at: datetime   # 데이터 조회 시각
+    reserve_current: Optional[int] = None
+    reserve_max: Optional[int] = None
 
 
 @dataclass
@@ -431,6 +433,10 @@ class HoYoLabService:
             full_time = None
             if notes.stamina_recover_time.total_seconds() > 0:
                 full_time = now + notes.stamina_recover_time
+            # HoYoLAB의 실제 필드와 공식 예비 개척력 상한만 사용한다.
+            reserve_current = getattr(notes, "current_reserve_stamina", None)
+            if type(reserve_current) is not int or not 0 <= reserve_current <= 2400:
+                reserve_current = None
             
             return StaminaInfo(
                 game_id="honkai_starrail",
@@ -440,6 +446,8 @@ class HoYoLabService:
                 recover_time=int(notes.stamina_recover_time.total_seconds()),
                 full_time=full_time,
                 updated_at=now,
+                reserve_current=reserve_current,
+                reserve_max=2400 if reserve_current is not None else None,
             )
         except Exception as e:
             logger.error(f"스타레일 API 호출 실패: {e}")

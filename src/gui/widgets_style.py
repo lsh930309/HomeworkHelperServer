@@ -5,77 +5,12 @@ Runtime state remains owned by the existing GUI/controllers.
 """
 from __future__ import annotations
 
-import datetime
-import logging
-from typing import TYPE_CHECKING
-
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import (
     QBrush, QColor, QFont, QFontMetricsF, QIcon, QPainter, QPainterPath, QPalette, QPen,
     QPixmap, QRadialGradient,
 )
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QProgressBar, QWidget
-
-if TYPE_CHECKING:
-    from src.data.data_models import ManagedProcess
-
-logger = logging.getLogger(__name__)
-
-
-def calculate_game_progress(process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:
-    """Windows 게임 게이지에 표시할 백분율과 값의 원천을 계산합니다."""
-    now = current_dt.timestamp()
-    resource_percentage = process.get_resource_percentage(now=now)
-    if resource_percentage is not None:
-        label = process.resource_label or "리소스"
-        return resource_percentage, f"RESOURCE:{process.resource_key}:{label}:{resource_percentage:.1f}%"
-
-    if process.stamina_tracking_enabled and process.hoyolab_game_id:
-        stamina_info = process.get_predicted_stamina(now=now)
-        if stamina_info:
-            predicted, max_stamina = stamina_info
-            percentage = predicted / max_stamina * 100 if max_stamina > 0 else 0.0
-            return percentage, f"STAMINA:{process.hoyolab_game_id}:{predicted}/{max_stamina}"
-
-    if not process.last_played_timestamp or not process.user_cycle_hours:
-        return 0.0, "기록 없음"
-
-    try:
-        last_played_dt = datetime.datetime.fromtimestamp(process.last_played_timestamp)
-        cycle_hours = process.user_cycle_hours
-        elapsed_hours = (current_dt - last_played_dt).total_seconds() / 3600
-        percentage = min(elapsed_hours / cycle_hours, 1.0) * 100
-        remaining_hours = max(cycle_hours - elapsed_hours, 0)
-
-        if remaining_hours >= 24:
-            remaining_days = int(remaining_hours // 24)
-            remaining_hours_remainder = remaining_hours % 24
-            if remaining_hours_remainder > 0:
-                time_str = f"{remaining_days}일 {int(remaining_hours_remainder)}시간"
-            else:
-                time_str = f"{remaining_days}일"
-        elif remaining_hours >= 1:
-            time_str = f"{int(remaining_hours)}시간"
-        else:
-            time_str = f"{int(remaining_hours * 60)}분"
-        return percentage, time_str
-    except Exception as exc:
-        logger.error("진행률 계산 중 오류: %s", exc)
-        return 0.0, "계산 오류"
-
-
-def progress_bar_format(percentage: float, display_text: str) -> str:
-    """게이지 옆에 표시할 짧은 값을 반환합니다."""
-    if display_text.startswith("RESOURCE:"):
-        parts = display_text.split(":", 3)
-        if len(parts) == 4:
-            return parts[3]
-    if display_text.startswith("STAMINA:"):
-        parts = display_text.split(":")
-        if len(parts) >= 3:
-            return parts[2]
-    return f"{percentage:.1f}%"
-
 
 def progress_color_bucket(percentage: float) -> str:
     """채워진 정도에 따라 공용 게이지 색을 선택합니다."""
@@ -86,6 +21,17 @@ def progress_color_bucket(percentage: float) -> str:
     if percentage >= 50:
         return "medium"
     return "low"
+
+
+def resource_gauge_description(progress: dict) -> str | None:
+    current, maximum = progress.get("resource_current"), progress.get("resource_max")
+    if current is None or maximum is None:
+        return None
+    description = f"일반 자원 {current}/{maximum}"
+    reserve, reserve_max = progress.get("resource_reserve_current"), progress.get("resource_reserve_max")
+    if reserve is not None and reserve_max is not None:
+        description += f" · 저장 자원 {reserve}/{reserve_max}"
+    return description
 
 
 class GameIconLabel(QLabel):
@@ -186,6 +132,15 @@ class CapsuleProgressBar(QProgressBar):
         super().__init__(parent)
         self.setRange(0, 100 * self._PERCENTAGE_SCALE)
         self.setTextVisible(False)
+        self._reserve_percentage: float | None = None
+
+    def set_reserve_progress(self, percentage: float | None) -> bool:
+        """기본 게이지 높이를 유지하며 선택한 저장 자원 채움을 위에 그린다."""
+        if percentage == self._reserve_percentage:
+            return False
+        self._reserve_percentage = percentage
+        self.update()
+        return True
 
     def set_progress(self, percentage: float | None, format_text: str) -> bool:
         """값·표시 문자열·색을 갱신하고 화면 변경 여부를 반환합니다."""
@@ -241,6 +196,17 @@ class CapsuleProgressBar(QProgressBar):
                           if sidebar else tokens.get(color_key, color_key))
             painter.setBrush(QColor(fill_color))
             painter.drawRoundedRect(fill_rect, radius, radius)
+
+        if self._reserve_percentage is not None:
+            reserve_width = rect.width() * max(0.0, min(self._reserve_percentage, 100.0)) / 100.0
+            if reserve_width > 0:
+                clip = QPainterPath()
+                clip.addRoundedRect(rect, radius, radius)
+                painter.save()
+                painter.setClipPath(clip)
+                painter.setBrush(QColor("#446c87" if sidebar else "#3e769b"))
+                painter.drawRoundedRect(QRectF(rect.left(), rect.top(), reserve_width, rect.height()), min(radius, reserve_width / 2), radius)
+                painter.restore()
 
         if self.isTextVisible():
             self._paint_caption(painter, rect)

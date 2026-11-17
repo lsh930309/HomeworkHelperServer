@@ -11,6 +11,7 @@ from typing import Any
 
 PROVIDER_HOYOLAB = "hoyolab"
 PROVIDER_NIKKE_BLABLALINK = "nikke_blablalink"
+PROVIDER_WUWA = "wuwa"
 
 HEALTH_UNKNOWN = "unknown"
 HEALTH_OK = "ok"
@@ -31,6 +32,7 @@ TRANSIENT_REASONS = {"network_error"}
 PROVIDER_LABELS = {
     PROVIDER_HOYOLAB: "HoYoLab",
     PROVIDER_NIKKE_BLABLALINK: "BlablaLink",
+    PROVIDER_WUWA: "명조 공식 런처",
 }
 
 
@@ -90,11 +92,15 @@ def user_message(provider: str, status: str, reason: str | None = None, message:
     if status == HEALTH_OK:
         return f"{label} 인증이 정상으로 확인되었습니다." + (f" ({detail})" if detail and detail != "ok" else "")
     if status == HEALTH_AUTH_PROBLEM:
-        if provider == PROVIDER_NIKKE_BLABLALINK:
+        if provider == PROVIDER_WUWA:
+            base = "명조 공식 런처에서 해당 캐릭터의 계정으로 로그인한 뒤 다시 연결하세요."
+        elif provider == PROVIDER_NIKKE_BLABLALINK:
             base = "BlablaLink/ShiftyPad에 다시 로그인한 뒤 쿠키를 다시 추출하세요."
         else:
             base = "HoYoLab에 다시 로그인한 뒤 쿠키를 다시 추출하세요."
         return f"{label} 쿠키/토큰 유효성 문제가 감지되었습니다. {base}" + (f" ({detail})" if detail else "")
     if status == HEALTH_WARNING:
         return f"{label} 연동 상태 확인이 필요합니다." + (f" ({detail})" if detail else "")
+    if provider == PROVIDER_WUWA:
+        return "공식 런처의 로그인 정보로 연결합니다. 유효성은 자원 조회 결과로 확인됩니다."
     return f"{label} 쿠키가 저장되어 있습니다. 유효성은 검사/자동 동기화 결과로 확인됩니다."

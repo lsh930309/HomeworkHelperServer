@@ -92,6 +92,10 @@ def auto_migrate_database(*, strict: bool = False):
         ("managed_processes", "resource_percent", "REAL", None),
         ("managed_processes", "resource_updated_at", "REAL", None),
         ("managed_processes", "resource_status", "TEXT", None),
+        ("managed_processes", "resource_current", "INTEGER", None),
+        ("managed_processes", "resource_max", "INTEGER", None),
+        ("managed_processes", "resource_reserve_current", "INTEGER", None),
+        ("managed_processes", "resource_reserve_max", "INTEGER", None),
         # Process 테이블 - 사용자 프리셋 ID
         ("managed_processes", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
         # Process 테이블 - 직접 실행 인자

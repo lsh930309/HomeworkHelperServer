@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import asyncio
+import datetime as dt
 
 import pytest
 
@@ -12,6 +14,48 @@ import src.services.nikke as nikke
 
 
 pytestmark = pytest.mark.usefixtures("resource_test_isolation")
+
+
+@pytest.mark.parametrize("reserve", [None, 0, 120, 2400, 2401])
+def test_hsr_actual_notes_mapping_distinguishes_missing_zero_and_valid_reserve(monkeypatch, reserve):
+    notes = SimpleNamespace(current_stamina=240, max_stamina=240,
+                            stamina_recover_time=dt.timedelta(seconds=0))
+    if reserve is not None:
+        notes.current_reserve_stamina = reserve
+    class Client:
+        uid = 42
+        async def get_starrail_notes(self):
+            return notes
+    config = SimpleNamespace(load_credentials=lambda: {})
+    service = HoYoLabService(config=config)
+    monkeypatch.setattr(hoyo, "genshin", SimpleNamespace(Game=SimpleNamespace(STARRAIL="hsr")))
+    result = asyncio.run(service._async_get_starrail_stamina(Client()))
+    assert (result.current, result.max) == (240, 240)
+    expected = (reserve, 2400) if reserve is not None and reserve <= 2400 else (None, None)
+    assert (result.reserve_current, result.reserve_max) == expected
+
+
+def test_zzz_actual_notes_do_not_invent_unknown_reserve(monkeypatch):
+    class Client:
+        uid = 42
+        async def get_zzz_notes(self):
+            return SimpleNamespace(battery_charge=SimpleNamespace(current=240, max=240, seconds_till_full=0))
+    service = HoYoLabService(config=SimpleNamespace(load_credentials=lambda: {}))
+    monkeypatch.setattr(hoyo, "genshin", SimpleNamespace(Game=SimpleNamespace(ZZZ="zzz")))
+    result = asyncio.run(service._async_get_zzz_stamina(Client()))
+    assert (result.current, result.max) == (240, 240)
+    assert (result.reserve_current, result.reserve_max) == (None, None)
+
+
+def test_nikke_fullness_above_one_does_not_become_guessed_reserve(monkeypatch):
+    config = SimpleNamespace(is_configured=lambda: True, load_session=lambda: {"cookies": {"session_id": "fake"}})
+    service = NikkeService(config=config)
+    monkeypatch.setattr(service, "get_role_info", lambda: NikkeRoleInfo("fixture", 1))
+    monkeypatch.setattr(service, "_post", lambda *args, **kwargs: {"code": 0, "data": {
+        "daily_progress": [{"outpost_battle_storage_fullness": 1.2}]}})
+    result = service.get_outpost_storage()
+    assert result.status == "ok"
+    assert (result.reserve_current, result.reserve_max) == (None, None)
 
 
 @pytest.mark.parametrize("game_id", ["honkai_starrail", "zenless_zone_zero"])

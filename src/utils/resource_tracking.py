@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import time
 import math
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 NIKKE_PROVIDER = "nikke_blablalink"
@@ -10,6 +12,64 @@ NIKKE_OUTPOST_RESOURCE_KEY = "nikke_outpost_storage"
 NIKKE_OUTPOST_LABEL = "전초기지 방어 보상"
 NIKKE_OUTPOST_FULL_CHARGE_SECONDS = 24 * 60 * 60
 STAMINA_RECOVERY_SECONDS_PER_UNIT = 360
+WUWA_PROVIDER = "wuwa"
+WUWA_WAVEPLATE_LABEL = "웨이브플레이트"
+
+
+@dataclass
+class GameResourceSnapshot:
+    provider: str
+    resource_key: str
+    label: str
+    percent: float | None
+    status: str
+    updated_at: datetime
+    message: str = ""
+    raw_debug: dict[str, Any] = field(default_factory=dict)
+    current: int | None = None
+    maximum: int | None = None
+    reserve_current: int | None = None
+    reserve_max: int | None = None
+
+
+def wuwa_role_key(role_id: str) -> str:
+    return f"waveplate@Asia@{role_id}"
+
+
+def wuwa_role_id(resource_key: Any) -> str | None:
+    if not isinstance(resource_key, str) or not resource_key.startswith("waveplate@Asia@"):
+        return None
+    role_id = resource_key.removeprefix("waveplate@Asia@")
+    return role_id if role_id.isascii() and role_id.isdigit() and role_id.startswith("7") else None
+
+
+def is_wuwa_waveplate_resource(provider: Any, resource_key: Any) -> bool:
+    return provider == WUWA_PROVIDER and wuwa_role_id(resource_key) is not None
+
+
+def resource_quantity_percent(current: Any, maximum: Any) -> float | None:
+    if type(current) is not int or type(maximum) is not int or maximum <= 0 or current < 0:
+        return None
+    return 100.0 if current >= maximum else current / maximum * 100.0
+
+
+def resource_gauge_presentation(
+    percentage: Any,
+    display_text: str,
+    reserve_current: Any = None,
+    reserve_max: Any = None,
+) -> dict[str, Any]:
+    """일반 게이지가 가득 찼고 유효한 초과량이 있을 때만 같은 캡슐에 덧그린다."""
+    normal = clamp_percent(percentage)
+    reserve = resource_quantity_percent(reserve_current, reserve_max)
+    show_reserve = bool(
+        normal is not None and normal >= 100.0 and reserve is not None
+        and reserve_current > 0 and reserve_current <= reserve_max
+    )
+    return {
+        "display_text": f"{reserve_current}/{reserve_max}" if show_reserve else display_text,
+        "overlay_percentage": reserve if show_reserve else None,
+    }
 
 
 def predict_stamina_value(

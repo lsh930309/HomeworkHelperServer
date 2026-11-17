@@ -46,6 +46,10 @@ PROCESS_RUNTIME_FIELDS = {
     "resource_percent",
     "resource_updated_at",
     "resource_status",
+    "resource_current",
+    "resource_max",
+    "resource_reserve_current",
+    "resource_reserve_max",
 }
 PROCESS_EDITOR_FIELDS = PROCESS_FIELDS - PROCESS_RUNTIME_FIELDS
 WEB_SHORTCUT_RUNTIME_FIELDS = {"last_reset_timestamp"}
@@ -703,6 +707,17 @@ def _invalid_process_values(
         value = update_data.get("resource_percent")
         if value is not None and (not _is_number(value) or not (0 <= float(value) <= 100)):
             invalid.append("resource_percent")
+
+    quantity_fields = {"resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max"}
+    for field in quantity_fields & changed_fields:
+        value = update_data.get(field)
+        if value is not None and (type(value) is not int or value < 0):
+            invalid.append(field)
+    for current_field, max_field in (("resource_current", "resource_max"), ("resource_reserve_current", "resource_reserve_max")):
+        if {current_field, max_field} & changed_fields:
+            current, maximum = proposed(current_field), proposed(max_field)
+            if type(current) is int and type(maximum) is int and (maximum <= 0 or (current_field == "resource_reserve_current" and current > maximum)):
+                invalid.append(f"{current_field}>{max_field}")
 
     for field in ("stamina_current", "stamina_max"):
         if field in changed_fields:

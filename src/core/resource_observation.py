@@ -13,6 +13,8 @@ from src.utils.resource_tracking import (
     STAMINA_RECOVERY_SECONDS_PER_UNIT,
     clamp_percent,
     is_nikke_outpost_resource,
+    is_wuwa_waveplate_resource,
+    resource_quantity_percent,
 )
 
 
@@ -26,10 +28,10 @@ def resource_target(process) -> tuple[str, ...] | None:
         and getattr(process, "hoyolab_game_id", None) in {"honkai_starrail", "zenless_zone_zero"}
     ):
         return "hoyolab", process.hoyolab_game_id
-    if getattr(process, "resource_tracking_enabled", False) and is_nikke_outpost_resource(
-        getattr(process, "resource_provider", None), getattr(process, "resource_key", None),
-    ):
-        return process.resource_provider, process.resource_key
+    if getattr(process, "resource_tracking_enabled", False):
+        provider, key = getattr(process, "resource_provider", None), getattr(process, "resource_key", None)
+        if is_nikke_outpost_resource(provider, key) or is_wuwa_waveplate_resource(provider, key):
+            return provider, key
     return None
 
 
@@ -48,6 +50,10 @@ class ResourceObservation:
     resource_percent: float | None = None
     resource_status: str | None = None
     resource_label: str | None = None
+    resource_current: int | None = None
+    resource_max: int | None = None
+    resource_reserve_current: int | None = None
+    resource_reserve_max: int | None = None
 
     def session_values(self, process, session) -> dict:
         """저장 시각 대신 고정 세션과 실제 요청 시작으로만 보정 범위를 판정한다."""
@@ -69,9 +75,13 @@ class ResourceObservation:
                 raise ValueError("관측된 스태미나 값이 없습니다.")
             recovered = int(elapsed / STAMINA_RECOVERY_SECONDS_PER_UNIT)
             return {"stamina_at_end": max(0, min(self.stamina_current - recovered, self.stamina_max))}
-        percent = clamp_percent(self.resource_percent)
+        percent = (resource_quantity_percent(self.resource_current, self.resource_max)
+                   if self.target[0] == "wuwa" else clamp_percent(self.resource_percent))
         if percent is None:
             raise ValueError("관측된 자원 백분율이 없습니다.")
+        if self.target[0] == "wuwa":
+            # 명조의 회복 시간 필드는 아직 검증되지 않았으므로 역산하지 않는다.
+            return {"resource_percent_at_end": percent}
         return {"resource_percent_at_end": clamp_percent(percent - elapsed * 100.0 / NIKKE_OUTPOST_FULL_CHARGE_SECONDS)}
 
 
@@ -143,6 +153,7 @@ def observe_process_resource(
     session_factory,
     hoyolab_service_factory=None,
     nikke_service_factory=None,
+    wuwa_service_factory=None,
     hoyolab_config_factory=None,
     nikke_config_factory=None,
     clock=time.time,
@@ -190,6 +201,12 @@ def observe_process_resource(
                 hoyolab_service_factory = HoYoLabService
             config = _ProviderConfigSnapshot(hoyolab_config_factory(), target[0])
             service = hoyolab_service_factory(config)
+        elif target[0] == "wuwa":
+            if wuwa_service_factory is None:
+                from src.services.wuwa import WuwaService
+                wuwa_service_factory = WuwaService
+            service = wuwa_service_factory()
+            config = service
         else:
             if nikke_config_factory is None:
                 from src.utils.nikke_config import NikkeConfig
@@ -237,7 +254,23 @@ def observe_process_resource(
                     return result
                 fetched_at = stamina.updated_at.timestamp()
                 values = dict(stamina_current=int(stamina.current), stamina_max=int(stamina.max))
+                values.update(resource_reserve_current=getattr(stamina, "reserve_current", None),
+                              resource_reserve_max=getattr(stamina, "reserve_max", None))
                 result["provider_status"] = "ok"
+            elif target[0] == "wuwa":
+                snapshot = service.get_resource_snapshot(
+                    target[1], before_fetch=lambda: require_current(starting=True),
+                    before_prepare=lambda: require_current(),
+                )
+                if result.get("expired") or result.get("cancelled"):
+                    return result
+                result.update(provider_status=snapshot.status, error=snapshot.message or None, fetched_at=snapshot.updated_at.timestamp())
+                if snapshot.status != "ok":
+                    return result
+                fetched_at = snapshot.updated_at.timestamp()
+                values = dict(resource_percent=None, resource_status="ok", resource_current=snapshot.current,
+                              resource_max=snapshot.maximum, resource_reserve_current=snapshot.reserve_current,
+                              resource_reserve_max=snapshot.reserve_max)
             else:
                 snapshot = service.get_outpost_storage(before_fetch=lambda: require_current(starting=True))
                 if result.get("expired") or result.get("cancelled"):

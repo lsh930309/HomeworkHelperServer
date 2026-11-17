@@ -5,7 +5,7 @@ from src.data import schemas
 from src.data import beholder
 from src.data.data_models import normalize_sidebar_mode, SIDEBAR_MODE_DISABLED, SIDEBAR_MODE_VALUES
 from src.utils.app_paths import validate_capture_output_path
-from src.utils.resource_tracking import is_nikke_outpost_resource, predict_nikke_outpost_percent, predict_stamina_value
+from src.utils.resource_tracking import is_nikke_outpost_resource, is_wuwa_waveplate_resource, predict_nikke_outpost_percent, predict_stamina_value
 from typing import Any, Optional
 from pathlib import Path
 import re
@@ -155,12 +155,21 @@ def update_process(
         if actor == "process_editor":
             for runtime_field in beholder.PROCESS_RUNTIME_FIELDS:
                 update_data.pop(runtime_field, None)
+        previous_identity = (db_process.resource_provider, db_process.resource_key, db_process.hoyolab_game_id)
+        next_identity = tuple(update_data.get(field, getattr(db_process, field))
+                              for field in ("resource_provider", "resource_key", "hoyolab_game_id"))
+        reset_fields = set()
+        if previous_identity != next_identity:
+            reset_fields = {"resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max"}
+            if is_wuwa_waveplate_resource(*previous_identity[:2]) or is_wuwa_waveplate_resource(*next_identity[:2]):
+                reset_fields.update({"resource_percent", "resource_updated_at", "resource_status"})
+            update_data.update({field: None for field in reset_fields})
         changed = {key for key, value in update_data.items() if hasattr(db_process, key) and getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
-            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: beholder.PROCESS_EDITOR_FIELDS - {"id"}},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: (beholder.PROCESS_EDITOR_FIELDS - {"id"}) | reset_fields},
             evidence={
                 "changed_fields": sorted(changed),
                 "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
@@ -208,10 +217,21 @@ def _resource_observation_values(
     observed_at: float | None,
     status: str | None,
     label: str | None,
+    *,
+    resource_current: int | None = None,
+    resource_max: int | None = None,
+    resource_reserve_current: int | None = None,
+    resource_reserve_max: int | None = None,
 ) -> dict[str, Any]:
     """Store metadata independently from the successful value's recovery anchor."""
     values = {"resource_status": status, "resource_label": label}
     values = {key: value for key, value in values.items() if value is not None}
+    if is_wuwa_waveplate_resource(process.resource_provider, process.resource_key):
+        quantities = dict(resource_current=resource_current, resource_max=resource_max,
+                          resource_reserve_current=resource_reserve_current, resource_reserve_max=resource_reserve_max)
+        if status in (None, "ok") and all(value is not None for value in quantities.values()):
+            values.update(quantities, resource_percent=None, resource_label=None, resource_updated_at=observed_at)
+        return values
     if percent is None or status not in (None, "ok"):
         return values
     is_nikke = is_nikke_outpost_resource(process.resource_provider, process.resource_key)
@@ -241,6 +261,8 @@ def update_process_stamina(
     stamina_current: int,
     stamina_max: int,
     stamina_updated_at: float,
+    resource_reserve_current: int | None = None,
+    resource_reserve_max: int | None = None,
     actor: str = "runtime_stamina_tracker",
     operation_kind: str = "process_stamina_update",
     override_token: str | None = None,
@@ -248,12 +270,15 @@ def update_process_stamina(
     db_process = get_process_by_id(db, process_id)
     if db_process:
         update_data = _stamina_observation_values(db_process, stamina_current, stamina_max, stamina_updated_at)
+        # 새 서버 관측에 없는 값은 unknown으로 바꾸고 이전 관측의 초과량을 섞지 않는다.
+        update_data.update(resource_reserve_current=resource_reserve_current, resource_reserve_max=resource_reserve_max)
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
-            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"stamina_current", "stamina_max", "stamina_updated_at"}},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"stamina_current", "stamina_max", "stamina_updated_at",
+                                                              "resource_reserve_current", "resource_reserve_max"}},
             evidence={
                 "changed_fields": sorted(changed),
                 "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
@@ -280,6 +305,10 @@ def update_process_resource(
     resource_updated_at: float | None,
     resource_status: str | None,
     resource_label: str | None = None,
+    resource_current: int | None = None,
+    resource_max: int | None = None,
+    resource_reserve_current: int | None = None,
+    resource_reserve_max: int | None = None,
     actor: str = "resource_tracker",
     operation_kind: str = "process_resource_update",
     override_token: str | None = None,
@@ -288,13 +317,16 @@ def update_process_resource(
     if db_process:
         update_data = _resource_observation_values(
             db_process, resource_percent, resource_updated_at, resource_status, resource_label,
+            resource_current=resource_current, resource_max=resource_max,
+            resource_reserve_current=resource_reserve_current, resource_reserve_max=resource_reserve_max,
         )
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
-            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"resource_percent", "resource_updated_at", "resource_status", "resource_label"}},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"resource_percent", "resource_updated_at", "resource_status", "resource_label",
+                                                              "resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max"}},
             evidence={
                 "changed_fields": sorted(changed),
                 "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},

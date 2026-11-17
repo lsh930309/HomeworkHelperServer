@@ -71,6 +71,50 @@ def test_stop_icon_has_both_sides_of_the_power_ring(sidebar):
                    for x in range(round(image.width() * start), round(image.width() * end)))
 
 
+@pytest.mark.usefixtures("resource_test_isolation")
+def test_sidebar_resource_overlay_follows_canonical_quantities_without_changing_row_geometry(sidebar, app):
+    view, game, _settings, writes = sidebar
+    game.resource_tracking_enabled = True
+    game.resource_provider = "wuwa"
+    game.resource_key = "waveplate@Asia@799900001"
+    game.resource_status = "ok"
+    game.resource_current = 239
+    game.resource_reserve_current = 7
+    game.resource_max = 240
+    game.resource_reserve_max = 480
+    view.show()
+    view.refresh_content()
+    app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+    app.processEvents()
+    row = current_row(view)
+    title = row.findChild(QLabel, "gameName")
+    icon = row.findChild(GameIconLabel, "gameIcon")
+    bar = row.findChild(CapsuleProgressBar, "gameProgressBar")
+    original = row.geometry()
+    assert (icon.height(), title.height(), bar.height()) == (30, 15, 11)
+    assert bar.mapTo(row, QPoint()).y() - (title.mapTo(row, QPoint()).y() + title.height()) == 4
+    for current, reserve, text, overlay in [
+        (239, 7, "239/240", None), (240, 7, "7/480", 7 / 480 * 100),
+        (240, 0, "240/240", None), (300, 480, "480/480", 100), (239, 7, "239/240", None),
+    ]:
+        game.resource_current, game.resource_reserve_current = current, reserve
+        view._refresh_game_row_displays()
+        app.processEvents()
+        assert bar.format() == text
+        if overlay is None:
+            assert bar._reserve_percentage is None
+        else:
+            assert bar._reserve_percentage == pytest.approx(overlay)
+        assert row.geometry() == original and game.resource_reserve_current == reserve
+    game.resource_tracking_enabled = False
+    game.user_cycle_hours = 12
+    game.last_played_timestamp = (datetime.datetime.now() - datetime.timedelta(hours=6)).timestamp()
+    view._refresh_game_row_displays()
+    assert bar.format() == "50.0%" and bar._reserve_percentage is None
+    assert not writes
+
+
 @pytest.mark.parametrize("running", [False, True])
 def test_refresh_never_shows_a_detached_game_control_as_a_window(sidebar, app, monkeypatch, running):
     from src.gui.main_window import MainWindow

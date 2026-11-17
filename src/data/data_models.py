@@ -7,6 +7,8 @@ from typing import List, Optional, Dict, Any, Tuple
 from src.utils.resource_tracking import (
     clamp_percent,
     is_nikke_outpost_resource,
+    is_wuwa_waveplate_resource,
+    resource_quantity_percent,
     predict_nikke_outpost_percent,
     predict_stamina_value,
 )
@@ -62,6 +64,10 @@ class ManagedProcess:
                  resource_percent: Optional[float] = None,
                  resource_updated_at: Optional[float] = None,
                  resource_status: Optional[str] = None,
+                 resource_current: Optional[int] = None,
+                 resource_max: Optional[int] = None,
+                 resource_reserve_current: Optional[int] = None,
+                 resource_reserve_max: Optional[int] = None,
                  # 앱 볼륨 제어
                  default_volume: Optional[int] = None,
                  default_muted: bool = False):
@@ -102,6 +108,10 @@ class ManagedProcess:
         self.resource_percent = resource_percent
         self.resource_updated_at = resource_updated_at
         self.resource_status = resource_status
+        self.resource_current = resource_current
+        self.resource_max = resource_max
+        self.resource_reserve_current = resource_reserve_current
+        self.resource_reserve_max = resource_reserve_max
 
         # 앱 볼륨 제어
         self.default_volume = default_volume
@@ -180,6 +190,9 @@ class ManagedProcess:
         """범용 리소스 백분율 반환 (0.0 ~ 100.0)."""
         if not self.is_external_resource_game():
             return None
+        quantity_percent = resource_quantity_percent(self.resource_current, self.resource_max)
+        if quantity_percent is not None or is_wuwa_waveplate_resource(self.resource_provider, self.resource_key):
+            return quantity_percent if self.resource_status in (None, "ok") else None
         if self.resource_percent is None or self.resource_status not in (None, "ok"):
             return None
         if is_nikke_outpost_resource(self.resource_provider, self.resource_key):

@@ -23,6 +23,7 @@ from src.core.process_monitor import terminate_managed_process
 from src.core.launcher import Launcher
 from src.core.launch_target import resolve_launch_args
 from src.utils import audio_control
+from src.core.process_progress import calculate_process_progress
 from src.utils.windows import get_visible_taskbar_work_area, focus_managed_process_window
 from src.gui.sidebar.controls import SidebarClockFace, SidebarDivider, VolumeDial
 from src.gui.sidebar.media_panel import MediaCenterPanel
@@ -31,7 +32,7 @@ from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
 from src.gui.widgets_style import (
     CapsuleProgressBar, GameIconLabel, apply_sidebar_widgets_style,
-    calculate_game_progress, progress_bar_format,
+    resource_gauge_description,
 )
 
 logger = logging.getLogger(__name__)
@@ -1122,15 +1123,19 @@ class SidebarWidget(QWidget):
                     widget.style().polish(widget)
                     widget.update()
 
-            percentage, raw_text = calculate_game_progress(process, now)
-            available = raw_text not in ("기록 없음", "계산 오류")
-            display = progress_bar_format(percentage, raw_text) if available else raw_text
+            progress = calculate_process_progress(process, now)
+            percentage = progress["percentage"]
+            available = progress["status"] == "ok"
+            display = progress["gauge_text"]
             bar = row.findChild(CapsuleProgressBar, "gameProgressBar")
             bar.set_progress(percentage if available else None, display)
-            if bar.accessibleDescription() != display:
-                bar.setAccessibleDescription(display)
+            bar.set_reserve_progress(progress.get("overlay_percentage") if available else None)
+            resource_description = resource_gauge_description(progress)
+            accessible_value = resource_description or display
+            if bar.accessibleDescription() != accessible_value:
+                bar.setAccessibleDescription(accessible_value)
             state = "현재 창" if focused else "실행 중" if running else "꺼짐"
-            description = f"{process.name} · {state} · {display}"
+            description = f"{process.name} · {state} · {accessible_value}"
             if surface.accessibleDescription() != description:
                 surface.setAccessibleDescription(description)
                 surface.setToolTip(description)

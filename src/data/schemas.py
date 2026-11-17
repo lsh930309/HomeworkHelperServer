@@ -1,6 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from typing import List, Optional
 from src.data.data_models import DEFAULT_MEDIA_AUTO_BGM
+from src.utils.resource_tracking import is_wuwa_waveplate_resource, resource_quantity_percent, WUWA_WAVEPLATE_LABEL
 
 class ProcessSchema(BaseModel):
     id: Optional[str] = None
@@ -31,9 +32,23 @@ class ProcessSchema(BaseModel):
     resource_percent: Optional[float] = None
     resource_updated_at: Optional[float] = None
     resource_status: Optional[str] = None
+    resource_current: Optional[int] = None
+    resource_max: Optional[int] = None
+    resource_reserve_current: Optional[int] = None
+    resource_reserve_max: Optional[int] = None
     # 앱 볼륨 제어
     default_volume: Optional[int] = None
     default_muted: bool = False
+
+    @model_validator(mode="after")
+    def project_resource_quantity(self):
+        quantity_percent = resource_quantity_percent(self.resource_current, self.resource_max)
+        if quantity_percent is not None:
+            self.resource_percent = quantity_percent
+        if is_wuwa_waveplate_resource(self.resource_provider, self.resource_key):
+            self.resource_percent = quantity_percent
+            self.resource_label = WUWA_WAVEPLATE_LABEL
+        return self
 
     class Config:
         from_attributes = True
@@ -67,6 +82,10 @@ class ProcessCreateSchema(BaseModel):
     resource_percent: Optional[float] = None
     resource_updated_at: Optional[float] = None
     resource_status: Optional[str] = None
+    resource_current: Optional[int] = None
+    resource_max: Optional[int] = None
+    resource_reserve_current: Optional[int] = None
+    resource_reserve_max: Optional[int] = None
     # 앱 볼륨 제어
     default_volume: Optional[int] = None
     default_muted: bool = False

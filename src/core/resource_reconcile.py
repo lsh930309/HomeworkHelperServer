@@ -16,7 +16,7 @@ from src.core.process_monitor import ProcessLifecycleEvent
 from src.core.provider_health_persist import ProviderHealthPersistTask
 from src.data.data_models import ManagedProcess
 from src.gui.work_coordinator import retain_detached_qthreadpool
-from src.utils.resource_tracking import is_nikke_outpost_resource
+from src.utils.resource_tracking import is_nikke_outpost_resource, is_wuwa_waveplate_resource
 
 logger = logging.getLogger(__name__)
 
@@ -413,3 +413,41 @@ class NikkeResourceReconcileCoordinator(_ResourceFollowupCoordinator):
             )
         except Exception as exc:
             logger.debug("[Resource] provider health 알림 전송 실패: %s", exc, exc_info=True)
+
+
+class WuwaResourceReconcileCoordinator(NikkeResourceReconcileCoordinator):
+    """명조도 같은 시작·주기·종료 후 추적 큐와 저장 API를 사용한다."""
+
+    def _get_service(self):
+        from src.services.wuwa import get_wuwa_service
+        return get_wuwa_service()
+
+    def _target(self, process):
+        if getattr(process, "resource_tracking_enabled", False) and is_wuwa_waveplate_resource(
+            getattr(process, "resource_provider", None), getattr(process, "resource_key", None),
+        ):
+            return process.resource_provider, process.resource_key
+        return None
+
+    def _event_target(self, event):
+        if getattr(event, "resource_tracking_enabled", False) and is_wuwa_waveplate_resource(
+            getattr(event, "resource_provider", None), getattr(event, "resource_key", None),
+        ):
+            return event.resource_provider, event.resource_key
+        return None
+
+    def _apply_process_row(self, process, row):
+        super()._apply_process_row(process, row)
+        for key in ("resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max"):
+            setattr(process, key, row[key])
+
+    def _record_provider_health_from_status(self, process, status, message, fetched_at):
+        payload = credential_health.update_payload_for_reason(
+            credential_health.PROVIDER_WUWA, status, message=message, source="resource_tracking",
+            process_id=process.id, game_id="wuthering_waves", detected_at=fetched_at,
+        )
+        if payload is None:
+            return
+        self._health_pool.start(ProviderHealthPersistTask(self._transport, payload, context="명조 resource_tracking"))
+        if credential_health.is_alertable_health(payload["status"], payload["reason"]):
+            self._send_provider_health_notification(process, payload)

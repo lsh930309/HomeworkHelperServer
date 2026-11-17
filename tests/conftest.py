@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import socket
+import subprocess
+import urllib.request
 import webbrowser
 
 import pytest
@@ -21,6 +23,7 @@ def resource_test_isolation(monkeypatch, tmp_path):
     from src.utils.hoyolab_config import HoYoLabConfig
     from src.utils.nikke_config import NikkeConfig
     from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+    from src.services.wuwa import WuwaGateway
     import aiohttp
     import requests
 
@@ -47,9 +50,19 @@ def resource_test_isolation(monkeypatch, tmp_path):
                  "_get_local_state_path", "_get_encryption_key", "_decrypt_cookie_value"):
         monkeypatch.setattr(BrowserCookieExtractor, name, blocked)
     monkeypatch.setattr(webbrowser, "open", blocked)
+    # 명조는 별도 token store 없이 런처 캐시를 읽는다. 새 단일 입구도 실조회 전에 막는다.
+    monkeypatch.setattr(WuwaGateway, "read_accounts", blocked)
+    monkeypatch.setattr(WuwaGateway, "post_json", blocked)
 
     monkeypatch.setattr(requests.sessions.Session, "request", blocked)
     monkeypatch.setattr(aiohttp.ClientSession, "_request", blocked)
+    monkeypatch.setattr(urllib.request, "urlopen", blocked)
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", blocked)
+    monkeypatch.setattr(subprocess, "run", blocked)
+    monkeypatch.setattr(subprocess, "Popen", blocked)
+    # Qt의 외부 URL 열기는 Python subprocess를 통하지 않을 수 있다.
+    from PySide6.QtGui import QDesktopServices
+    monkeypatch.setattr(QDesktopServices, "openUrl", blocked)
     # 선택된 HTTP 래퍼 밖으로 새 호출이 생겨도 외부 연결·DNS로 빠져나가지 못한다.
     monkeypatch.setattr(socket, "getaddrinfo", blocked)
     monkeypatch.setattr(socket.socket, "connect", blocked)

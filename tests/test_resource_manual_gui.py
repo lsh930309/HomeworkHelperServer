@@ -238,7 +238,7 @@ def test_lookup_success_and_save_failure_are_reported_separately(manual):
     assert state.dialog.stamina_test_button.isEnabled()
 
 
-@pytest.mark.parametrize("failed_owner", [None, "media", "hoyo", "nikke", "checkin", "work"])
+@pytest.mark.parametrize("failed_owner", [None, "media", "hoyo", "nikke", "wuwa", "checkin", "work"])
 def test_restore_admission_requires_all_writer_owners_drained(failed_owner, monkeypatch):
     import threading
     import src.gui.main_window as main_window
@@ -261,6 +261,7 @@ def test_restore_admission_requires_all_writer_owners_drained(failed_owner, monk
         _lifecycle_shutdown_event=threading.Event(),
         _hoyolab_reconcile=Owner("hoyo"),
         _nikke_resource_reconcile=Owner("nikke"),
+        _wuwa_resource_reconcile=Owner("wuwa"),
         _daily_checkin=Owner("checkin"),
         _stop_media_center=lambda *args: Owner("media").shutdown(*args),
     )
@@ -270,7 +271,7 @@ def test_restore_admission_requires_all_writer_owners_drained(failed_owner, monk
     assert window._beholder_restore_runtime_suspended
     assert window._lifecycle_shutdown_event.is_set()
     assert window.process_monitor.active_monitored_processes == {}
-    assert [item[0] for item in calls] == ["timers", "invalidate", "media", "hoyo", "nikke", "checkin", "work"]
+    assert [item[0] for item in calls] == ["timers", "invalidate", "media", "hoyo", "nikke", "wuwa", "checkin", "work"]
     main_window.MainWindow.prepare_database_restore(window)
     assert len([item for item in calls if item[0] == "timers"]) == 1
 
@@ -366,6 +367,7 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
     inactive = SimpleNamespace(shutdown=lambda *args: True)
     window._hoyolab_reconcile = resource if state.provider == "hoyolab" else inactive
     window._nikke_resource_reconcile = resource if state.provider == "nikke" else inactive
+    window._wuwa_resource_reconcile = inactive
 
     def start_session(**kwargs):
         lifecycle_started.set()
@@ -411,6 +413,7 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
     from PySide6.QtCore import QEventLoop, QTimer
     window._hoyolab_reconcile = inactive
     window._nikke_resource_reconcile = inactive
+    window._wuwa_resource_reconcile = inactive
     del resource
     gc.collect()
     loop = QEventLoop()

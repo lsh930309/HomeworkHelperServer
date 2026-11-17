@@ -27,6 +27,9 @@ class HoYoStaminaReconcileCoordinator(_ResourceFollowupCoordinator):
     def _apply_process_row(self, process, row):
         for key in ("stamina_current", "stamina_max", "stamina_updated_at"):
             setattr(process, key, row[key])
+        for key in ("resource_reserve_current", "resource_reserve_max"):
+            if key in row:
+                setattr(process, key, row[key])
 
     def _record_observation_health(self, process, payload):
         status = payload.get("provider_status")

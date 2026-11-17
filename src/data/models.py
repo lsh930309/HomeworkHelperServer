@@ -44,6 +44,10 @@ class Process(Base):
     resource_percent = Column(Float, nullable=True)
     resource_updated_at = Column(Float, nullable=True)
     resource_status = Column(String, nullable=True)
+    resource_current = Column(Integer, nullable=True)
+    resource_max = Column(Integer, nullable=True)
+    resource_reserve_current = Column(Integer, nullable=True)
+    resource_reserve_max = Column(Integer, nullable=True)
 
     # 앱 볼륨 제어
     default_volume = Column(Integer, nullable=True)   # 0~100, None이면 미설정

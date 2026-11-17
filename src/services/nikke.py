@@ -10,25 +10,13 @@ from typing import Any, Optional
 import requests
 
 from src.utils.nikke_config import NikkeConfig
-from src.utils.resource_tracking import NIKKE_OUTPOST_LABEL, NIKKE_OUTPOST_RESOURCE_KEY, NIKKE_PROVIDER
+from src.utils.resource_tracking import GameResourceSnapshot, NIKKE_OUTPOST_LABEL, NIKKE_OUTPOST_RESOURCE_KEY, NIKKE_PROVIDER
 
 logger = logging.getLogger(__name__)
 
 
 class _NikkeDeadlineExceeded(TimeoutError):
     """Raised before another HTTP request starts after the shared deadline."""
-
-
-@dataclass
-class GameResourceSnapshot:
-    provider: str
-    resource_key: str
-    label: str
-    percent: Optional[float]
-    status: str
-    updated_at: datetime
-    message: str = ""
-    raw_debug: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

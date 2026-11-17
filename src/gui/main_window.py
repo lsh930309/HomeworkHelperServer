@@ -62,7 +62,8 @@ from src.core.launch_target import (
 from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
-from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
+from src.core.process_progress import calculate_process_progress
+from src.core.resource_reconcile import NikkeResourceReconcileCoordinator, WuwaResourceReconcileCoordinator
 from src.core.daily_checkin_coordinator import DailyCheckInCoordinator
 from src.core.process_monitor import (
     ProcessLifecycleEvent,
@@ -83,8 +84,7 @@ from src.gui.widgets_style import (
     CapsuleProgressBar,
     apply_modern_widgets_style,
     apply_widgets_palette,
-    calculate_game_progress,
-    progress_bar_format,
+    resource_gauge_description,
     tint_icon,
     widgets_theme_tokens,
 )
@@ -225,6 +225,10 @@ class MainWindow(QMainWindow):
             self,
         )
 
+        self._wuwa_resource_reconcile = WuwaResourceReconcileCoordinator(
+            self.data_manager, self.process_monitor, self.system_notifier, self,
+        )
+        self._wuwa_resource_reconcile.resource_updated.connect(self.populate_process_list_slot)
         self._hoyolab_reconcile.resource_updated.connect(self.populate_process_list_slot)
         self._nikke_resource_reconcile.resource_updated.connect(self.populate_process_list_slot)
         # 기동한 회차는 기존 startup 조회가 소유한다. 첫 정기 조회는 다음 00/30분이다.
@@ -472,6 +476,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
         QTimer.singleShot(1800, self._nikke_resource_reconcile.schedule_startup_refreshes)
+        QTimer.singleShot(2000, self._wuwa_resource_reconcile.schedule_startup_refreshes)
         QTimer.singleShot(2200, self._daily_checkin.schedule_startup_check)
         QTimer.singleShot(800, self._refresh_remote_readiness_indicators)
 
@@ -706,12 +711,14 @@ class MainWindow(QMainWindow):
                 entry["session_id"] = value.session_id
             self._hoyolab_reconcile.handle_process_started(event)
             self._nikke_resource_reconcile.handle_process_started(event)
+            self._wuwa_resource_reconcile.handle_process_started(event)
         else:
             process = next((item for item in self.data_manager.managed_processes if item.id == event.process_id), None)
             if process is not None and value.last_played_saved:
                 process.last_played_timestamp = event.timestamp
             self._hoyolab_reconcile.handle_process_stopped(event)
             self._nikke_resource_reconcile.handle_process_stopped(event)
+            self._wuwa_resource_reconcile.handle_process_stopped(event)
         self.update_process_statuses_only()
 
     def _set_remote_readiness_indicator(self, key: str, color: str, message: str) -> None:
@@ -934,9 +941,10 @@ class MainWindow(QMainWindow):
         # 아직 외부 응답을 기다리는 writer가 있으면 복구 POST를 허용하지 않는다.
         hoyo = self._hoyolab_reconcile.shutdown(remaining_ms())
         nikke = self._nikke_resource_reconcile.shutdown(remaining_ms())
+        wuwa = self._wuwa_resource_reconcile.shutdown(remaining_ms())
         checkin = self._daily_checkin.shutdown(remaining_ms())
         work = self._work_coordinator.shutdown(deadline_seconds=remaining_ms() / 1000.0)
-        return media and hoyo and nikke and checkin and work
+        return media and hoyo and nikke and wuwa and checkin and work
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -1439,6 +1447,7 @@ class MainWindow(QMainWindow):
         dlg.exec()
         self._hoyolab_reconcile.cancel_changed_targets()
         self._nikke_resource_reconcile.cancel_changed_targets()
+        self._wuwa_resource_reconcile.cancel_changed_targets()
 
     def apply_startup_setting(self):
         """DB 설정을 로그인 시 서비스가 읽으며 GUI는 별도 writer를 만들지 않습니다."""
@@ -1488,7 +1497,7 @@ class MainWindow(QMainWindow):
                     resource_tracking_enabled=getattr(process, "resource_tracking_enabled", False),
                     resource_provider=getattr(process, "resource_provider", None),
                     resource_key=getattr(process, "resource_key", None),
-                    resource_percent_at_end=getattr(process, "resource_percent", None),
+                    resource_percent_at_end=process.get_resource_percentage(now=float(snapshot.observed_at)),
                 )
                 command = _LifecycleCommand(
                     "stop",
@@ -1499,6 +1508,7 @@ class MainWindow(QMainWindow):
                 )
                 self._hoyolab_reconcile.mark_process_stopped(event)
                 self._nikke_resource_reconcile.mark_process_stopped(event)
+                self._wuwa_resource_reconcile.mark_process_stopped(event)
                 self._work_coordinator.submit_lifecycle(
                     process.id, self._persist_lifecycle_command, command
                 )
@@ -1612,7 +1622,7 @@ class MainWindow(QMainWindow):
         """KST 정규 분에 도달한 회차만 처리하고 기동·절전 중 누락은 보충하지 않는다."""
         if self._shutting_down or getattr(self, "_beholder_restore_runtime_suspended", False):
             return
-        coordinators = (self._hoyolab_reconcile, self._nikke_resource_reconcile)
+        coordinators = (self._hoyolab_reconcile, self._nikke_resource_reconcile, self._wuwa_resource_reconcile)
         for coordinator in coordinators:
             coordinator.expire_exit_windows()
         kst = (now or datetime.datetime.now(_RESOURCE_MONITORING_TIMEZONE)).astimezone(_RESOURCE_MONITORING_TIMEZONE)
@@ -1772,8 +1782,8 @@ class MainWindow(QMainWindow):
             name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
             self.process_table.setItem(row, self.COL_NAME, name_item)
 
-            percentage, time_str = calculate_game_progress(p, now_dt)
-            progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
+            progress = calculate_process_progress(p, now_dt)
+            progress_widget = self._create_progress_bar_widget(p, progress)
             self.process_table.setCellWidget(row, self.COL_LAST_PLAYED, progress_widget)
 
             self.process_table.setCellWidget(row, self.COL_LAUNCH_BTN, self._create_launch_button_cell(p))
@@ -1841,11 +1851,16 @@ class MainWindow(QMainWindow):
                                        resource_percent=getattr(p_edit, 'resource_percent', None) if data.get("resource_tracking_enabled", False) else None,
                                        resource_updated_at=getattr(p_edit, 'resource_updated_at', None) if data.get("resource_tracking_enabled", False) else None,
                                        resource_status=getattr(p_edit, 'resource_status', None) if data.get("resource_tracking_enabled", False) else None,
+                                       resource_current=getattr(p_edit, 'resource_current', None),
+                                       resource_max=getattr(p_edit, 'resource_max', None),
+                                       resource_reserve_current=getattr(p_edit, 'resource_reserve_current', None),
+                                       resource_reserve_max=getattr(p_edit, 'resource_reserve_max', None),
                                        default_volume=getattr(p_edit, 'default_volume', None))  # 기존 볼륨 설정 보존
 
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
                     self._hoyolab_reconcile.cancel_changed_targets()
                     self._nikke_resource_reconcile.cancel_changed_targets()
+                    self._wuwa_resource_reconcile.cancel_changed_targets()
                     self.populate_process_list()
                     QTimer.singleShot(0, self._adjust_window_size_to_content)
                     self._record_status_event(f"'{upd_p.name}' 수정 완료.", 3000)
@@ -1864,6 +1879,7 @@ class MainWindow(QMainWindow):
             if self.data_manager.remove_process(pid): # 프로세스 삭제
                 self._hoyolab_reconcile.cancel_changed_targets()
                 self._nikke_resource_reconcile.cancel_changed_targets()
+                self._wuwa_resource_reconcile.cancel_changed_targets()
                 self.populate_process_list()
                 QTimer.singleShot(0, self._adjust_window_size_to_content)
                 self._record_status_event(f"'{p_del.name}' 삭제 완료.", 3000)
@@ -2321,6 +2337,8 @@ class MainWindow(QMainWindow):
             self._hoyolab_reconcile.shutdown(remaining_ms())
         if hasattr(self, '_nikke_resource_reconcile'):
             self._nikke_resource_reconcile.shutdown(remaining_ms())
+        if hasattr(self, '_wuwa_resource_reconcile'):
+            self._wuwa_resource_reconcile.shutdown(remaining_ms())
         if hasattr(self, '_daily_checkin'):
             self._daily_checkin.shutdown(remaining_ms())
         drained = self._work_coordinator.shutdown(
@@ -2936,7 +2954,7 @@ class MainWindow(QMainWindow):
 
     # ─────────────────────────────
 
-    def _create_progress_bar_widget(self, process, percentage: float, time_str: str) -> QWidget:
+    def _create_progress_bar_widget(self, process, progress: dict) -> QWidget:
         """우측 값 행과 셀 전체 폭의 얇은 트랙을 가진 진행률 위젯을 생성합니다."""
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -2952,8 +2970,8 @@ class MainWindow(QMainWindow):
             value_layout.addWidget(self._create_centered_resource_icon_label(icon_path))
         value_layout.addStretch(1)
 
-        expects_bar = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
-        display_text = progress_bar_format(percentage, time_str) if expects_bar else time_str
+        expects_bar = progress["status"] == "ok"
+        display_text = progress["gauge_text"]
         text_label = QLabel(display_text, value_row)
         text_label.setObjectName("progressText")
         text_label.setProperty("hhRole", "muted")
@@ -2963,7 +2981,12 @@ class MainWindow(QMainWindow):
 
         if expects_bar:
             progress_bar = CapsuleProgressBar(container)
-            progress_bar.set_progress(percentage, display_text)
+            progress_bar.set_progress(progress["percentage"], display_text)
+            progress_bar.set_reserve_progress(progress.get("overlay_percentage"))
+            description = resource_gauge_description(progress)
+            if description:
+                container.setToolTip(description)
+                progress_bar.setAccessibleDescription(description)
             layout.addWidget(progress_bar)
 
         return container
@@ -3006,23 +3029,31 @@ class MainWindow(QMainWindow):
             current_widget = self.process_table.cellWidget(row, self.COL_LAST_PLAYED)
             if not current_widget:
                 continue
-            percentage, time_str = calculate_game_progress(process, now_dt)
+            progress = calculate_process_progress(process, now_dt)
+            percentage = progress["percentage"]
             progress_bar = current_widget.findChild(CapsuleProgressBar)
-            expects_progress_widget = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
+            expects_progress_widget = progress["status"] == "ok"
             if expects_progress_widget != (progress_bar is not None):
-                replacement = self._create_progress_bar_widget(process, percentage, time_str)
+                replacement = self._create_progress_bar_widget(process, progress)
                 self.process_table.setCellWidget(row, self.COL_LAST_PLAYED, replacement)
                 updated_count += 1
                 continue
 
-            new_format = progress_bar_format(percentage, time_str) if expects_progress_widget else time_str
+            new_format = progress["gauge_text"]
             text_label = current_widget.findChild(QLabel, "progressText")
             if text_label is not None and text_label.text() != new_format:
                 text_label.setText(new_format)
                 updated_count += 1
 
-            if progress_bar is not None and progress_bar.set_progress(percentage, new_format):
-                updated_count += 1
+            if progress_bar is not None:
+                if progress_bar.set_progress(percentage, new_format):
+                    updated_count += 1
+                if progress_bar.set_reserve_progress(progress.get("overlay_percentage")):
+                    updated_count += 1
+                description = resource_gauge_description(progress)
+                if description:
+                    current_widget.setToolTip(description)
+                    progress_bar.setAccessibleDescription(description)
 
         if updated_count > 0:
             self.process_table.viewport().update()

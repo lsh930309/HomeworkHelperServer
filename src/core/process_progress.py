@@ -8,6 +8,10 @@ from src.utils.resource_tracking import (
     STAMINA_RECOVERY_SECONDS_PER_UNIT,
     clamp_percent,
     is_nikke_outpost_resource,
+    is_wuwa_waveplate_resource,
+    resource_quantity_percent,
+    resource_gauge_presentation,
+    WUWA_WAVEPLATE_LABEL,
     predict_nikke_outpost_percent,
     predict_stamina_value,
 )
@@ -56,6 +60,14 @@ def _progress_base(
         "display_text": display_text,
         "status": status,
     }
+    presentation = resource_gauge_presentation(
+        percentage, display_text,
+        metadata.get("resource_reserve_current"), metadata.get("resource_reserve_max"),
+    )
+    payload["display_text"] = presentation["display_text"]
+    payload["gauge_text"] = f"{payload['percentage']:.1f}%" if kind == "cycle" else presentation["display_text"]
+    if presentation["overlay_percentage"] is not None:
+        payload["overlay_percentage"] = presentation["overlay_percentage"]
     if projection is not None:
         payload["projection"] = projection
     if remaining_seconds is not None:
@@ -80,6 +92,13 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
         provider = getattr(process, "resource_provider", None)
         resource_key = getattr(process, "resource_key", None)
         updated_at = getattr(process, "resource_updated_at", None)
+        is_wuwa = is_wuwa_waveplate_resource(provider, resource_key)
+        quantity_percent = resource_quantity_percent(getattr(process, "resource_current", None), getattr(process, "resource_max", None))
+        if quantity_percent is not None:
+            percent = quantity_percent
+        if is_wuwa:
+            percent = quantity_percent
+            label = WUWA_WAVEPLATE_LABEL
         if percent is not None and status in (None, "ok"):
             if is_nikke_outpost_resource(provider, resource_key):
                 percentage = predict_nikke_outpost_percent(
@@ -125,7 +144,7 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
                 source=SERVER_TRACKED_SOURCE,
                 kind="resource",
                 percentage=percentage,
-                display_text=f"{percentage:.1f}%",
+                display_text=(f"{process.resource_current}/{process.resource_max}" if quantity_percent is not None else f"{percentage:.1f}%"),
                 status=status or "ok",
                 projection=projection,
                 remaining_seconds=remaining_seconds,
@@ -134,6 +153,10 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
                 key=resource_key,
                 label=label,
                 updated_at=updated_at,
+                resource_current=getattr(process, "resource_current", None),
+                resource_max=getattr(process, "resource_max", None),
+                resource_reserve_current=getattr(process, "resource_reserve_current", None),
+                resource_reserve_max=getattr(process, "resource_reserve_max", None),
             )
         return _progress_base(
             source=SERVER_TRACKED_SOURCE,
@@ -182,6 +205,10 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
                 ready_at=ready_at,
                 stamina_current=predicted,
                 stamina_max=int(maximum),
+                resource_current=predicted,
+                resource_max=int(maximum),
+                resource_reserve_current=getattr(process, "resource_reserve_current", None),
+                resource_reserve_max=getattr(process, "resource_reserve_max", None),
                 hoyolab_game_id=getattr(process, "hoyolab_game_id", None),
                 updated_at=base_timestamp_value,
             )

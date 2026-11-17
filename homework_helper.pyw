@@ -2290,6 +2290,10 @@ def ensure_process_table_schema():
                 if 'resource_status' not in existing_cols:
                     conn.execute(text("ALTER TABLE managed_processes ADD COLUMN resource_status TEXT"))
                     existing_cols.add('resource_status')
+                for field in ('resource_current', 'resource_max', 'resource_reserve_current', 'resource_reserve_max'):
+                    if field not in existing_cols:
+                        conn.execute(text(f"ALTER TABLE managed_processes ADD COLUMN {field} INTEGER"))
+                        existing_cols.add(field)
                 if {'resource_provider', 'resource_key', 'resource_label'}.issubset(existing_cols):
                     conn.execute(text(
                         "UPDATE managed_processes "
