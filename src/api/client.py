@@ -460,8 +460,8 @@ class ApiClient:
 
     # --- ManagedProcess 관련 메서드 ---
 
-    def add_process(self, process: ManagedProcess) -> bool:
-        """새로운 프로세스를 서버에 추가합니다."""
+    def add_process(self, process: ManagedProcess) -> Optional[ManagedProcess]:
+        """서버가 발급한 ID와 저장값을 가진 새 프로세스를 반환합니다."""
         try:
             # Pydantic 스키마에 맞게 id를 제외하고 데이터를 보냅니다.
             data_to_send = process.to_dict()
@@ -477,13 +477,12 @@ class ApiClient:
             )
             self._raise_for_status(response)
             self._clear_pending_override(actor, operation)
-            
-            # 성공 시, 내부 데이터 목록도 새로고침합니다. (전체 목록을 다시 가져오는 것이 가장 간단하고 확실함)
-            self.managed_processes = self._fetch_all_processes()
-            return True
+            created_process = ManagedProcess.from_dict(response.json())
+            self.managed_processes.append(created_process)
+            return created_process
         except requests.RequestException as e:
             print(f"프로세스 추가에 실패했습니다: {e}")
-            return False
+            return None
 
     def remove_process(self, process_id: str) -> bool:
         """ID로 프로세스를 서버에서 삭제합니다."""

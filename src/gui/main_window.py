@@ -1858,9 +1858,9 @@ class MainWindow(QMainWindow):
                                        default_volume=getattr(p_edit, 'default_volume', None))  # 기존 볼륨 설정 보존
 
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
-                    self._hoyolab_reconcile.cancel_changed_targets()
-                    self._nikke_resource_reconcile.cancel_changed_targets()
-                    self._wuwa_resource_reconcile.cancel_changed_targets()
+                    saved_process = self.data_manager.get_process_by_id(upd_p.id)
+                    for coordinator in (self._hoyolab_reconcile, self._nikke_resource_reconcile, self._wuwa_resource_reconcile):
+                        coordinator.handle_process_saved(p_edit, saved_process)
                     self.populate_process_list()
                     QTimer.singleShot(0, self._adjust_window_size_to_content)
                     self._record_status_event(f"'{upd_p.name}' 수정 완료.", 3000)
@@ -2023,10 +2023,15 @@ class MainWindow(QMainWindow):
                                        resource_provider=data.get("resource_provider"),
                                        resource_key=data.get("resource_key"),
                                        resource_label=data.get("resource_label"))
-                self.data_manager.add_process(new_p) # 데이터 매니저에 프로세스 추가
-                self.populate_process_list()
-                QTimer.singleShot(0, self._adjust_window_size_to_content)
-                self._record_status_event(f"'{new_p.name}' 추가 완료.", 3000)
+                saved_process = self.data_manager.add_process(new_p)
+                if saved_process is not None:
+                    for coordinator in (self._hoyolab_reconcile, self._nikke_resource_reconcile, self._wuwa_resource_reconcile):
+                        coordinator.handle_process_saved(None, saved_process)
+                    self.populate_process_list()
+                    QTimer.singleShot(0, self._adjust_window_size_to_content)
+                    self._record_status_event(f"'{saved_process.name}' 추가 완료.", 3000)
+                else:
+                    QMessageBox.warning(self, "오류", "프로세스 추가 실패.")
 
     # --- 웹 바로 가기 버튼 관련 메소드들 ---
     def _clear_layout(self, layout: QHBoxLayout):

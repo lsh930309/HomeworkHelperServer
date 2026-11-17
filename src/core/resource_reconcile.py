@@ -232,6 +232,16 @@ class _ResourceFollowupCoordinator(QObject):
                 self._finish_job(job, "tracking target or account changed")
         self.expire_exit_windows()
 
+    def handle_process_saved(
+        self, previous: ManagedProcess | None, saved: ManagedProcess | None,
+    ) -> None:
+        """추적 연결이 새로 저장되면 canonical ID로 현재 자원을 한 번 조회한다."""
+        self.cancel_changed_targets()
+        target = self._target(saved) if saved is not None else None
+        previous_target = self._target(previous) if previous is not None else None
+        if target is not None and target != previous_target:
+            self.request_refresh(saved.id)
+
     def _schedule_next(self, job: _FollowupJob) -> None:
         if not self._job_is_current(job):
             self._finish_job(job, "tracking target or account changed")
