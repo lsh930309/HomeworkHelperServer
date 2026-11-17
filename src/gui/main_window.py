@@ -112,6 +112,7 @@ class _LifecyclePersistenceResult:
 
 
 _GUI_CLEANUP_DEADLINE_SECONDS = 2.0
+_RESOURCE_MONITORING_TIMEZONE = datetime.timezone(datetime.timedelta(hours=9), "KST")
 
 
 class IconDownloader(QThread):
@@ -226,6 +227,10 @@ class MainWindow(QMainWindow):
 
         self._hoyolab_reconcile.resource_updated.connect(self.populate_process_list_slot)
         self._nikke_resource_reconcile.resource_updated.connect(self.populate_process_list_slot)
+        # 기동한 회차는 기존 startup 조회가 소유한다. 첫 정기 조회는 다음 00/30분이다.
+        self._last_resource_monitoring_slot = self._resource_monitoring_slot(
+            datetime.datetime.now(_RESOURCE_MONITORING_TIMEZONE)
+        )
 
         self._daily_checkin = DailyCheckInCoordinator(
             self.data_manager,
@@ -1492,6 +1497,8 @@ class MainWindow(QMainWindow):
                     float(entry.get("start_time_approx") or 0.0),
                     str(entry.get("runtime_token") or ""),
                 )
+                self._hoyolab_reconcile.mark_process_stopped(event)
+                self._nikke_resource_reconcile.mark_process_stopped(event)
                 self._work_coordinator.submit_lifecycle(
                     process.id, self._persist_lifecycle_command, command
                 )
@@ -1596,6 +1603,29 @@ class MainWindow(QMainWindow):
                 self.activate_and_show() # 창을 다시 표시
                 self._record_status_event("모든 게임 종료: 창이 다시 표시되었습니다.", 3000)
 
+    @staticmethod
+    def _resource_monitoring_slot(now: datetime.datetime) -> tuple[int, int, int]:
+        kst = now.astimezone(_RESOURCE_MONITORING_TIMEZONE)
+        return kst.date().toordinal(), kst.hour, kst.minute // 30
+
+    def _maybe_refresh_periodic_resources(self, now: datetime.datetime | None = None) -> None:
+        """KST 정규 분에 도달한 회차만 처리하고 기동·절전 중 누락은 보충하지 않는다."""
+        if self._shutting_down or getattr(self, "_beholder_restore_runtime_suspended", False):
+            return
+        coordinators = (self._hoyolab_reconcile, self._nikke_resource_reconcile)
+        for coordinator in coordinators:
+            coordinator.expire_exit_windows()
+        kst = (now or datetime.datetime.now(_RESOURCE_MONITORING_TIMEZONE)).astimezone(_RESOURCE_MONITORING_TIMEZONE)
+        slot = self._resource_monitoring_slot(kst)
+        if slot <= self._last_resource_monitoring_slot:
+            return
+        self._last_resource_monitoring_slot = slot
+        # 10:47 복귀로 알게 된 10:30 회차 등은 실행하지 않는다.
+        if kst.minute not in (0, 30):
+            return
+        for coordinator in coordinators:
+            coordinator.request_periodic_refreshes()
+
     def run_scheduler_check(self):
         """스케줄러 검사를 실행하고 상태 변경이 있을 때만 카드 목록을 업데이트합니다."""
         start_time = time.time()
@@ -1604,6 +1634,7 @@ class MainWindow(QMainWindow):
         status_changed = self.scheduler.run_all_checks() # 게임 관련 스케줄 검사
         if hasattr(self, "_daily_checkin"):
             self._daily_checkin.maybe_run_periodic()
+        self._maybe_refresh_periodic_resources()
 
         if status_changed:
             self.update_process_statuses_only()

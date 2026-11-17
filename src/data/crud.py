@@ -1220,71 +1220,36 @@ def get_last_session(db: Session, process_id: str):
 
 
 @db_retry_on_lock
-def update_session_stamina(
-    db: Session,
-    session_id: int,
-    stamina_at_end: int,
-    *,
-    actor: str = "runtime_stamina_tracker",
-    operation_kind: str = "session_stamina_update",
-    override_token: str | None = None,
-) -> bool:
-    """세션의 종료 스태미나 값을 업데이트합니다."""
-    db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
-    if db_session:
-        operation = beholder.BeholderOperation(
-            kind=operation_kind,
-            actor=actor,
-            allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
-            allowed_columns={beholder.PROCESS_SESSIONS_TABLE: {"stamina_at_end"}},
-            evidence={
-                "changed_fields": ["stamina_at_end"],
-                "context": {"session_id": session_id},
-                "proposed_values": {"stamina_at_end": stamina_at_end},
-            },
-            override_token=override_token,
-        )
-        beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
+def apply_session_resource_observation(db: Session, observation) -> dict:
+    """API가 직접 실행한 관측만 그 관측에 고정된 종료 세션에 적용한다."""
+    from src.core.resource_observation import ResourceObservation
+
+    if not isinstance(observation, ResourceObservation):
+        raise ValueError("세션 보정에는 실제 제공자 관측이 필요합니다.")
+    db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == observation.session_id).first()
+    process = get_process_by_id(db, observation.process_id)
+    values = observation.session_values(process, db_session)
+    operation_kind = "resource_observation_session_correction"
+    operation = beholder.BeholderOperation(
+        kind=operation_kind,
+        actor="resource_observation",
+        allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
+        allowed_columns={beholder.PROCESS_SESSIONS_TABLE: set(values)},
+        evidence={
+            "changed_fields": sorted(values),
+            "context": {"session_id": observation.session_id, "process_id": observation.process_id},
+            "proposed_values": values,
+        },
+    )
+    beholder.guard_process_session_update(db, db_session, set(values), operation, observation=observation)
+    changed = any(getattr(db_session, key) != value for key, value in values.items())
+    if changed:
         _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
-        db_session.stamina_at_end = stamina_at_end
+        for key, value in values.items():
+            setattr(db_session, key, value)
         db.commit()
         db.refresh(db_session)
-        return True
-    return False
-
-
-@db_retry_on_lock
-def update_session_resource(
-    db: Session,
-    session_id: int,
-    resource_percent_at_end: float,
-    *,
-    actor: str = "resource_slow_followup",
-    operation_kind: str = "resource_session_percent_rewrite",
-    override_token: str | None = None,
-) -> bool:
-    """세션의 종료 외부 리소스 백분율을 업데이트합니다."""
-    db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
-    if db_session:
-        operation = beholder.BeholderOperation(
-            kind=operation_kind,
-            actor=actor,
-            allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
-            allowed_columns={beholder.PROCESS_SESSIONS_TABLE: {"resource_percent_at_end"}},
-            evidence={
-                "changed_fields": ["resource_percent_at_end"],
-                "context": {"session_id": session_id},
-                "proposed_values": {"resource_percent_at_end": resource_percent_at_end},
-            },
-            override_token=override_token,
-        )
-        beholder.guard_process_session_update(db, db_session, {"resource_percent_at_end"}, operation)
-        _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
-        db_session.resource_percent_at_end = resource_percent_at_end
-        db.commit()
-        db.refresh(db_session)
-        return True
-    return False
+    return values
 
 
 @db_retry_on_lock

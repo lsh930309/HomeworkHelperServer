@@ -1052,6 +1052,12 @@ def run_server_main(shutdown_event=None):
         resource_status: str | None = None
         resource_label: str | None = None
 
+    class ResourceObservationRequest(BaseModel):
+        session_id: int | None = None
+
+        class Config:
+            extra = "forbid"
+
     def _daily_checkin_process_payload(process, descriptor, setting=None, latest_log=None) -> dict[str, Any]:
         from src.core import daily_checkin
 
@@ -1558,6 +1564,19 @@ def run_server_main(shutdown_event=None):
         if updated_process is None:
             raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
         return updated_process
+
+    @app.post("/processes/{process_id}/resource-observation")
+    def observe_process_resource(process_id: str, request: ResourceObservationRequest):
+        """관측 전체를 기존 DB 배수에 포함하고 네트워크 중 SQL 세션은 보유하지 않는다."""
+        from src.core import resource_observation
+
+        with database_coordinator.acquire_request("POST /processes/{process_id}/resource-observation"):
+            return resource_observation.observe_process_resource(
+                process_id,
+                request.session_id,
+                session_factory=SessionLocal,
+                is_cancelled=lambda: shutdown_event.is_set() or database_coordinator.snapshot().mode != "normal",
+            )
 
     @app.patch("/processes/{process_id}/stamina", response_model=schemas.ProcessSchema)
     def update_process_stamina(
@@ -2117,53 +2136,6 @@ def run_server_main(shutdown_event=None):
         session = crud.get_last_session(db=db, process_id=process_id)
         if session is None:
             raise HTTPException(status_code=404, detail="완료된 세션이 없습니다.")
-        return session
-
-    @app.patch("/sessions/{session_id}/stamina", response_model=schemas.ProcessSessionSchema)
-    def update_session_stamina(
-        session_id: int,
-        stamina_at_end: int,
-        db: Session = Depends(get_db),
-        x_hh_beholder_actor: str | None = Header(None),
-        x_hh_beholder_operation: str | None = Header(None),
-        x_hh_beholder_override: str | None = Header(None),
-    ):
-        """세션의 종료 스태미나 값을 업데이트"""
-        success = crud.update_session_stamina(
-            db=db,
-            session_id=session_id,
-            stamina_at_end=stamina_at_end,
-            actor=x_hh_beholder_actor or "hoyolab_slow_followup",
-            operation_kind=x_hh_beholder_operation or "hoyolab_session_stamina_rewrite",
-            override_token=x_hh_beholder_override,
-        )
-        if not success:
-            raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
-        # 업데이트된 세션 반환
-        session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
-        return session
-
-    @app.patch("/sessions/{session_id}/resource", response_model=schemas.ProcessSessionSchema)
-    def update_session_resource(
-        session_id: int,
-        resource_percent_at_end: float,
-        db: Session = Depends(get_db),
-        x_hh_beholder_actor: str | None = Header(None),
-        x_hh_beholder_operation: str | None = Header(None),
-        x_hh_beholder_override: str | None = Header(None),
-    ):
-        """세션의 종료 외부 리소스 백분율을 업데이트"""
-        success = crud.update_session_resource(
-            db=db,
-            session_id=session_id,
-            resource_percent_at_end=resource_percent_at_end,
-            actor=x_hh_beholder_actor or "resource_slow_followup",
-            operation_kind=x_hh_beholder_operation or "resource_session_percent_rewrite",
-            override_token=x_hh_beholder_override,
-        )
-        if not success:
-            raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
-        session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
         return session
 
     @app.get("/sessions", response_model=List[schemas.ProcessSessionSchema])

@@ -252,41 +252,22 @@ class BackgroundApiTransport:
             raise ValueError("리소스 저장 API가 저장된 프로세스를 반환하지 않았습니다.")
         return result.payload
 
-    def update_session_stamina(
+    def observe_process_resource(
         self,
-        session_id: int,
-        stamina_at_end: int,
+        process_id: str,
+        session_id: int | None = None,
         *,
-        timeout: float = 10.0,
-    ) -> None:
-        self.request_json(
-            "PATCH",
-            f"/sessions/{int(session_id)}/stamina",
-            params={"stamina_at_end": int(stamina_at_end)},
+        timeout: float = 45.0,
+    ) -> dict[str, Any]:
+        """제공자 조회·저장을 API에 맡기며 호출자가 값이나 조회 시각을 제출하지 않는다."""
+        result = self.post_json(
+            f"/processes/{process_id}/resource-observation",
+            {"session_id": session_id},
             timeout=timeout,
-            headers={
-                "X-HH-Beholder-Actor": "hoyolab_slow_followup",
-                "X-HH-Beholder-Operation": "hoyolab_session_stamina_rewrite",
-            },
         )
-
-    def update_session_resource(
-        self,
-        session_id: int,
-        resource_percent_at_end: float,
-        *,
-        timeout: float = 10.0,
-    ) -> None:
-        self.request_json(
-            "PATCH",
-            f"/sessions/{int(session_id)}/resource",
-            params={"resource_percent_at_end": float(resource_percent_at_end)},
-            timeout=timeout,
-            headers={
-                "X-HH-Beholder-Actor": "resource_slow_followup",
-                "X-HH-Beholder-Operation": "resource_session_percent_rewrite",
-            },
-        )
+        if not isinstance(result.payload, dict):
+            raise ValueError("자원 관측 API가 관측 결과를 반환하지 않았습니다.")
+        return result.payload
 
     def update_provider_credential_health(
         self,
@@ -1052,35 +1033,3 @@ class ApiClient:
         except requests.RequestException as e:
             print(f"마지막 세션 조회 실패: {e}")
             return None
-
-    def update_session_stamina(self, session_id: int, stamina_at_end: int) -> bool:
-        """세션의 종료 스태미나 값을 업데이트합니다."""
-        try:
-            response = requests.patch(
-                f"{self.base_url}/sessions/{session_id}/stamina",
-                params={"stamina_at_end": stamina_at_end},
-                headers=self._beholder_headers("hoyolab_slow_followup", "hoyolab_session_stamina_rewrite"),
-                timeout=10
-            )
-            self._raise_for_status(response)
-            self._clear_pending_override("hoyolab_slow_followup", "hoyolab_session_stamina_rewrite")
-            return True
-        except requests.RequestException as e:
-            print(f"세션 스태미나 업데이트 실패: {e}")
-            return False
-
-    def update_session_resource(self, session_id: int, resource_percent_at_end: float) -> bool:
-        """세션의 종료 외부 리소스 백분율을 업데이트합니다."""
-        try:
-            response = requests.patch(
-                f"{self.base_url}/sessions/{session_id}/resource",
-                params={"resource_percent_at_end": resource_percent_at_end},
-                headers=self._beholder_headers("resource_slow_followup", "resource_session_percent_rewrite"),
-                timeout=10
-            )
-            self._raise_for_status(response)
-            self._clear_pending_override("resource_slow_followup", "resource_session_percent_rewrite")
-            return True
-        except requests.RequestException as e:
-            print(f"세션 리소스 업데이트 실패: {e}")
-            return False

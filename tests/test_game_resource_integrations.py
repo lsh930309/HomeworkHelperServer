@@ -34,7 +34,7 @@ import src.services.hoyolab as hoyolab_module
 
 
 @pytest.fixture
-def resource_db(monkeypatch, tmp_path):
+def resource_db(monkeypatch, tmp_path, resource_test_isolation):
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     models.Base.metadata.create_all(bind=engine)
     monkeypatch.setattr(crud, "base_dir", str(tmp_path))

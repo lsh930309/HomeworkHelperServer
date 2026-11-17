@@ -206,12 +206,13 @@ def _actor_label(actor: str | None) -> str:
         "media_bgm_toggle": "사이드바 BGM 자동 전환",
         "hoyolab_slow_followup": "HoYoLab 지연 반영 재확인",
         "runtime_stamina_tracker": "스태미나 런타임 보정",
+        "resource_observation": "API의 실제 서버 자원 관측",
     }.get(actor or "", actor or "알 수 없는 경로")
 
 
 def _operation_label(kind: str | None) -> str:
     return {
-        "hoyolab_session_stamina_rewrite": "게임 종료 후 HoYoLab 서버 반영 지연을 재확인해 직전 세션의 종료 스태미나를 보정",
+        "resource_observation_session_correction": "종료 후 10분 안에 시작한 서버 관측으로 지정한 종료 세션의 자원을 보정",
         "process_stamina_refresh": "HoYoLab에서 현재 스태미나를 즉시 조회해 게임 카드의 잔여 스태미나를 갱신",
         "process_runtime_state_update": "게임 실행/종료 감지 결과에 따라 마지막 플레이 시각과 런타임 스태미나를 갱신",
         "runtime_start": "게임 시작 기록 생성",
@@ -846,8 +847,19 @@ def guard_process_delete(db: Session, process: models.Process, operation: Behold
     raise BeholderBlocked(incident)
 
 
-def guard_process_session_update(db: Session, session: models.ProcessSession, columns: set[str], operation: BeholderOperation) -> None:
+def guard_process_session_update(db: Session, session: models.ProcessSession, columns: set[str], operation: BeholderOperation, *, observation=None) -> None:
     guard_table_write(db, operation, PROCESS_SESSIONS_TABLE, columns)
+    resource_columns = columns & {"stamina_at_end", "resource_percent_at_end"}
+    if session.end_timestamp is not None and resource_columns:
+        from src.core.resource_observation import ResourceObservation
+
+        if not isinstance(observation, ResourceObservation):
+            raise ValueError("종료 세션 자원 보정은 실제 10분 추적 관측으로만 허용됩니다.")
+        process = db.query(models.Process).filter(models.Process.id == session.process_id).first()
+        expected = observation.session_values(process, session)
+        proposed = operation.evidence.get("proposed_values") or {}
+        if resource_columns != set(expected) or any(proposed.get(key) != value for key, value in expected.items()):
+            raise ValueError("관측과 다른 종료 세션 자원 값을 저장할 수 없습니다.")
     if "stamina_at_end" in columns:
         proposed_values = operation.evidence.get("proposed_values") or {}
         value = proposed_values.get("stamina_at_end", getattr(session, "stamina_at_end", None))

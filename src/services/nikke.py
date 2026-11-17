@@ -182,6 +182,7 @@ class NikkeService:
         *,
         timeout_seconds: float | None = None,
         deadline: float | None = None,
+        before_fetch=None,
     ) -> dict[str, Any]:
         session_payload, cookies = self._request_session()
         if not cookies:
@@ -197,6 +198,8 @@ class NikkeService:
                 "headers": self._request_headers(),
                 "timeout": timeout,
             }
+            if before_fetch is not None:
+                before_fetch()
             if method.upper() == "GET":
                 response = http_session.get(self.API_BASE + path, params=payload or {}, **request_kwargs)
             else:
@@ -239,6 +242,7 @@ class NikkeService:
         *,
         timeout_seconds: float | None = None,
         deadline: float | None = None,
+        before_fetch=None,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -246,6 +250,7 @@ class NikkeService:
             payload,
             timeout_seconds=timeout_seconds,
             deadline=deadline,
+            before_fetch=before_fetch,
         )
 
     def _get(
@@ -396,7 +401,12 @@ class NikkeService:
 
         return self._parse_daily_checkin_post_result(body, status, task_id=task_id)
 
-    def get_role_info(self, *, refresh: bool = False) -> Optional[NikkeRoleInfo]:
+    def get_role_info(self, *, refresh: bool = False, deadline: float | None = None) -> Optional[NikkeRoleInfo]:
+        def request(method, endpoint):
+            if deadline is None:
+                return self._call_endpoint(method, endpoint, {})
+            return self._request(method, endpoint, {}, deadline=deadline)
+
         session_payload = self._session_payload()
         if not session_payload:
             return None
@@ -414,7 +424,7 @@ class NikkeService:
         # 두 값이 같은 응답에 함께 있지 않기 때문에 단계별로 수집해야 합니다.
         auth_checked = False
         try:
-            login_body = self._post(self.CHECK_LOGIN_PATH, {})
+            login_body = request("POST", self.CHECK_LOGIN_PATH)
             auth_checked = True
             if self._is_auth_expired(login_body):
                 return None
@@ -426,7 +436,7 @@ class NikkeService:
         if not intl_open_id:
             for endpoint in self.USER_INFO_ENDPOINTS:
                 try:
-                    body = self._post(endpoint, {})
+                    body = request("POST", endpoint)
                 except Exception as exc:
                     logger.debug("NIKKE user info endpoint 실패: %s: %s", endpoint, exc)
                     continue
@@ -441,7 +451,7 @@ class NikkeService:
         if nikke_area_id is None:
             for method, endpoint in self.SAVED_ROLE_ENDPOINTS:
                 try:
-                    body = self._call_endpoint(method, endpoint, {})
+                    body = request(method, endpoint)
                 except Exception as exc:
                     logger.debug("NIKKE role endpoint 실패: %s %s: %s", method, endpoint, exc)
                     continue
@@ -466,7 +476,7 @@ class NikkeService:
         # 한 번 더 탐색합니다.
         for method, endpoint in self.SAVED_ROLE_ENDPOINTS:
             try:
-                body = self._call_endpoint(method, endpoint, {})
+                body = request(method, endpoint)
             except Exception as exc:
                 logger.debug("NIKKE legacy role endpoint 실패: %s %s: %s", method, endpoint, exc)
                 continue
@@ -478,12 +488,13 @@ class NikkeService:
                 return role
         return None
 
-    def get_outpost_storage(self) -> GameResourceSnapshot:
+    def get_outpost_storage(self, *, before_fetch=None) -> GameResourceSnapshot:
         now = datetime.now()
         if not self.is_configured():
             return GameResourceSnapshot(NIKKE_PROVIDER, NIKKE_OUTPOST_RESOURCE_KEY, NIKKE_OUTPOST_LABEL, None, "auth_required", now)
 
-        role = self.get_role_info()
+        deadline = self._daily_checkin_deadline(None) if before_fetch is not None else None
+        role = self.get_role_info(deadline=deadline) if deadline is not None else self.get_role_info()
         if not role:
             return GameResourceSnapshot(
                 NIKKE_PROVIDER,
@@ -496,10 +507,11 @@ class NikkeService:
             )
 
         try:
-            body = self._post(
-                self.DAILY_PROGRESS_PATH,
-                {"intl_open_id": role.intl_open_id, "nikke_area_id": role.nikke_area_id},
-            )
+            payload = {"intl_open_id": role.intl_open_id, "nikke_area_id": role.nikke_area_id}
+            if before_fetch is None:
+                body = self._post(self.DAILY_PROGRESS_PATH, payload)
+            else:
+                body = self._post(self.DAILY_PROGRESS_PATH, payload, deadline=deadline, before_fetch=before_fetch)
         except Exception as exc:
             logger.error("NIKKE 전초기지 방어 보상 조회 실패: %s", exc)
             return GameResourceSnapshot(NIKKE_PROVIDER, NIKKE_OUTPOST_RESOURCE_KEY, NIKKE_OUTPOST_LABEL, None, "unavailable", now, str(exc))

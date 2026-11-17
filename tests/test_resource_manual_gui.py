@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("resource_test_isolation")
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
@@ -110,7 +112,7 @@ def manual(request, monkeypatch, app):
             {"id": "game", "resource_percent": 25.0, "resource_updated_at": _TIMESTAMP_BASE + 1000.0, "resource_status": "ok", "resource_label": observation.label}
         )
         payload = {
-            "process_id": "game", "stamina" if provider == "hoyolab" else "snapshot": observation,
+            "process_id": "game", "observation_succeeded": True, "provider_status": "ok",
             "fetched_at": _TIMESTAMP_BASE + 1300.0, "process_row": row,
         }
         payload.update(overrides)
@@ -230,12 +232,13 @@ def test_lookup_success_and_save_failure_are_reported_separately(manual):
     before = state.process.to_dict()
     state.dialog._test_stamina_connection()
     state.coordinator.requests[0][1](state.result(process_row=None, process_error="DB unavailable"))
-    assert "저장 실패: DB unavailable" in state.popups[0][1]
+    assert state.popups[0][0] == "저장 실패"
+    assert "DB unavailable" in state.popups[0][1]
     assert state.process.to_dict() == before
     assert state.dialog.stamina_test_button.isEnabled()
 
 
-@pytest.mark.parametrize("failed_owner", [None, "hoyo", "nikke", "checkin", "work"])
+@pytest.mark.parametrize("failed_owner", [None, "media", "hoyo", "nikke", "checkin", "work"])
 def test_restore_admission_requires_all_writer_owners_drained(failed_owner, monkeypatch):
     import threading
     import src.gui.main_window as main_window
@@ -259,6 +262,7 @@ def test_restore_admission_requires_all_writer_owners_drained(failed_owner, monk
         _hoyolab_reconcile=Owner("hoyo"),
         _nikke_resource_reconcile=Owner("nikke"),
         _daily_checkin=Owner("checkin"),
+        _stop_media_center=lambda *args: Owner("media").shutdown(*args),
     )
     window._work_coordinator.invalidate_telemetry = lambda: calls.append(("invalidate",))
     allowed = main_window.MainWindow.prepare_database_restore(window)
@@ -266,12 +270,12 @@ def test_restore_admission_requires_all_writer_owners_drained(failed_owner, monk
     assert window._beholder_restore_runtime_suspended
     assert window._lifecycle_shutdown_event.is_set()
     assert window.process_monitor.active_monitored_processes == {}
-    assert [item[0] for item in calls] == ["timers", "invalidate", "hoyo", "nikke", "checkin", "work"]
+    assert [item[0] for item in calls] == ["timers", "invalidate", "media", "hoyo", "nikke", "checkin", "work"]
     main_window.MainWindow.prepare_database_restore(window)
     assert len([item for item in calls if item[0] == "timers"]) == 1
 
 
-def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitted(manual, monkeypatch):
+def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitted(manual, monkeypatch, request):
     import threading
     import time
     from src.core.daily_checkin_coordinator import DailyCheckInCoordinator
@@ -312,10 +316,13 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
     monkeypatch.setattr(nikke_module, "get_nikke_service", lambda: service)
     resource_type = HoYoStaminaReconcileCoordinator if state.provider == "hoyolab" else NikkeResourceReconcileCoordinator
     resource = resource_type(state.parent.data_manager, monitor)
-    transport = SimpleNamespace(
-        update_process_stamina=lambda *args: writes.append("stamina"),
-        update_process_resource=lambda *args: writes.append("resource"),
-    )
+    def observe_resource(pid, sid=None):
+        resource_started.set()
+        assert release.wait(2)
+        writes.append("resource")
+        return {"process_id": pid, "observation_succeeded": False}
+
+    transport = SimpleNamespace(observe_process_resource=observe_resource)
     resource._transport = transport
     assert resource.request_refresh("game")
     resource._start_attempt(resource._jobs[("game", None)])
@@ -334,6 +341,16 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
     assert checkin_started.wait(2)
 
     work = GuiWorkCoordinator(max_threads=1)
+    import weakref
+    resource_ref = weakref.ref(resource)
+    def cleanup_workers():
+        release.set()
+        remaining_resource = resource_ref()
+        if remaining_resource is not None:
+            remaining_resource.shutdown(2000)
+        checkin.shutdown(2000)
+        work.shutdown(deadline_seconds=2)
+    request.addfinalizer(cleanup_workers)
     window = SimpleNamespace(
         _beholder_restore_runtime_suspended=False,
         process_monitor=monitor,
@@ -344,6 +361,7 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
         _lifecycle_session_ids={},
         _app_instance_id="test-app",
         _daily_checkin=checkin,
+        _stop_media_center=lambda *args: True,
     )
     inactive = SimpleNamespace(shutdown=lambda *args: True)
     window._hoyolab_reconcile = resource if state.provider == "hoyolab" else inactive
@@ -383,7 +401,7 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
         QApplication.instance().processEvents()
         time.sleep(0.002)
     assert writes[-1] == "restore"
-    assert sorted(writes[:-1]) == ["checkin", "start"]
+    assert sorted(writes[:-1]) == ["checkin", "resource", "start"]
     assert "queued-stop" not in writes
     assert "queued-runtime" not in writes
 

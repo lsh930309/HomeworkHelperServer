@@ -8,6 +8,8 @@ import time
 from types import SimpleNamespace
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("resource_test_isolation")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QThreadPool
@@ -71,8 +73,9 @@ class QueuedPool:
 @pytest.fixture(params=["hoyolab", "nikke"])
 def tracking(request, monkeypatch, app):
     monkeypatch.setattr(resource_module, "QTimer", FakeTimer)
-    clock = SimpleNamespace(monotonic=1000.0)
+    clock = SimpleNamespace(monotonic=1000.0, wall=_TIMESTAMP_BASE + 1000.0)
     monkeypatch.setattr(resource_module.time, "monotonic", lambda: clock.monotonic)
+    monkeypatch.setattr(resource_module.time, "time", lambda: clock.wall)
     process = ManagedProcess(
         id="game", name="동일 게임", monitoring_path="/game.exe", launch_path="/game.exe",
         stamina_tracking_enabled=request.param == "hoyolab",
@@ -89,28 +92,7 @@ def tracking(request, monkeypatch, app):
     )
     monitor = SimpleNamespace(active_monitored_processes={})
     calls = []
-    observation = SimpleNamespace(
-        current=120, max=240, percent=30.0, status="ok", label="전초기지 방어 보상",
-        updated_at=dt.datetime.fromtimestamp(_TIMESTAMP_BASE + 1360.0), message="",
-    )
-
-    class Service:
-        def is_available(self):
-            return True
-
-        def is_configured(self):
-            return True
-
-        def get_stamina(self, game_id):
-            calls.append(("fetch", game_id))
-            return observation
-
-        def get_outpost_storage(self):
-            calls.append(("fetch", "nikke"))
-            return observation
-
-    service = Service()
-    current_service = SimpleNamespace(value=service)
+    current_service = SimpleNamespace(value=object())
     coordinator_type = HoYoStaminaReconcileCoordinator if request.param == "hoyolab" else NikkeResourceReconcileCoordinator
     monkeypatch.setattr(coordinator_type, "_get_service", lambda self: current_service.value)
     coordinator = coordinator_type(manager, monitor)
@@ -118,31 +100,19 @@ def tracking(request, monkeypatch, app):
     coordinator._health_pool = QueuedPool()
 
     class Transport:
-        fail_process = False
-        fail_session = False
+        def observe_process_resource(self, pid, sid=None):
+            calls.append(("observe", pid, sid))
+            return {
+                "process_id": pid, "observation_succeeded": True,
+                "session_succeeded": sid is not None, "provider_status": "ok", "fetched_at": clock.wall,
+                "process_row": {
+                    "id": pid, "stamina_current": 100, "stamina_max": 240,
+                    "stamina_updated_at": _TIMESTAMP_BASE + 100.0,
+                    "resource_percent": 25.0, "resource_updated_at": _TIMESTAMP_BASE + 100.0,
+                    "resource_status": "ok", "resource_label": "전초기지 방어 보상",
+                },
+            }
 
-        def update_process_stamina(self, pid, current, maximum, updated_at):
-            calls.append(("process", pid, current, maximum, updated_at))
-            if self.fail_process:
-                raise RuntimeError("current write failed")
-            # DB에서 유지한 타이머가 조회 시각과 달라도 그대로 GUI에 전달해야 한다.
-            return {"id": pid, "stamina_current": 100, "stamina_max": 240, "stamina_updated_at": _TIMESTAMP_BASE + 100.0}
-
-        def update_process_resource(self, pid, percent, updated_at, status, label):
-            calls.append(("process", pid, percent, updated_at, status, label))
-            if self.fail_process:
-                raise RuntimeError("current write failed")
-            return {"id": pid, "resource_percent": 25.0, "resource_updated_at": _TIMESTAMP_BASE + 100.0, "resource_status": status, "resource_label": label}
-
-        def update_session_stamina(self, sid, current):
-            calls.append(("session", sid, current))
-            if self.fail_session:
-                raise RuntimeError("session write failed")
-
-        def update_session_resource(self, sid, percent):
-            calls.append(("session", sid, percent))
-            if self.fail_session:
-                raise RuntimeError("session write failed")
 
     transport = Transport()
     coordinator._transport = transport
@@ -159,7 +129,7 @@ def tracking(request, monkeypatch, app):
 
     state = SimpleNamespace(
         coordinator=coordinator, clock=clock, process=process, manager=manager, monitor=monitor,
-        calls=calls, service=service, current_service=current_service, observation=observation,
+        calls=calls, current_service=current_service,
         transport=transport, event=event, provider=request.param, app=app,
     )
     yield state
@@ -185,8 +155,7 @@ def test_each_end_session_survives_restart_and_additional_stop(tracking):
 
     while state.coordinator._pool.tasks:
         state.coordinator._pool.run_next()
-    corrections = [call for call in state.calls if call[0] == "session"]
-    assert [call[1] for call in corrections] == [11, 12]
+    assert [call[2] for call in state.calls] == [11, 12]
     assert first.timer.delay == 60_000
     assert second.timer.delay == 60_000
     assert not first.cancelled.is_set()
@@ -195,40 +164,39 @@ def test_each_end_session_survives_restart_and_additional_stop(tracking):
 def test_same_values_never_finish_followup_before_all_slots(tracking):
     state = tracking
     job = start_registered_job(state)
-    for elapsed in (0.0, 60.0, 120.0):
-        state.clock.monotonic = job.registered_at + elapsed
+    for elapsed in range(0, 600, 60):
+        state.clock.monotonic = job.exit_monotonic + elapsed
         if elapsed:
             state.coordinator._start_attempt(job)
         state.coordinator._pool.run_next()
-        if elapsed < 120:
+        if elapsed < 540:
             assert state.coordinator._jobs[job.key] is job
             assert job.timer.delay == 60_000
     assert state.coordinator._jobs[job.key] is job
-    state.clock.monotonic = job.registered_at + 180.0
+    state.clock.monotonic = job.exit_monotonic + 600.0
     state.coordinator._start_attempt(job)
     assert job.key not in state.coordinator._jobs
-    assert len([call for call in state.calls if call[0] == "fetch"]) == 3
-    assert len([call for call in state.calls if call[0] == "session"]) == 3
+    assert len(state.calls) == 10
+    assert all(call == ("observe", "game", 11) for call in state.calls)
 
 
-def test_registration_clock_not_old_exit_time_controls_window(tracking):
+def test_old_actual_exit_does_not_gain_new_window_when_registered_late(tracking):
     state = tracking
-    job = start_registered_job(state, timestamp=_TIMESTAMP_BASE - 1000.0)
-    state.coordinator._pool.run_next()
-    assert any(call[0] == "fetch" for call in state.calls)
-    assert job.timer.delay == 60_000
+    state.coordinator.handle_process_stopped(state.event(11, _TIMESTAMP_BASE - 1000.0))
+    assert state.coordinator._jobs == {}
+    assert state.calls == []
 
 
 def test_queued_task_expiring_before_actual_start_never_calls_provider(tracking):
     state = tracking
     job = start_registered_job(state)
-    state.clock.monotonic += 180.0
+    state.clock.monotonic += 600.0
     state.coordinator._pool.run_next()
     assert state.calls == []
     assert job.key not in state.coordinator._jobs
 
 
-def test_request_started_before_deadline_completes_both_writes_after_deadline(tracking, monkeypatch):
+def test_request_started_before_deadline_applies_late_api_result(tracking, monkeypatch):
     state = tracking
     job = start_registered_job(state)
     fetch = state.coordinator._pool.tasks[0]._fetch
@@ -239,9 +207,9 @@ def test_request_started_before_deadline_completes_both_writes_after_deadline(tr
         return result
 
     state.coordinator._pool.tasks[0]._fetch = delayed_fetch
-    state.clock.monotonic += 179.0
+    state.clock.monotonic += 599.0
     state.coordinator._pool.run_next()
-    assert [call[0] for call in state.calls] == ["fetch", "process", "session"]
+    assert state.calls == [("observe", "game", 11)]
     assert job.key not in state.coordinator._jobs
 
 
@@ -250,17 +218,12 @@ def test_queue_delay_skips_past_slots_without_catchup(tracking):
     job = start_registered_job(state)
     state.clock.monotonic += 70.0
     state.coordinator._pool.run_next()
-    assert job.next_slot == 2
     assert job.timer.delay == 50_000
     state.clock.monotonic += 50.0
     state.coordinator._start_attempt(job)
     state.coordinator._pool.run_next()
-    assert state.coordinator._jobs[job.key] is job
     assert job.timer.delay == 60_000
-    state.clock.monotonic += 60.0
-    state.coordinator._start_attempt(job)
-    assert job.key not in state.coordinator._jobs
-    assert len([call for call in state.calls if call[0] == "fetch"]) == 2
+    assert state.calls == [("observe", "game", 11)] * 2
 
 
 def test_unchanged_timer_comes_from_canonical_row_not_response_time(tracking):
@@ -269,45 +232,13 @@ def test_unchanged_timer_comes_from_canonical_row_not_response_time(tracking):
     state.coordinator._pool.run_next()
     field = "stamina_updated_at" if state.provider == "hoyolab" else "resource_updated_at"
     assert getattr(state.process, field) == _TIMESTAMP_BASE + 100.0
-    assert state.observation.updated_at.timestamp() == _TIMESTAMP_BASE + 1360.0
+    assert state.clock.wall != getattr(state.process, field)
 
 
-def test_current_write_failure_does_not_prevent_own_session_correction(tracking):
-    state = tracking
-    state.transport.fail_process = True
-    start_registered_job(state)
-    state.coordinator._pool.run_next()
-    corrections = [call for call in state.calls if call[0] == "session"]
-    assert len(corrections) == 1
-    assert corrections[0][1] == 11
-    expected = 119 if state.provider == "hoyolab" else 30.0 - 360 * 100.0 / 86400.0
-    assert corrections[0][2] == pytest.approx(expected)
 
 
-def test_session_failure_preserves_successful_current_write_and_future_attempt(tracking):
-    state = tracking
-    state.transport.fail_session = True
-    state.observation.current = 130
-    state.observation.percent = 40.0
-    job = start_registered_job(state)
-    state.coordinator._pool.run_next()
-    assert [call[0] for call in state.calls] == ["fetch", "process", "session"]
-    assert state.coordinator._jobs[job.key] is job
-    assert job.timer.delay == 60_000
 
 
-def test_failed_provider_response_keeps_future_slots(tracking):
-    state = tracking
-    job = start_registered_job(state)
-    if state.provider == "hoyolab":
-        state.service.is_configured = lambda: False
-    else:
-        state.observation.status = "auth_required"
-        state.observation.percent = None
-    state.coordinator._pool.run_next()
-    assert not any(call[0] in {"process", "session"} for call in state.calls)
-    assert state.coordinator._jobs[job.key] is job
-    assert job.timer.delay == 60_000
 
 
 def test_path_edit_keeps_game_identity_but_provider_change_cancels(tracking):
@@ -326,7 +257,7 @@ def test_path_edit_keeps_game_identity_but_provider_change_cancels(tracking):
     assert job.cancelled.is_set()
 
 
-def test_account_service_reset_during_fetch_prevents_writes(tracking):
+def test_account_service_reset_during_fetch_ignores_late_projection(tracking):
     state = tracking
     job = start_registered_job(state)
     fetch = state.coordinator._pool.tasks[0]._fetch
@@ -338,7 +269,7 @@ def test_account_service_reset_during_fetch_prevents_writes(tracking):
 
     state.coordinator._pool.tasks[0]._fetch = changing_account
     state.coordinator._pool.run_next()
-    assert [call[0] for call in state.calls] == ["fetch"]
+    assert state.calls == [("observe", "game", 11)]
     assert job.key not in state.coordinator._jobs
 
 
@@ -362,13 +293,13 @@ def test_one_shot_refresh_and_startup_use_same_pool_and_callback_canonical_row(t
     job = state.coordinator._jobs[("game", None)]
     state.coordinator._start_attempt(job)
     state.coordinator._pool.run_next()
-    assert [call[0] for call in state.calls] == ["fetch", "process"]
+    assert state.calls == [("observe", "game", None)]
     assert len(results) == 1
     assert results[0]["process_row"]["id"] == "game"
     assert state.coordinator._jobs == {}
 
 
-def test_real_provider_pool_keeps_fetch_and_both_writes_contiguous(tracking, monkeypatch):
+def test_real_provider_pool_keeps_api_operations_contiguous(tracking, monkeypatch):
     state = tracking
     # 시간 제어 시험과 분리하여 실제 스레드 큐의 조회/저장 끼어들기를 검증한다.
     monkeypatch.setattr(resource_module.time, "monotonic", time.perf_counter)
@@ -394,8 +325,7 @@ def test_real_provider_pool_keeps_fetch_and_both_writes_contiguous(tracking, mon
     release.set()
     assert state.coordinator._pool.waitForDone(2000)
     state.app.processEvents()
-    assert [call[0] for call in state.calls] == ["fetch", "process", "session", "fetch", "process", "session"]
-    assert [call[1] for call in state.calls if call[0] == "session"] == [11, 12]
+    assert state.calls == [("observe", "game", 11), ("observe", "game", 12)]
     assert first.key in state.coordinator._jobs
     assert second.key in state.coordinator._jobs
 
@@ -408,7 +338,7 @@ def test_early_timer_does_not_add_a_request_before_slot(tracking):
     state.coordinator._start_attempt(job)
     assert state.coordinator._pool.tasks == []
     assert job.timer.delay in {1, 2}
-    assert len([call for call in state.calls if call[0] == "fetch"]) == 1
+    assert state.calls == [("observe", "game", 11)]
 
 
 def test_stored_exit_target_cannot_be_reinterpreted_after_edit(tracking):
@@ -422,7 +352,124 @@ def test_stored_exit_target_cannot_be_reinterpreted_after_edit(tracking):
     assert state.coordinator._jobs == {}
 
 
-def test_stop_without_persisted_session_id_does_not_schedule_correction(tracking):
+def test_unpersisted_exit_skips_periodic_but_preserves_manual_current_refresh(tracking):
     state = tracking
-    state.coordinator.handle_process_stopped(state.event(None))
+    state.coordinator.mark_process_stopped(state.event(None))
+    state.coordinator.request_periodic_refreshes()
     assert state.coordinator._jobs == {}
+    assert state.coordinator.request_refresh("game")
+    state.coordinator._start_attempt(state.coordinator._jobs[("game", None)])
+    state.coordinator._pool.run_next()
+    assert state.calls == [("observe", "game", None)]
+    state.clock.monotonic += 600
+    state.coordinator.expire_exit_windows()
+    state.coordinator.request_periodic_refreshes()
+    assert state.coordinator._jobs[("game", None)].periodic
+
+
+def _periodic_window(start, coordinators):
+    from src.gui.main_window import MainWindow
+    window = SimpleNamespace(
+        _shutting_down=False, _beholder_restore_runtime_suspended=False,
+        _hoyolab_reconcile=coordinators[0], _nikke_resource_reconcile=coordinators[1],
+        _resource_monitoring_slot=MainWindow._resource_monitoring_slot,
+        _last_resource_monitoring_slot=MainWindow._resource_monitoring_slot(start),
+    )
+    return window, lambda now: MainWindow._maybe_refresh_periodic_resources(window, now)
+
+
+def test_kst_half_hour_slots_are_fixed_and_duplicate_ticks_do_not_repeat(resource_test_isolation):
+    kst = dt.timezone(dt.timedelta(hours=9))
+    start = dt.datetime(2026, 11, 17, 10, 17, tzinfo=kst)
+    calls = []
+    owner = SimpleNamespace(expire_exit_windows=lambda: None, request_periodic_refreshes=lambda: calls.append(1))
+    _, tick = _periodic_window(start, (owner, owner))
+    tick(start)
+    assert calls == []
+    tick(start.replace(minute=30))
+    tick(start.replace(minute=30, second=45))
+    assert len(calls) == 2  # 두 제공자 각각 한 번
+    tick(start.replace(minute=47))
+    assert len(calls) == 2
+    tick(start.replace(hour=11, minute=0))
+    assert len(calls) == 4
+
+
+def test_kst_schedule_has_48_daily_slots_even_with_utc_input(resource_test_isolation):
+    kst = dt.timezone(dt.timedelta(hours=9))
+    midnight = dt.datetime(2026, 11, 17, tzinfo=kst)
+    calls = []
+    owner = SimpleNamespace(expire_exit_windows=lambda: None, request_periodic_refreshes=lambda: calls.append(1))
+    _, tick = _periodic_window(midnight - dt.timedelta(minutes=1), (owner, owner))
+    for minute in range(0, 24 * 60, 30):
+        tick((midnight + dt.timedelta(minutes=minute)).astimezone(dt.timezone.utc))
+    assert len(calls) == 48 * 2
+
+
+def test_game_end_1025_skips_1030_without_catchup_then_resumes_1100(tracking):
+    state = tracking
+    kst = dt.timezone(dt.timedelta(hours=9))
+    start = dt.datetime(2026, 11, 17, 10, 25, tzinfo=kst)
+    other = SimpleNamespace(expire_exit_windows=lambda: None, request_periodic_refreshes=lambda: None)
+    _, tick = _periodic_window(start, (state.coordinator, other))
+    state.coordinator.mark_process_stopped(state.event(None))
+    state.clock.monotonic += 300
+    tick(start.replace(minute=30))
+    assert state.coordinator._jobs == {}
+    state.clock.monotonic += 300
+    tick(start.replace(minute=35))
+    assert state.coordinator._jobs == {}
+    state.clock.monotonic += 1500
+    tick(start.replace(hour=11, minute=0))
+    assert state.coordinator._jobs[("game", None)].periodic
+
+
+def test_delayed_end_save_uses_actual_exit_deadline_and_next_fixed_slot(tracking):
+    state = tracking
+    end = state.clock.wall
+    state.clock.monotonic += 450
+    state.clock.wall += 450
+    job = start_registered_job(state, timestamp=end)
+    state.coordinator._pool.run_next()
+    assert job.timer.delay == 30_000
+    state.clock.monotonic += 150
+    state.clock.wall += 150
+    state.coordinator._start_attempt(job)
+    assert job.key not in state.coordinator._jobs
+    assert state.calls == [("observe", "game", 11)]
+
+
+def test_each_game_and_latest_exit_window_bound_periodic_suppression(tracking):
+    state = tracking
+    other = ManagedProcess.from_dict({**state.process.to_dict(), "id": "other"})
+    state.manager.managed_processes.append(other)
+    first_end = state.clock.wall
+    state.coordinator.mark_process_stopped(state.event(None, first_end))
+    state.clock.monotonic += 300
+    state.clock.wall += 300
+    state.coordinator.mark_process_stopped(state.event(None, state.clock.wall))
+    state.clock.monotonic += 300
+    state.clock.wall += 300
+    state.coordinator.request_periodic_refreshes()
+    assert ("game", None) not in state.coordinator._jobs
+    assert state.coordinator._jobs[("other", None)].periodic
+    state.clock.monotonic += 300
+    state.clock.wall += 300
+    state.coordinator.expire_exit_windows()
+    state.coordinator.request_periodic_refreshes()
+    assert state.coordinator._jobs[("game", None)].periodic
+
+
+def test_periodic_waiting_before_stop_skips_api_but_manual_still_runs(tracking):
+    state = tracking
+    state.coordinator.request_periodic_refreshes()
+    periodic = state.coordinator._jobs[("game", None)]
+    state.coordinator._start_attempt(periodic)
+    state.coordinator.mark_process_stopped(state.event(None))
+    state.coordinator._pool.run_next()
+    assert state.calls == []
+    assert periodic.key not in state.coordinator._jobs
+    assert state.coordinator.request_refresh("game")
+    state.coordinator._start_attempt(state.coordinator._jobs[("game", None)])
+    state.coordinator._pool.run_next()
+    assert state.calls == [("observe", "game", None)]

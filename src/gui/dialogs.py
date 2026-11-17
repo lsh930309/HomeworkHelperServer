@@ -23,7 +23,7 @@ from src.data.data_models import ManagedProcess, GlobalSettings
 from src.core import credential_health
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
-from src.utils.resource_tracking import NIKKE_OUTPOST_LABEL
+from src.utils.resource_tracking import NIKKE_OUTPOST_LABEL, predict_nikke_outpost_percent, predict_stamina_value
 from src.gui.qt_runtime import is_qobject_valid
 import requests
 from src.api.runtime_config import resolve_api_port, resolve_local_api_base_url
@@ -1269,8 +1269,35 @@ class ProcessDialog(QDialog):
             QMessageBox.warning(self, "오류", f"자원 조회 중 오류가 발생했습니다:\n{exc}")
 
     def _show_resource_test_result(self, target, payload, *, stored):
-        """원본 조회 결과와 별도로 실제 DB 저장 결과를 표시한다."""
+        """등록 대상은 API의 저장 결과를, 미등록 대상은 읽기 전용 응답을 표시한다."""
         is_nikke = target == "nikke_outpost_storage"
+        if stored:
+            if not payload.get("observation_succeeded") or payload.get("cancelled"):
+                detail = payload.get("error") or "인증 정보와 API 연결 상태를 확인해주세요."
+                QMessageBox.warning(self, "조회 실패", f"자원 조회에 실패했습니다.\n{detail}")
+                return
+            row = payload.get("process_row")
+            if not isinstance(row, dict):
+                detail = payload.get("process_error") or "저장 결과 없음"
+                QMessageBox.warning(self, "저장 실패", f"서버 조회를 마쳤으나 자원 저장에 실패했습니다.\n{detail}")
+                return
+            fetched_at = payload["fetched_at"]
+            if is_nikke:
+                percent = predict_nikke_outpost_percent(row["resource_percent"], row["resource_updated_at"], now=fetched_at)
+                value = f"{row.get('resource_label') or NIKKE_OUTPOST_LABEL}: {percent:.1f}%"
+            else:
+                current = predict_stamina_value(
+                    row["stamina_current"], row["stamina_max"], row["stamina_updated_at"], now=fetched_at,
+                )
+                stamina_name = "배터리" if target == "zenless_zone_zero" else "개척력"
+                value = f"{stamina_name}: {current} / {row['stamina_max']}"
+            observed_time = datetime.datetime.fromtimestamp(fetched_at).strftime("%Y-%m-%d %H:%M:%S")
+            QMessageBox.information(
+                self, "자원 조회 성공",
+                f"✅ 자원 조회 성공!\n\n{value}\n조회 시각: {observed_time}"
+                "\n\n💾 조회 결과가 저장되었습니다. 기존 회복 타이머가 유지될 수 있습니다.",
+            )
+            return
         observation = payload.get("snapshot" if is_nikke else "stamina")
         success = observation is not None and (
             not is_nikke or (observation.status == "ok" and observation.percent is not None)
@@ -1280,13 +1307,7 @@ class ProcessDialog(QDialog):
             status = getattr(observation, "status", "")
             QMessageBox.warning(self, "조회 실패", f"자원 조회에 실패했습니다.\n{status}\n{detail}")
             return
-        if stored:
-            if isinstance(payload.get("process_row"), dict):
-                save_result = "\n\n💾 조회 결과가 저장되었습니다. 기존 회복 타이머가 유지될 수 있습니다."
-            else:
-                save_result = f"\n\n⚠️ 저장 실패: {payload.get('process_error') or '저장 결과 없음'}"
-        else:
-            save_result = "\n\nℹ️ 미저장 설정의 조회 결과입니다. 등록된 자원 값은 변경하지 않았습니다."
+        save_result = "\n\nℹ️ 미저장 설정의 조회 결과입니다. 등록된 자원 값은 변경하지 않았습니다."
         if is_nikke:
             QMessageBox.information(
                 self, "NIKKE 리소스 조회 성공",

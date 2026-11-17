@@ -204,7 +204,7 @@ class HoYoLabService:
             logger.error(f"비동기 실행 오류: {e}")
             raise
     
-    def get_stamina(self, hoyolab_game_id: str) -> Optional[StaminaInfo]:
+    def get_stamina(self, hoyolab_game_id: str, *, before_fetch=None) -> Optional[StaminaInfo]:
         """게임 타입에 따른 스태미나 조회
 
         Args:
@@ -214,9 +214,9 @@ class HoYoLabService:
             StaminaInfo 또는 None (조회 실패 시)
         """
         if hoyolab_game_id == "honkai_starrail":
-            return self.get_starrail_stamina()
+            return self.get_starrail_stamina() if before_fetch is None else self.get_starrail_stamina(before_fetch=before_fetch)
         elif hoyolab_game_id == "zenless_zone_zero":
-            return self.get_zzz_stamina()
+            return self.get_zzz_stamina() if before_fetch is None else self.get_zzz_stamina(before_fetch=before_fetch)
         else:
             logger.warning(f"지원하지 않는 게임 타입: {hoyolab_game_id}")
             return None
@@ -390,7 +390,7 @@ class HoYoLabService:
         except (TypeError, ValueError):
             return None
     
-    def get_starrail_stamina(self) -> Optional[StaminaInfo]:
+    def get_starrail_stamina(self, *, before_fetch=None) -> Optional[StaminaInfo]:
         """붕괴: 스타레일 개척력 정보 조회"""
         deadline = self._operation_deadline()
         try:
@@ -402,12 +402,12 @@ class HoYoLabService:
                 if self._closed:
                     logger.debug("닫힌 HoYoLab 서비스에서 스타레일 요청을 건너뜁니다.")
                     return None
-                return self._run_async(self._async_get_starrail_stamina(client), deadline=deadline)
+                return self._run_async(self._async_get_starrail_stamina(client, before_fetch=before_fetch), deadline=deadline)
         except Exception as e:
             logger.error(f"스타레일 스태미나 조회 실패: {e}")
             return None
     
-    async def _async_get_starrail_stamina(self, client: "genshin.Client") -> Optional[StaminaInfo]:
+    async def _async_get_starrail_stamina(self, client: "genshin.Client", *, before_fetch=None) -> Optional[StaminaInfo]:
         """스타레일 스태미나 비동기 조회"""
         try:
             client.game = genshin.Game.STARRAIL
@@ -417,7 +417,15 @@ class HoYoLabService:
             if credentials and credentials.get("starrail_uid"):
                 client.uid = credentials["starrail_uid"]
             
-            notes = await client.get_starrail_notes()
+            if before_fetch is not None:
+                # UID 탐색의 네트워크 대기가 종료 추적 권한을 앞당기지 않게 한다.
+                if not client.uid:
+                    accounts = [account for account in await client.get_game_accounts() if account.game == genshin.Game.STARRAIL]
+                    client.uid = max(accounts, key=lambda account: account.level).uid
+                before_fetch()
+                notes = await client.get_starrail_notes(uid=client.uid)
+            else:
+                notes = await client.get_starrail_notes()
             
             now = datetime.now()
             full_time = None
@@ -437,7 +445,7 @@ class HoYoLabService:
             logger.error(f"스타레일 API 호출 실패: {e}")
             return None
     
-    def get_zzz_stamina(self) -> Optional[StaminaInfo]:
+    def get_zzz_stamina(self, *, before_fetch=None) -> Optional[StaminaInfo]:
         """젠레스 존 제로 배터리 정보 조회"""
         deadline = self._operation_deadline()
         try:
@@ -449,12 +457,12 @@ class HoYoLabService:
                 if self._closed:
                     logger.debug("닫힌 HoYoLab 서비스에서 ZZZ 요청을 건너뜁니다.")
                     return None
-                return self._run_async(self._async_get_zzz_stamina(client), deadline=deadline)
+                return self._run_async(self._async_get_zzz_stamina(client, before_fetch=before_fetch), deadline=deadline)
         except Exception as e:
             logger.error(f"ZZZ 배터리 조회 실패: {e}")
             return None
     
-    async def _async_get_zzz_stamina(self, client: "genshin.Client") -> Optional[StaminaInfo]:
+    async def _async_get_zzz_stamina(self, client: "genshin.Client", *, before_fetch=None) -> Optional[StaminaInfo]:
         """ZZZ 배터리 비동기 조회"""
         try:
             client.game = genshin.Game.ZZZ
@@ -464,7 +472,14 @@ class HoYoLabService:
             if credentials and credentials.get("zzz_uid"):
                 client.uid = credentials["zzz_uid"]
             
-            notes = await client.get_zzz_notes()
+            if before_fetch is not None:
+                if not client.uid:
+                    accounts = [account for account in await client.get_game_accounts() if account.game == genshin.Game.ZZZ]
+                    client.uid = max(accounts, key=lambda account: account.level).uid
+                before_fetch()
+                notes = await client.get_zzz_notes(uid=client.uid)
+            else:
+                notes = await client.get_zzz_notes()
             
             now = datetime.now()
             full_time = None

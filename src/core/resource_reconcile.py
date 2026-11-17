@@ -1,4 +1,4 @@
-"""종료 세션별 follow-up과 NIKKE 자원 조회·저장을 직렬로 실행한다."""
+"""현재 자원 조회와 종료 세션별 후속 관측을 제공자 큐에 예약한다."""
 from __future__ import annotations
 
 import logging
@@ -12,17 +12,11 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal, 
 
 from src.api.client import BackgroundApiTransport
 from src.core import credential_health
-from src.core.process_monitor import ProcessLifecycleEvent, ProcessMonitor
-from src.core.provider_activity import provider_activity
+from src.core.process_monitor import ProcessLifecycleEvent
 from src.core.provider_health_persist import ProviderHealthPersistTask
 from src.data.data_models import ManagedProcess
 from src.gui.work_coordinator import retain_detached_qthreadpool
-from src.utils.resource_tracking import (
-    NIKKE_OUTPOST_FULL_CHARGE_SECONDS,
-    NIKKE_OUTPOST_LABEL,
-    clamp_percent,
-    is_nikke_outpost_resource,
-)
+from src.utils.resource_tracking import is_nikke_outpost_resource
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +30,9 @@ class _FollowupJob:
     session_id: Optional[int]
     target: tuple[str, ...]
     service: object
-    exit_timestamp: float
-    registered_at: float
+    exit_monotonic: float
     callback: Optional[Callable[[dict], None]] = None
+    periodic: bool = False
     next_slot: int = 0
     timer: Optional[QTimer] = None
     in_flight: bool = False
@@ -54,15 +48,15 @@ class _ObservationSignals(QObject):
 
 
 class _ObservationTask(QRunnable):
-    """외부 조회와 두 저장을 하나의 제공자 큐 작업 안에서 완료한다."""
+    """실제 큐 실행 직전에 유효성을 확인하고 API 관측 작업을 요청한다."""
 
-    def __init__(self, job, deadline, fetch, persist, is_current, signals):
+    def __init__(self, job, deadline, fetch, is_current, should_skip_periodic, signals):
         super().__init__()
         self._job = job
         self._deadline = deadline
         self._fetch = fetch
-        self._persist = persist
         self._is_current = is_current
+        self._should_skip_periodic = should_skip_periodic
         self._signals = signals
 
     def run(self) -> None:
@@ -73,13 +67,12 @@ class _ObservationTask(QRunnable):
             elif time.monotonic() >= self._deadline:
                 # GUI에서 예약했어도 큐 대기가 끝난 실제 요청 시작 시각을 확인한다.
                 result["expired"] = True
+            elif self._job.periodic and self._should_skip_periodic(self._job.process_id):
+                result["skipped"] = True
             else:
                 result.update(self._fetch(self._job))
                 if not self._is_current(self._job):
                     result["cancelled"] = True
-                elif result.get("observation_succeeded"):
-                    # 이 요청은 기간 안에 시작했으므로 기간 뒤에 끝나도 저장한다.
-                    result.update(self._persist(self._job, result, self._is_current))
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:
@@ -92,7 +85,7 @@ class _ObservationTask(QRunnable):
 class _ResourceFollowupCoordinator(QObject):
     """게임 실행 여부와 무관하게 종료별 조회 슬롯을 같은 제공자 큐에 배치한다."""
 
-    RECONCILE_WINDOW_SEC = 180
+    RECONCILE_WINDOW_SEC = 600
     RECONCILE_INTERVAL_MS = 60_000
     resource_updated = Signal(str)
 
@@ -103,6 +96,9 @@ class _ResourceFollowupCoordinator(QObject):
         self._process_monitor = process_monitor
         self._notifier = notifier
         self._jobs: dict[tuple[str, Optional[int]], _FollowupJob] = {}
+        # 종료 저장이 대기/실패해도 실제 종료 직후부터 주기 조회를 제외한다.
+        # 세션 ID·보정 권한은 소유하지 않는 일시적인 종료 시각 투영이다.
+        self._recent_exit_times: dict[str, float] = {}
         self._shutting_down = False
         self._pool = QThreadPool()
         self._pool.setMaxThreadCount(1)
@@ -121,10 +117,8 @@ class _ResourceFollowupCoordinator(QObject):
         raise NotImplementedError
 
     def _fetch_observation(self, job: _FollowupJob) -> dict:
-        raise NotImplementedError
-
-    def _persist_observation(self, job: _FollowupJob, payload: dict, is_current) -> dict:
-        raise NotImplementedError
+        # 제공자 조회 시작 시각과 세션 보정 권한은 canonical API가 소유한다.
+        return self._transport.observe_process_resource(job.process_id, job.session_id)
 
     def _apply_process_row(self, process: ManagedProcess, row: dict) -> None:
         raise NotImplementedError
@@ -136,8 +130,29 @@ class _ResourceFollowupCoordinator(QObject):
         """새 시작 조회는 1회 수행하며 앞선 종료 작업을 취소하지 않는다."""
         self.request_refresh(event.process_id)
 
+    def mark_process_stopped(self, event: ProcessLifecycleEvent) -> None:
+        """종료 감지 즉시 주기 제외를 시작한다. 종료 저장 성공과는 무관하다."""
+        if self._shutting_down or self._event_target(event) is None:
+            return
+        origin = time.monotonic() - max(0.0, time.time() - event.timestamp)
+        previous = self._recent_exit_times.get(event.process_id, float("-inf"))
+        self._recent_exit_times[event.process_id] = max(previous, origin)
+        self.expire_exit_windows()
+
+    def expire_exit_windows(self) -> None:
+        """기존 1초 스케줄러에서 만료되거나 삭제된 게임의 임시 제외값을 지운다."""
+        now = time.monotonic()
+        for process_id, origin in list(self._recent_exit_times.items()):
+            if now >= origin + self.RECONCILE_WINDOW_SEC or self._data_manager.get_process_by_id(process_id) is None:
+                self._recent_exit_times.pop(process_id, None)
+
+    def _should_skip_periodic(self, process_id: str) -> bool:
+        origin = self._recent_exit_times.get(process_id)
+        return origin is not None and time.monotonic() < origin + self.RECONCILE_WINDOW_SEC
+
     def handle_process_stopped(self, event: ProcessLifecycleEvent) -> None:
         """종료 저장에 성공해 ID를 받은 세션만 follow-up 대상으로 등록한다."""
+        self.mark_process_stopped(event)
         if self._shutting_down or event.session_id is None:
             return
         process = self._data_manager.get_process_by_id(event.process_id)
@@ -150,16 +165,22 @@ class _ResourceFollowupCoordinator(QObject):
             session_id=event.session_id,
             target=target,
             service=self._get_service(),
-            exit_timestamp=event.timestamp,
-            registered_at=time.monotonic(),
+            exit_monotonic=time.monotonic() - max(0.0, time.time() - event.timestamp),
         )
         self._jobs[job.key] = job
         self._schedule_next(job)
 
-    def request_refresh(self, process_id: str, callback: Optional[Callable[[dict], None]] = None) -> bool:
-        """수동·시작 조회를 follow-up과 같은 큐에 1회 등록한다. 중복이면 False다."""
-        if self._shutting_down or (process_id, None) in self._jobs:
+    def request_refresh(
+        self, process_id: str, callback: Optional[Callable[[dict], None]] = None, *, periodic: bool = False,
+    ) -> bool:
+        """현재 자원을 1회 조회한다. 수동·시작 조회는 대기 중인 주기 조회보다 우선한다."""
+        if self._shutting_down:
             return False
+        existing = self._jobs.get((process_id, None))
+        if existing is not None:
+            if periodic or not existing.periodic:
+                return False
+            self._finish_job(existing, "manual or start refresh supersedes periodic refresh")
         process = self._data_manager.get_process_by_id(process_id)
         target = self._target(process) if process is not None else None
         if target is None:
@@ -170,13 +191,21 @@ class _ResourceFollowupCoordinator(QObject):
             session_id=None,
             target=target,
             service=self._get_service(),
-            exit_timestamp=time.time(),
-            registered_at=time.monotonic(),
+            exit_monotonic=time.monotonic(),
             callback=callback,
+            periodic=periodic,
         )
         self._jobs[job.key] = job
         self._schedule_next(job)
         return True
+
+    def request_periodic_refreshes(self) -> None:
+        """정기 회차의 대상별 현재 자원을 조회하며 종료 추적 중인 게임은 생략한다."""
+        if self._shutting_down:
+            return
+        for process in self._data_manager.managed_processes:
+            if not self._should_skip_periodic(process.id):
+                self.request_refresh(process.id, periodic=True)
 
     def schedule_startup_refreshes(self) -> None:
         """앱 시작 시 실행 중이지 않은 등록 대상도 같은 직렬 조회 경계를 사용한다."""
@@ -201,6 +230,7 @@ class _ResourceFollowupCoordinator(QObject):
         for job in list(self._jobs.values()):
             if not self._job_is_current(job):
                 self._finish_job(job, "tracking target or account changed")
+        self.expire_exit_windows()
 
     def _schedule_next(self, job: _FollowupJob) -> None:
         if not self._job_is_current(job):
@@ -211,16 +241,18 @@ class _ResourceFollowupCoordinator(QObject):
             due = now
         else:
             interval = self.RECONCILE_INTERVAL_MS / 1000.0
-            # 완료 시각에 60초를 더하지 않고 등록 시점의 0/60/120초를 기준으로 한다.
-            # 큐 대기 중 지나간 슬롯을 모아서 실행하지 않는다.
-            while job.next_slot and job.registered_at + job.next_slot * interval < now:
-                job.next_slot += 1
-            deadline = job.registered_at + self.RECONCILE_WINDOW_SEC
+            deadline = job.exit_monotonic + self.RECONCILE_WINDOW_SEC
             if now >= deadline:
                 self._finish_job(job, "follow-up window complete")
                 return
-            # 마지막 조회가 일찍 끝나도 종료 작업의 기간은 180초까지 유지한다.
-            due = min(job.registered_at + job.next_slot * interval, deadline)
+            # 늦게 등록됐어도 최초 한 번은 즉시 실행하고, 이후에는 실제 종료의
+            # 0/60/.../540초 슬롯을 유지한다. 놓친 슬롯을 모아서 실행하지 않는다.
+            if job.next_slot == 0:
+                due = now
+            else:
+                while job.exit_monotonic + job.next_slot * interval < now:
+                    job.next_slot += 1
+                due = min(job.exit_monotonic + job.next_slot * interval, deadline)
         timer = QTimer(self)
         timer.setSingleShot(True)
         timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -240,24 +272,25 @@ class _ResourceFollowupCoordinator(QObject):
             job.timer.deleteLater()
             job.timer = None
         deadline = (
-            job.registered_at + self.RECONCILE_WINDOW_SEC
+            job.exit_monotonic + self.RECONCILE_WINDOW_SEC
             if job.session_id is not None else float("inf")
         )
         now = time.monotonic()
         if now >= deadline:
             self._finish_job(job, "follow-up window complete")
             return
-        if job.session_id is not None:
-            due = job.registered_at + job.next_slot * self.RECONCILE_INTERVAL_MS / 1000.0
+        if job.session_id is not None and job.next_slot:
+            due = job.exit_monotonic + job.next_slot * self.RECONCILE_INTERVAL_MS / 1000.0
             if now < due or due >= deadline:
                 # 타이머가 예상보다 이르게 전달돼도 슬롯 앞당김·추가 조회를 하지 않는다.
                 self._schedule_next(job)
                 return
         job.in_flight = True
-        job.next_slot += 1
+        interval = self.RECONCILE_INTERVAL_MS / 1000.0
+        job.next_slot = max(job.next_slot + 1, math.floor((now - job.exit_monotonic) / interval) + 1)
         self._pool.start(_ObservationTask(
-            job, deadline, self._fetch_observation, self._persist_observation,
-            self._job_is_current, self._signals,
+            job, deadline, self._fetch_observation, self._job_is_current,
+            self._should_skip_periodic, self._signals,
         ))
 
     @Slot(object, object)
@@ -310,6 +343,7 @@ class _ResourceFollowupCoordinator(QObject):
             self._shutting_down = True
             for job in list(self._jobs.values()):
                 self._finish_job(job, "shutdown")
+            self._recent_exit_times.clear()
             self._pool.clear()
             self._health_pool.clear()
             try:
@@ -324,31 +358,6 @@ class _ResourceFollowupCoordinator(QObject):
         if not health:
             retain_detached_qthreadpool(self._health_pool)
         return primary and health
-
-
-def _persist_resource_observation(job, payload, transport, is_current) -> dict:
-    """현재 자원 저장과 자기 종료 세션 보정은 각각의 결과를 기록한다."""
-    snapshot = payload["snapshot"]
-    fetched_at = payload["fetched_at"]
-    percent = clamp_percent(snapshot.percent)
-    result = {"process_row": None, "session_succeeded": False}
-    try:
-        result["process_row"] = transport.update_process_resource(
-            job.process_id, percent, fetched_at, snapshot.status,
-            snapshot.label or NIKKE_OUTPOST_LABEL,
-        )
-    except Exception as exc:
-        result["process_error"] = str(exc)
-    if job.session_id is not None and is_current(job):
-        recovered = max(0.0, fetched_at - job.exit_timestamp) * 100.0 / NIKKE_OUTPOST_FULL_CHARGE_SECONDS
-        corrected = clamp_percent(percent - recovered)
-        try:
-            transport.update_session_resource(job.session_id, corrected)
-            result["corrected_exit_percent"] = corrected
-            result["session_succeeded"] = True
-        except Exception as exc:
-            result["session_error"] = str(exc)
-    return result
 
 
 class NikkeResourceReconcileCoordinator(_ResourceFollowupCoordinator):
@@ -370,32 +379,18 @@ class NikkeResourceReconcileCoordinator(_ResourceFollowupCoordinator):
             return event.resource_provider, event.resource_key
         return None
 
-    def _fetch_observation(self, job):
-        with provider_activity(job.target[0], job.target[1]):
-            snapshot = job.service.get_outpost_storage()
-        return {
-            "snapshot": snapshot,
-            "fetched_at": snapshot.updated_at.timestamp(),
-            "provider_status": snapshot.status,
-            "error": snapshot.message if snapshot.status != "ok" else None,
-            "observation_succeeded": snapshot.status == "ok" and snapshot.percent is not None,
-        }
-
-    def _persist_observation(self, job, payload, is_current):
-        return _persist_resource_observation(job, payload, self._transport, is_current)
-
     def _apply_process_row(self, process, row):
         for key in ("resource_percent", "resource_updated_at", "resource_status", "resource_label"):
             setattr(process, key, row[key])
 
     def _record_observation_health(self, process, payload):
-        snapshot = payload.get("snapshot")
-        if snapshot is not None:
-            self._record_provider_health_from_snapshot(process, snapshot, payload["fetched_at"])
+        status = payload.get("provider_status")
+        if status:
+            self._record_provider_health_from_status(
+                process, status, payload.get("error") or str(status), payload["fetched_at"],
+            )
 
-    def _record_provider_health_from_snapshot(self, process: ManagedProcess, snapshot, fetched_at: float) -> None:
-        status = str(getattr(snapshot, "status", "") or "")
-        message = str(getattr(snapshot, "message", "") or status)
+    def _record_provider_health_from_status(self, process: ManagedProcess, status: str, message: str, fetched_at: float) -> None:
         payload = credential_health.update_payload_for_reason(
             credential_health.PROVIDER_NIKKE_BLABLALINK,
             status, message=message, source="resource_tracking", process_id=process.id,
