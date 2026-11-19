@@ -323,10 +323,26 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "performClose" not in resign_source
     outside_click_source = app.split("private func installPopoverOutsideClickMonitor()", 1)[1].split("private func installPopoverKeyDownMonitor()", 1)[0]
     assert 'closePopoverForFocusLoss(origin: "outsideClick")' in outside_click_source
+    assert "self.popover === monitoredPopover" in outside_click_source
     toggle_source = app.split("private func togglePopover", 1)[1].split("private func showPopover(relativeTo", 1)[0]
+    assert "if popover.isShown && !popoverIsOutsideActiveSpace" in toggle_source
     assert 'closePopoverForFocusLoss(origin: "statusToggle")' in toggle_source
+    outside_space_source = app.split("private var popoverIsOutsideActiveSpace: Bool", 1)[1].split("private func togglePopover", 1)[0]
+    assert "guard popover.isShown," in outside_space_source
+    assert "let window = popover.contentViewController?.viewIfLoaded?.window else { return false }" in outside_space_source
+    assert "return !window.isOnActiveSpace" in outside_space_source
+    replace_source = app.split("private func replacePopoverOutsideActiveSpace()", 1)[1].split("private func showPopover(relativeTo", 1)[0]
+    assert "guard popoverIsOutsideActiveSpace else { return }" in replace_source
+    assert replace_source.index("previousPopover.delegate = nil") < replace_source.index("previousPopover.close()")
+    assert replace_source.index("stopPopoverPresentationTracking()") < replace_source.index("popover = makePopover()")
+    cleanup_source = app.split("private func stopPopoverPresentationTracking()", 1)[1].split("private func closePopoverForFocusLoss", 1)[0]
+    assert "popoverFocusIntent = nil" in cleanup_source
+    assert "removePopoverOutsideClickMonitor()" in cleanup_source
+    assert "removePopoverKeyDownMonitor()" in cleanup_source
     assert "func popoverDidClose" in app
-    assert "removePopoverOutsideClickMonitor()" in app
+    for callback in ("popoverWillShow", "popoverDidShow", "popoverWillClose", "popoverDidClose"):
+        callback_source = app.split(f"func {callback}(_ notification: Notification)", 1)[1].split("\n    }", 1)[0]
+        assert "guard (notification.object as? NSPopover) === popover else { return }" in callback_source
     assert "focusPopoverWindow(for:" in app
     did_show_source = app.split("func popoverDidShow", 1)[1].split("\n    }", 1)[0]
     assert "DispatchQueue.main.async" in did_show_source
@@ -382,6 +398,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)" in app
     show_popover_body = app.split("private func showPopover(relativeTo button: NSStatusBarButton)", 1)[1].split("private func focusPopoverWindow", 1)[0]
     assert "RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()" in show_popover_body
+    assert show_popover_body.index("replacePopoverOutsideActiveSpace()") < show_popover_body.index("popover.show(relativeTo:")
+    assert "self.popover === displayedPopover, displayedPopover.isShown" in show_popover_body
     assert "popover.behavior = .semitransient" in app
     assert "popover.behavior = .transient" not in app
     assert "popover.behavior =" not in show_popover_body
@@ -1095,7 +1113,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "NSApp.currentEvent?.clickCount" not in app
     assert "popover.performClose(nil)" in app
     assert "window.orderOut(nil)" in app
-    assert ".close()" not in app
+    assert ".close()" not in app.replace("previousPopover.close()", "", 1)
     assert "--ui-test-show-popover" in ui_test_flags
     assert "HH_REMOTE_SHOW_POPOVER" in ui_test_flags
     assert "--ui-test-click-status-item" in ui_test_flags
