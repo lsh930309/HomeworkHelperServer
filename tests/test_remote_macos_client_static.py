@@ -386,7 +386,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "popover.behavior = .transient" not in app
     assert "popover.behavior =" not in show_popover_body
     assert "RemotePlaceholderWindowAccessor" in app
-    assert "schedulePlaceholderHide()" in app
     assert "Window(RemoteAppDelegate.placeholderWindowTitle, id: RemoteAppDelegate.placeholderWindowIdentifier)" in app
     scene_source = app.split("var body: some Scene", 1)[1].split("struct GameIconView", 1)[0]
     placeholder_scene_source = scene_source.split(".commands {", 1)[0]
@@ -404,10 +403,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "CommandGroup(replacing: .appSettings)" in app
     assert app.count("RemoteAppDelegate.showSettingsWindow()") >= 3
     assert "SettingsLink" not in app
-    assert "RemoteSettingsOpenBridge" in app
-    assert "@Environment(\\.openSettings)" in app
-    assert "RemoteAppDelegate.installSettingsOpener" in app
-    assert "openSettings()" in app
+    assert "RemoteSettingsOpenBridge" not in app
+    assert "schedulePlaceholderHide" not in app
+    placeholder_accessor_source = window_accessor.split("struct RemotePlaceholderWindowAccessor", 1)[1].split("struct RemoteSettingsWindowAccessor", 1)[0]
+    assert "@Environment(\\.openSettings)" in placeholder_accessor_source
+    attachment = placeholder_accessor_source.split("override func viewDidMoveToWindow()", 1)[1]
+    assert "guard let window else { return }" in attachment
+    assert "self.window === window" in attachment
+    assert placeholder_accessor_source.index("RemoteAppDelegate.installSettingsOpener") < placeholder_accessor_source.index("window.orderOut(nil)")
     assert "homeworkHelperRemoteOpenSettings" not in app
     assert 'Selector(("showSettingsWindow:"))' not in app
     assert 'Selector(("showPreferencesWindow:"))' not in app
@@ -809,10 +812,26 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "ensureMoonlightDesktopVisible" in view_model
     assert "stopMoonlightDesktopSession" in view_model
     assert "if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopSession" in view_model
-    assert "await prepareMoonlightAutoWake(action: .streamOnly)" in view_model
+    assert "await prepareMoonlightAutoWake(action: .streamOnly, observation: observation)" in view_model
     assert "hostAvailabilityState == .online" in view_model
     assert "if pendingMoonlightWakeAction != nil { return true }" in view_model
-    assert "앱 종료 fallback만 수행합니다" in view_model
+    moonlight_toggle = view_model.split("func toggleMoonlightDesktopSession(stopRequested: Bool)", 1)[1].split("private func prepareMoonlightAutoWake", 1)[0]
+    assert "guard !moonlightFooterButtonDisabled else { return }" in moonlight_toggle
+    assert "guard moonlightSessionSnapshot.hasDesktopSession == stopRequested else" in moonlight_toggle
+    assert moonlight_toggle.index("moonlightSetupInProgress = true") < moonlight_toggle.index("await observeConnectionNow")
+    assert "evaluation.moonlightTarget == target" in moonlight_toggle
+    assert "guard observation.canStream else" in moonlight_toggle
+    assert 'ensureMoonlightDesktopVisible(trigger: "moonlight.button", observation: observation)' in moonlight_toggle
+    stop_moonlight = view_model.split("private func stopMoonlightDesktopSession()", 1)[1].split("private func focusMoonlightOnPreferredScreen()", 1)[0]
+    assert stop_moonlight.index("let applications = LocalMoonlightManager.runningApplications()") < stop_moonlight.index("await LocalMoonlightManager.quit(")
+    assert "await LocalMoonlightManager.terminateRunningApplications(applications)" in stop_moonlight
+    assert "원격 세션 종료 여부는 미확인입니다" in stop_moonlight
+    assert "!terminate.succeeded || quit?.succeeded != true" in stop_moonlight
+    assert "Moonlight 처리 중" in app
+    assert "viewModel.moonlightFooterActionFailed" in app
+    assert "viewModel.moonlightFooterHelp" in app
+    assert "let stopRequested = viewModel.moonlightSessionSnapshot.hasDesktopSession" in app
+    assert "viewModel.toggleMoonlightDesktopSession(stopRequested: stopRequested)" in app
     assert "updateMoonlightPreferredScreen" in view_model
     assert "focusMoonlightOnPreferredScreen" in view_model
     assert "Accessibility 권한" in view_model

@@ -85,9 +85,6 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         Task {
             await RemoteSharedModel.viewModel.bootstrap()
         }
-        DispatchQueue.main.async {
-            Self.schedulePlaceholderHide()
-        }
         if Self.pendingSettingsOpen {
             presentSettingsWindow()
         }
@@ -552,38 +549,24 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         window.orderFrontRegardless()
     }
 
-    static func hideMainWindow() {
-        hidePlaceholderWindows()
-        NSApp.setActivationPolicy(.accessory)
-    }
-
-    static func hidePlaceholderWindows() {
-        NSApp.windows
-            .filter { $0.identifier?.rawValue == placeholderWindowIdentifier || $0.title == placeholderWindowTitle }
-            .forEach { $0.orderOut(nil) }
-    }
-
-    static func schedulePlaceholderHide() {
-        for delay in [0.0, 0.1, 0.5, 1.5] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                hidePlaceholderWindows()
-            }
-        }
-    }
-
     static func showSettingsWindow() {
         pendingSettingsOpen = true
+        shared?.tracePopover("settings.openRequested")
         shared?.presentSettingsWindow()
     }
 
     static func installSettingsOpener(_ opener: @escaping @MainActor () -> Void) {
         settingsOpener = opener
+        shared?.tracePopover("settings.openerInstalled")
         guard pendingSettingsOpen else { return }
         shared?.presentSettingsWindow()
     }
 
     static func registerSettingsWindow(_ window: NSWindow) {
         guard let shared else { return }
+        if shared.settingsWindow !== window {
+            shared.tracePopover("settings.windowAttached")
+        }
         shared.settingsWindow = window
         guard pendingSettingsOpen else { return }
         shared.presentSettingsWindow()
@@ -596,14 +579,17 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             NSApp.activate(ignoringOtherApps: true)
             settingsWindow.makeKeyAndOrderFront(nil)
             settingsWindow.orderFrontRegardless()
+            popoverLogger.notice("event=settings.windowOrdered visible=\(settingsWindow.isVisible) key=\(settingsWindow.isKeyWindow) activeSpace=\(settingsWindow.isOnActiveSpace)")
             Self.pendingSettingsOpen = false
             return
         }
         NSApp.activate(ignoringOtherApps: true)
         guard let settingsOpener = Self.settingsOpener else {
             Self.pendingSettingsOpen = true
+            tracePopover("settings.openerUnavailable")
             return
         }
+        tracePopover("settings.openerInvoked")
         settingsOpener()
     }
 
@@ -638,12 +624,6 @@ struct HomeworkHelperRemoteApp: App {
             Color.clear
                 .frame(width: 160, height: 96)
                 .background(RemotePlaceholderWindowAccessor())
-                .background(RemoteSettingsOpenBridge())
-                .onAppear {
-                    DispatchQueue.main.async {
-                        RemoteAppDelegate.schedulePlaceholderHide()
-                    }
-                }
         }
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(.presented)
@@ -666,19 +646,6 @@ struct HomeworkHelperRemoteApp: App {
         Settings {
             RemoteSettingsView(viewModel: viewModel)
         }
-    }
-}
-
-struct RemoteSettingsOpenBridge: View {
-    @Environment(\.openSettings) private var openSettings
-
-    var body: some View {
-        Color.clear
-            .onAppear {
-                RemoteAppDelegate.installSettingsOpener {
-                    openSettings()
-                }
-            }
     }
 }
 
@@ -1318,17 +1285,36 @@ struct MenuBarMoonlightButton: View {
 
     var body: some View {
         let disabled = viewModel.moonlightFooterButtonDisabled
+        let failed = !disabled && viewModel.moonlightFooterActionFailed
+        let stopRequested = viewModel.moonlightSessionSnapshot.hasDesktopSession
+        let actionIcon = viewModel.moonlightFooterButtonIcon
+        let icon = if disabled {
+            "hourglass"
+        } else if failed {
+            "exclamationmark.triangle.fill"
+        } else {
+            actionIcon
+        }
+        let tone: MenuBarCTAButtonTone = if failed {
+            .warning
+        } else if !disabled && actionIcon == "stop.circle.fill" {
+            .destructive
+        } else {
+            .normal
+        }
+        let help = viewModel.moonlightFooterHelp
         MenuBarCTAButton(
-            title: viewModel.moonlightFooterButtonTitle,
-            systemImage: viewModel.moonlightFooterButtonIcon,
+            title: disabled ? "Moonlight 처리 중" : viewModel.moonlightFooterButtonTitle,
+            systemImage: icon,
             disabled: disabled,
-            tone: viewModel.moonlightFooterButtonIcon == "stop.circle.fill" ? .destructive : .normal,
+            tone: tone,
             layout: .horizontal(minHeight: 30),
-            help: viewModel.moonlightBindingStatusDisplay
+            help: help
         ) {
             viewModel.updateMoonlightPreferredScreen(NSApp.keyWindow?.screen ?? NSApp.mainWindow?.screen ?? NSScreen.main)
-            Task { await viewModel.toggleMoonlightDesktopSession() }
+            Task { await viewModel.toggleMoonlightDesktopSession(stopRequested: stopRequested) }
         }
+        .accessibilityHint(Text(help))
     }
 }
 

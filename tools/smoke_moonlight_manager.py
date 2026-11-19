@@ -38,7 +38,37 @@ def _write_fake_moonlight_app(root: Path) -> Path:
         )
     )
     executable = executable_dir / "Moonlight"
-    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.write_text(
+        """#!/bin/sh
+case "$1:$2" in
+  quit:fixture-success)
+    printf 'fixture quit %s\\n' "$2"
+    ;;
+  quit:fixture-failure)
+    printf 'fixture warning\\n' >&2
+    exit 7
+    ;;
+  quit:fixture-verbose)
+    i=0
+    while [ "$i" -lt 4096 ]; do
+      printf 'fixture diagnostic line %s on stdout\\n' "$i"
+      printf 'fixture diagnostic line %s on stderr\\n' "$i" >&2
+      i=$((i + 1))
+    done
+    ;;
+  quit:fixture-inherited-output)
+    /bin/sleep 7 &
+    printf 'fixture helper exited\\n'
+    ;;
+  quit:fixture-timeout)
+    trap '' TERM
+    exec /bin/sleep 7
+    ;;
+  *) exit 64 ;;
+esac
+""",
+        encoding="utf-8",
+    )
     executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
     return app
 
@@ -88,7 +118,7 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
 
         @main
         struct LocalMoonlightManagerSmoke {{
-            static func main() {{
+            static func main() async {{
                 setenv("HH_REMOTE_MOONLIGHT_APP_PATHS", "{app_path}", 1)
                 setenv("HH_REMOTE_MOONLIGHT_PREFS_PATH", "{plist_path}", 1)
 
@@ -122,6 +152,25 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
                 expect(selected.targetHost?.uuid == "HOST-2", "HomeworkHelper address must select HOST-2")
                 expect(selected.installation?.version == "6.1.0-fixture", "fake app version should be detected")
 
+                let success = await LocalMoonlightManager.quit(host: "fixture-success", installation: selected.installation)
+                expect(success.succeeded && success.stdout == "fixture quit fixture-success", "quit should pass the selected target and capture normal output")
+
+                let failure = await LocalMoonlightManager.quit(host: "fixture-failure", installation: selected.installation)
+                expect(!failure.succeeded && failure.exitStatus == 7 && !failure.timedOut && failure.stderr == "fixture warning", "quit should preserve helper failure and its diagnostic")
+
+                let verbose = await LocalMoonlightManager.quit(host: "fixture-verbose", installation: selected.installation, timeoutSeconds: 3)
+                expect(verbose.succeeded, "both stdout and stderr should be drained while the quit helper runs")
+
+                let inheritedStart = ContinuousClock.now
+                let inherited = await LocalMoonlightManager.quit(host: "fixture-inherited-output", installation: selected.installation)
+                expect(inherited.succeeded && inherited.stdout == "fixture helper exited", "quit output should survive until its helper exits")
+                expect(ContinuousClock.now - inheritedStart < .seconds(5), "quit must not wait for inherited output held by a separate process")
+
+                let start = ContinuousClock.now
+                let timeout = await LocalMoonlightManager.quit(host: "fixture-timeout", installation: selected.installation, timeoutSeconds: 1)
+                expect(timeout.timedOut && !timeout.succeeded, "quit must report timeout when the fixture ignores normal termination")
+                expect(ContinuousClock.now - start < .seconds(5), "quit must return before the stuck fixture exits on its own")
+
                 print("LocalMoonlightManager smoke passed: hosts=\\(selected.hosts.count), target=\\(selected.targetHost?.displayTitle ?? "-")")
             }}
         }}
@@ -140,6 +189,8 @@ def main() -> int:
         compile_cmd = [
             "swiftc",
             "-parse-as-library",
+            "-module-cache-path",
+            str(root / "swift-module-cache"),
             str(MOONLIGHT_MANAGER),
             str(smoke_source),
             "-o",
@@ -151,7 +202,7 @@ def main() -> int:
             return compile_result.returncode
         env = os.environ.copy()
         fixture_before = plist_path.read_bytes()
-        run_result = subprocess.run([str(binary)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, check=False)
+        run_result = subprocess.run([str(binary)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, check=False, timeout=20)
         if run_result.stdout:
             print(run_result.stdout, end="")
         if plist_path.read_bytes() != fixture_before:

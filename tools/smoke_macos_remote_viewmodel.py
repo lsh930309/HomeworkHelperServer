@@ -461,7 +461,7 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                     fatalError("loopback without PC evidence must not automatically send Wake: \(viewModel.message)")
                 }
                 viewModel.moonlightBindingEnabled = false
-                await viewModel.toggleMoonlightDesktopSession()
+                await viewModel.toggleMoonlightDesktopSession(stopRequested: false)
                 guard viewModel.moonlightBindingEnabled,
                       viewModel.message.contains("PC 응답 여부를 확인한 뒤") else {
                     fatalError("Moonlight auto-wake should require current PC evidence: \(viewModel.message)")
