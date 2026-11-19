@@ -370,7 +370,15 @@ def test_background_transport_posts_only_process_and_fixed_session_identity(monk
         return BackgroundHttpResult(200, expected, 0.1)
     monkeypatch.setattr(transport, "post_json", post)
     assert transport.observe_process_resource("game", 11) == expected
-    assert calls == [("/processes/game/resource-observation", {"session_id": 11}, {"timeout": 45.0})]
+    assert transport.observe_process_resource("game", 11, expected_target=("wuwa", "waveplate", "fixture-role")) == expected
+    assert calls == [
+        ("/processes/game/resource-observation", {"session_id": 11}, {"timeout": 45.0}),
+        (
+            "/processes/game/resource-observation",
+            {"session_id": 11, "expected_target": ["wuwa", "waveplate", "fixture-role"]},
+            {"timeout": 45.0},
+        ),
+    ]
 
 
 def _observation_route(state, monkeypatch):
@@ -403,7 +411,7 @@ def _observation_route(state, monkeypatch):
 
     def operation(pid, sid=None, **kwargs):
         assert pid == "game"
-        return state.observe(sid, is_cancelled=kwargs["is_cancelled"])
+        return state.observe(sid, expected_target=kwargs["expected_target"], is_cancelled=kwargs["is_cancelled"])
 
     monkeypatch.setattr(resource_observation, "observe_process_resource", operation)
     return TestClient(api), coordinator
@@ -418,6 +426,20 @@ def test_real_route_rejects_claimed_time_and_raw_values_and_has_no_raw_patch(obs
         assert response.status_code == 422
     for path in ("stamina", "resource"):
         assert http.patch(f"/sessions/11/{path}", params={"stamina_at_end": 7}).status_code == 404
+    assert state.requests == []
+    assert state.values() == before
+
+
+def test_real_route_cancels_observation_when_dispatch_target_is_stale(observed, monkeypatch):
+    state = observed
+    http, _ = _observation_route(state, monkeypatch)
+    before = state.values()
+    response = http.post(
+        "/processes/game/resource-observation",
+        json={"session_id": 11, "expected_target": ["wuwa", "waveplate", "fixture-role"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["cancelled"] is True
     assert state.requests == []
     assert state.values() == before
 

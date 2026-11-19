@@ -14,15 +14,11 @@ logger = logging.getLogger(__name__)
 class HoYoStaminaReconcileCoordinator(_ResourceFollowupCoordinator):
     """재실행에 취소되지 않는 HoYoLab 종료별 follow-up을 제공한다."""
 
+    _provider = credential_health.PROVIDER_HOYOLAB
+
     def _get_service(self):
         from src.services.hoyolab import get_hoyolab_service
         return get_hoyolab_service()
-
-    def _target(self, process):
-        return (process.hoyolab_game_id,) if process.is_hoyoverse_game() else None
-
-    def _event_target(self, event):
-        return (event.hoyolab_game_id,) if event.is_hoyoverse_game() else None
 
     def _apply_process_row(self, process, row):
         for key in ("stamina_current", "stamina_max", "stamina_updated_at"):

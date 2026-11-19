@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from src.data.data_models import ManagedProcess
 from src.gui.dialogs import ProcessDialog
+from src.utils.resource_tracking import GameResourceSnapshot
 
 
 pytestmark = pytest.mark.usefixtures("wuwa_config_memory")
@@ -43,7 +44,9 @@ def gui(monkeypatch, wuwa_config_memory):
                              resource_current=239, resource_max=240, resource_reserve_current=7, resource_reserve_max=480)
     parent.data_manager = SimpleNamespace(get_process_by_id=lambda pid: process if pid == process.id else None)
     parent._work_coordinator = work
-    parent._wuwa_resource_reconcile = SimpleNamespace(request_refresh=lambda pid, callback: requests.append((pid, callback)) or True)
+    parent._resource_reconcilers = {
+        "wuwa": SimpleNamespace(request_refresh=lambda pid, callback: requests.append((pid, callback)) or True),
+    }
     monkeypatch.setattr(QMessageBox, "information", lambda *args: popups.append(args[1:]))
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: popups.append(args[1:]))
     dialog = ProcessDialog(parent, existing_process=process)
@@ -55,10 +58,13 @@ def gui(monkeypatch, wuwa_config_memory):
     app.processEvents()
 
 
-def payload():
-    return {"process_id": "wuwa", "observation_succeeded": True, "provider_status": "ok", "process_row": {
-        "resource_current": 240, "resource_max": 240, "resource_reserve_current": 120, "resource_reserve_max": 480,
-    }}
+def payload(process):
+    fetched_at = dt.datetime(2026, 11, 19, 1, tzinfo=dt.timezone.utc).timestamp()
+    row = {**process.to_dict(), "resource_current": 239, "resource_max": 240,
+           "resource_updated_at": fetched_at - 360,
+           "resource_reserve_current": 120, "resource_reserve_max": 480}
+    return {"process_id": "wuwa", "observation_succeeded": True, "provider_status": "ok",
+            "fetched_at": fetched_at, "process_row": row}
 
 
 def test_registered_wuwa_query_uses_existing_writer_queue_and_never_edits_shared_values(gui):
@@ -66,8 +72,9 @@ def test_registered_wuwa_query_uses_existing_writer_queue_and_never_edits_shared
     gui.dialog._test_stamina_connection()
     assert len(gui.requests) == 1 and gui.requests[0][0] == "wuwa"
     assert gui.work.submitted == [] and gui.process.to_dict() == before
-    gui.requests[0][1](payload())
+    gui.requests[0][1](payload(gui.process))
     assert "저장" in gui.popups[0][1] and gui.process.to_dict() == before
+    assert "웨이브플레이트: 240 / 240" in gui.popups[0][1]
 
 
 @pytest.mark.parametrize("change", ["close", "account", "target"])
@@ -79,7 +86,7 @@ def test_registered_wuwa_query_discards_late_result_after_identity_or_lifetime_c
         gui.config.selected = OTHER_KEY
     else:
         gui.dialog.hoyolab_game_combo.setCurrentIndex(gui.dialog.hoyolab_game_combo.findData("honkai_starrail"))
-    gui.requests[0][1](payload())
+    gui.requests[0][1](payload(gui.process))
     assert gui.popups == []
 
 
@@ -90,8 +97,12 @@ def test_unsaved_wuwa_account_uses_read_only_background_preview_and_discards_cha
     assert gui.requests == [] and gui.process.to_dict() == before
     assert gui.work.submitted[0][2] == (KEY,)
     gui.config.selected = OTHER_KEY
-    gui.work.result_ready.emit(SimpleNamespace(key=gui.dialog._wuwa_work_key, value=SimpleNamespace(
-        status="ok", current=240, maximum=240, reserve_current=120, reserve_max=480)))
+    snapshot = GameResourceSnapshot(
+        "wuwa", KEY, "웨이브플레이트", 100.0, "ok",
+        dt.datetime(2026, 11, 19, 1, tzinfo=dt.timezone.utc),
+        current=240, maximum=240, reserve_current=120, reserve_max=480,
+    )
+    gui.work.result_ready.emit(SimpleNamespace(key=gui.dialog._wuwa_work_key, value=snapshot))
     assert gui.popups == [] and gui.process.to_dict() == before
 
 

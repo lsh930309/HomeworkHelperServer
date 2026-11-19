@@ -1236,9 +1236,9 @@ def test_provider_health_persist_reports_unsupported_transport(caplog):
     assert "provider health 저장 실패" in caplog.text
 
 
-def test_reconcile_provider_health_writes_are_queued_off_main_path():
+def test_reconcile_provider_health_writes_are_queued_off_main_path(resource_test_isolation):
     from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
-    from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
+    from src.core.resource_reconcile import ResourceReconcileCoordinator
 
     class FailIfCalledDataManager:
         def update_provider_credential_health(self, *args, **kwargs):
@@ -1293,16 +1293,16 @@ def test_reconcile_provider_health_writes_are_queued_off_main_path():
         resource_updated_at=1000.0,
     )
     nikke_pool = FakePool()
-    nikke = NikkeResourceReconcileCoordinator.__new__(NikkeResourceReconcileCoordinator)
+    nikke = ResourceReconcileCoordinator.__new__(ResourceReconcileCoordinator)
     nikke._data_manager = FailIfCalledDataManager()
     nikke._transport = object()
     nikke._health_pool = nikke_pool
     nikke._notifier = None
+    nikke._provider = credential_health.PROVIDER_NIKKE_BLABLALINK
 
-    nikke._record_provider_health_from_snapshot(
+    nikke._record_observation_health(
         nikke_process,
-        SimpleNamespace(status="ok", message="NIKKE resource ok", label="전초기지 방어 보상"),
-        5678.0,
+        {"provider_status": "ok", "fetched_at": 5678.0},
     )
 
     assert len(nikke_pool.tasks) == 1

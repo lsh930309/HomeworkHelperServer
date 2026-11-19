@@ -14,9 +14,9 @@ from src.api.client import BackgroundApiTransport
 from src.core import credential_health
 from src.core.process_monitor import ProcessLifecycleEvent
 from src.core.provider_health_persist import ProviderHealthPersistTask
+from src.core.resource_observation import resource_target
 from src.data.data_models import ManagedProcess
 from src.gui.work_coordinator import retain_detached_qthreadpool
-from src.utils.resource_tracking import is_nikke_outpost_resource, is_wuwa_waveplate_resource
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class _FollowupJob:
     process_id: str
     process_name: str
     session_id: Optional[int]
-    target: tuple[str, ...]
+    target: tuple[str, ...] = field(repr=False)
     service: object
     exit_monotonic: float
     callback: Optional[Callable[[dict], None]] = None
@@ -111,14 +111,18 @@ class _ResourceFollowupCoordinator(QObject):
         raise NotImplementedError
 
     def _target(self, process: ManagedProcess) -> Optional[tuple[str, ...]]:
-        raise NotImplementedError
+        target = resource_target(process)
+        return target if target is not None and target[0] == self._provider else None
 
     def _event_target(self, event: ProcessLifecycleEvent) -> Optional[tuple[str, ...]]:
-        raise NotImplementedError
+        target = event.resource_target
+        return target if target is not None and target[0] == self._provider else None
 
     def _fetch_observation(self, job: _FollowupJob) -> dict:
         # 제공자 조회 시작 시각과 세션 보정 권한은 canonical API가 소유한다.
-        return self._transport.observe_process_resource(job.process_id, job.session_id)
+        return self._transport.observe_process_resource(
+            job.process_id, job.session_id, expected_target=job.target,
+        )
 
     def _apply_process_row(self, process: ManagedProcess, row: dict) -> None:
         raise NotImplementedError
@@ -370,27 +374,26 @@ class _ResourceFollowupCoordinator(QObject):
         return primary and health
 
 
-class NikkeResourceReconcileCoordinator(_ResourceFollowupCoordinator):
-    """NIKKE 전초기지 관측은 종료별 세션 보정과 현재 자원 저장을 분리한다."""
+class ResourceReconcileCoordinator(_ResourceFollowupCoordinator):
+    """공용 자원 필드를 쓰는 제공자 하나의 조회와 저장을 직렬 처리한다."""
+
+    def __init__(
+        self, data_manager, process_monitor, notifier=None, parent=None, *,
+        provider: str, get_service: Callable[[], object], default_game_id: str,
+    ):
+        super().__init__(data_manager, process_monitor, notifier, parent)
+        self._provider = provider
+        self._service_factory = get_service
+        self._default_game_id = default_game_id
 
     def _get_service(self):
-        from src.services.nikke import get_nikke_service
-        return get_nikke_service()
-
-    def _target(self, process):
-        if getattr(process, "resource_tracking_enabled", False) and is_nikke_outpost_resource(
-            getattr(process, "resource_provider", None), getattr(process, "resource_key", None)
-        ):
-            return process.resource_provider, process.resource_key
-        return None
-
-    def _event_target(self, event):
-        if event.is_nikke_outpost_resource_game():
-            return event.resource_provider, event.resource_key
-        return None
+        return self._service_factory()
 
     def _apply_process_row(self, process, row):
-        for key in ("resource_percent", "resource_updated_at", "resource_status", "resource_label"):
+        for key in (
+            "resource_percent", "resource_updated_at", "resource_status", "resource_label",
+            "resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max",
+        ):
             setattr(process, key, row[key])
 
     def _record_observation_health(self, process, payload):
@@ -402,13 +405,14 @@ class NikkeResourceReconcileCoordinator(_ResourceFollowupCoordinator):
 
     def _record_provider_health_from_status(self, process: ManagedProcess, status: str, message: str, fetched_at: float) -> None:
         payload = credential_health.update_payload_for_reason(
-            credential_health.PROVIDER_NIKKE_BLABLALINK,
+            self._provider,
             status, message=message, source="resource_tracking", process_id=process.id,
-            game_id=getattr(process, "user_preset_id", None) or "nikke", detected_at=fetched_at,
+            game_id=getattr(process, "user_preset_id", None) or self._default_game_id,
+            detected_at=fetched_at,
         )
         if payload is None:
             return
-        self._health_pool.start(ProviderHealthPersistTask(self._transport, payload, context="NIKKE resource_tracking"))
+        self._health_pool.start(ProviderHealthPersistTask(self._transport, payload, context="resource_tracking"))
         if credential_health.is_alertable_health(payload["status"], payload["reason"]):
             self._send_provider_health_notification(process, payload)
 
@@ -423,45 +427,3 @@ class NikkeResourceReconcileCoordinator(_ResourceFollowupCoordinator):
             )
         except Exception as exc:
             logger.debug("[Resource] provider health 알림 전송 실패: %s", exc, exc_info=True)
-
-
-class WuwaResourceReconcileCoordinator(NikkeResourceReconcileCoordinator):
-    """명조도 같은 시작·주기·종료 후 추적 큐와 저장 API를 사용한다."""
-
-    def _get_service(self):
-        from src.services.wuwa import get_wuwa_service
-        return get_wuwa_service()
-
-    def _target(self, process):
-        if getattr(process, "resource_tracking_enabled", False) and is_wuwa_waveplate_resource(
-            getattr(process, "resource_provider", None), getattr(process, "resource_key", None),
-        ):
-            from src.utils.wuwa_config import WuwaConfig
-            account = WuwaConfig().load_selected_resource_key()
-            return (process.resource_provider, process.resource_key, account) if account is not None else None
-        return None
-
-    def _event_target(self, event):
-        if getattr(event, "resource_tracking_enabled", False) and is_wuwa_waveplate_resource(
-            getattr(event, "resource_provider", None), getattr(event, "resource_key", None),
-        ):
-            from src.utils.wuwa_config import WuwaConfig
-            account = WuwaConfig().load_selected_resource_key()
-            return (event.resource_provider, event.resource_key, account) if account is not None else None
-        return None
-
-    def _apply_process_row(self, process, row):
-        super()._apply_process_row(process, row)
-        for key in ("resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max"):
-            setattr(process, key, row[key])
-
-    def _record_provider_health_from_status(self, process, status, message, fetched_at):
-        payload = credential_health.update_payload_for_reason(
-            credential_health.PROVIDER_WUWA, status, message=message, source="resource_tracking",
-            process_id=process.id, game_id="wuthering_waves", detected_at=fetched_at,
-        )
-        if payload is None:
-            return
-        self._health_pool.start(ProviderHealthPersistTask(self._transport, payload, context="명조 resource_tracking"))
-        if credential_health.is_alertable_health(payload["status"], payload["reason"]):
-            self._send_provider_health_notification(process, payload)

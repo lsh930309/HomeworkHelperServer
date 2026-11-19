@@ -5,16 +5,17 @@ import copy
 import logging
 import math
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 from src.utils.resource_tracking import (
-    NIKKE_OUTPOST_FULL_CHARGE_SECONDS,
     NIKKE_OUTPOST_LABEL,
     STAMINA_RECOVERY_SECONDS_PER_UNIT,
     clamp_percent,
-    is_nikke_outpost_resource,
     is_wuwa_waveplate_resource,
+    resource_definition,
     resource_quantity_percent,
+    resource_recovery_delta,
 )
 
 
@@ -34,7 +35,7 @@ def resource_target(process) -> tuple[str, ...] | None:
             from src.utils.wuwa_config import WuwaConfig
             account = WuwaConfig().load_selected_resource_key()
             return (provider, key, account) if account is not None else None
-        if is_nikke_outpost_resource(provider, key):
+        if resource_definition(provider, key) is not None:
             return provider, key
     return None
 
@@ -73,20 +74,30 @@ class ResourceObservation:
             or not self.session_end_timestamp <= self.request_started_at < self.session_end_timestamp + FOLLOWUP_WINDOW_SECONDS
         ):
             raise ValueError("이 관측은 지정된 종료 세션을 보정할 권한이 없습니다.")
-        elapsed = max(0.0, self.fetched_at - self.session_end_timestamp)
-        if self.target[0] == "hoyolab":
-            if self.stamina_current is None or self.stamina_max is None:
-                raise ValueError("관측된 스태미나 값이 없습니다.")
-            recovered = int(elapsed / STAMINA_RECOVERY_SECONDS_PER_UNIT)
-            return {"stamina_at_end": max(0, min(self.stamina_current - recovered, self.stamina_max))}
-        percent = (resource_quantity_percent(self.resource_current, self.resource_max)
-                   if self.target[0] == "wuwa" else clamp_percent(self.resource_percent))
+        elapsed = self.fetched_at - self.session_end_timestamp
+        uses_stamina_columns = self.target[0] == "hoyolab"
+        definition = resource_definition(*self.target[:2])
+        if uses_stamina_columns or (definition is not None and definition.unit == "count"):
+            current, maximum, recovery_seconds = (
+                (self.stamina_current, self.stamina_max, STAMINA_RECOVERY_SECONDS_PER_UNIT)
+                if uses_stamina_columns else
+                (self.resource_current, self.resource_max, definition.recovery_seconds_per_unit)
+            )
+            if current is None or maximum is None:
+                raise ValueError("관측된 자원 수량이 없습니다.")
+            recovered = resource_recovery_delta(elapsed, recovery_seconds_per_unit=recovery_seconds)
+            count_at_end = max(0, min(current - recovered, maximum))
+            if uses_stamina_columns:
+                return {"stamina_at_end": count_at_end}
+            percent = resource_quantity_percent(count_at_end, maximum)
+        else:
+            percent = clamp_percent(self.resource_percent)
+            if percent is not None and definition is not None:
+                recovered = resource_recovery_delta(elapsed, full_recovery_seconds=definition.full_recovery_seconds)
+                percent = clamp_percent(percent - recovered)
         if percent is None:
             raise ValueError("관측된 자원 백분율이 없습니다.")
-        if self.target[0] == "wuwa":
-            # 명조의 회복 시간 필드는 아직 검증되지 않았으므로 역산하지 않는다.
-            return {"resource_percent_at_end": percent}
-        return {"resource_percent_at_end": clamp_percent(percent - elapsed * 100.0 / NIKKE_OUTPOST_FULL_CHARGE_SECONDS)}
+        return {"resource_percent_at_end": percent}
 
 
 class _ProviderConfigSnapshot:
@@ -155,6 +166,7 @@ def observe_process_resource(
     session_id: int | None = None,
     *,
     session_factory,
+    expected_target: tuple[str, ...] | None = None,
     hoyolab_service_factory=None,
     nikke_service_factory=None,
     wuwa_service_factory=None,
@@ -170,22 +182,26 @@ def observe_process_resource(
 
     result = {"process_row": None, "observation_succeeded": False, "session_succeeded": False, "fetched_at": clock()}
 
-    def read_target():
-        with session_factory() as db:
-            process = crud.get_process_by_id(db, process_id)
-            target = resource_target(process)
-            end = None
-            if session_id is not None:
-                session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
-                if session is None or session.process_id != process_id or session.end_timestamp is None or session.session_status != "closed":
-                    raise ValueError("지정한 게임의 정상 종료 세션이 아닙니다.")
-                end = float(session.end_timestamp)
-            if target is None:
-                raise ValueError("지원되는 자원 추적 게임이 아닙니다.")
-            return target, end
+    def read_target(db):
+        process = crud.get_process_by_id(db, process_id)
+        target = resource_target(process)
+        end = None
+        if session_id is not None:
+            session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
+            if session is None or session.process_id != process_id or session.end_timestamp is None or session.session_status != "closed":
+                raise ValueError("지정한 게임의 정상 종료 세션이 아닙니다.")
+            end = float(session.end_timestamp)
+        if target is None:
+            raise ValueError("지원되는 자원 추적 게임이 아닙니다.")
+        return target, end
 
     try:
-        target, exit_timestamp = read_target()
+        with session_factory() as db:
+            target, exit_timestamp = read_target(db)
+        if session_id is not None and len(target) > 2 and expected_target is None:
+            raise ValueError("계정이 있는 종료 관측에는 종료할 때의 계정 식별자가 필요합니다.")
+        if expected_target is not None and target != expected_target:
+            raise ValueError("요청 시점과 현재 게임·제공자·계정이 달라 관측을 취소했습니다.")
     except ValueError as exc:
         result.update(cancelled=True, error=str(exc))
         return result
@@ -223,10 +239,14 @@ def observe_process_resource(
 
         request_started_at = None
 
-        def require_current(*, starting=False):
+        def require_current(db=None, *, starting=False):
             nonlocal request_started_at
             try:
-                current_target = read_target()
+                with (session_factory() if db is None else nullcontext(db)) as read_db:
+                    if db is not None:
+                        # 계정 연결 writer와 같은 DB 쓰기 경계를 검증 직전부터 소유한다.
+                        read_db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                    current_target = read_target(read_db)
             except ValueError:
                 current_target = None
             if is_cancelled() or not config.is_current() or current_target != (target, exit_timestamp):
@@ -261,33 +281,40 @@ def observe_process_resource(
                 values.update(resource_reserve_current=getattr(stamina, "reserve_current", None),
                               resource_reserve_max=getattr(stamina, "reserve_max", None))
                 result["provider_status"] = "ok"
-            elif target[0] == "wuwa":
-                snapshot = service.get_resource_snapshot(
-                    target[1], before_fetch=lambda: require_current(starting=True),
-                    before_prepare=lambda: require_current(),
-                )
-                if result.get("expired") or result.get("cancelled"):
-                    return result
-                require_current()
-                result.update(provider_status=snapshot.status, error=snapshot.message or None, fetched_at=snapshot.updated_at.timestamp())
-                if snapshot.status != "ok":
-                    return result
-                fetched_at = snapshot.updated_at.timestamp()
-                values = dict(resource_percent=None, resource_status="ok", resource_current=snapshot.current,
-                              resource_max=snapshot.maximum, resource_reserve_current=snapshot.reserve_current,
-                              resource_reserve_max=snapshot.reserve_max)
             else:
-                snapshot = service.get_outpost_storage(before_fetch=lambda: require_current(starting=True))
+                if target[0] == "wuwa":
+                    snapshot = service.get_resource_snapshot(
+                        target[1], before_fetch=lambda: require_current(starting=True),
+                        before_prepare=require_current,
+                    )
+                    label = snapshot.label
+                else:
+                    snapshot = service.get_outpost_storage(before_fetch=lambda: require_current(starting=True))
+                    label = snapshot.label or NIKKE_OUTPOST_LABEL
                 if result.get("expired") or result.get("cancelled"):
                     return result
-                result.update(provider_status=snapshot.status, error=snapshot.message or None, fetched_at=snapshot.updated_at.timestamp())
-                if snapshot.status != "ok" or snapshot.percent is None:
-                    return result
                 fetched_at = snapshot.updated_at.timestamp()
-                values = dict(resource_percent=clamp_percent(snapshot.percent), resource_status=snapshot.status, resource_label=snapshot.label or NIKKE_OUTPOST_LABEL)
-                if values["resource_percent"] is None:
-                    result.update(provider_status="unavailable", error="제공자가 유효한 자원 백분율을 반환하지 않았습니다.")
+                result.update(provider_status=snapshot.status, error=snapshot.message or None, fetched_at=fetched_at)
+                if snapshot.status != "ok":
+                    require_current()
                     return result
+                definition = resource_definition(*target[:2])
+                current = getattr(snapshot, "current", None)
+                maximum = getattr(snapshot, "maximum", None)
+                counted = definition is not None and definition.unit == "count"
+                percent = resource_quantity_percent(current, maximum) if counted else clamp_percent(snapshot.percent)
+                if percent is None:
+                    result.update(provider_status="unavailable", error="제공자가 유효한 자원 값을 반환하지 않았습니다.")
+                    return result
+                values = dict(
+                    resource_percent=None if counted else percent,
+                    resource_status=snapshot.status,
+                    resource_label=label,
+                    resource_current=current if counted else None,
+                    resource_max=maximum if counted else None,
+                    resource_reserve_current=getattr(snapshot, "reserve_current", None) if counted else None,
+                    resource_reserve_max=getattr(snapshot, "reserve_max", None) if counted else None,
+                )
             require_current()
             if request_started_at is None:
                 raise RuntimeError("제공자가 실제 자원 요청 시작을 확인하지 않았습니다.")
@@ -297,11 +324,14 @@ def observe_process_resource(
             result.update(observation_succeeded=True, fetched_at=fetched_at)
             try:
                 with session_factory() as db:
-                    require_current()
                     if target[0] == "hoyolab":
-                        row = crud.update_process_stamina(db, process_id, stamina_updated_at=fetched_at, **values)
+                        row = crud.update_process_stamina(
+                            db, process_id, stamina_updated_at=fetched_at, validate_observation=require_current, **values,
+                        )
                     else:
-                        row = crud.update_process_resource(db, process_id, resource_updated_at=fetched_at, **values)
+                        row = crud.update_process_resource(
+                            db, process_id, resource_updated_at=fetched_at, validate_observation=require_current, **values,
+                        )
                     if row is None:
                         raise ValueError("저장할 게임이 삭제되었습니다.")
                     result["process_row"] = schemas.ProcessSchema.model_validate(row).model_dump()
@@ -310,8 +340,9 @@ def observe_process_resource(
             if session_id is not None:
                 try:
                     with session_factory() as db:
-                        require_current()
-                        corrected = crud.apply_session_resource_observation(db, observation)
+                        corrected = crud.apply_session_resource_observation(
+                            db, observation, validate_observation=require_current,
+                        )
                         result["session_succeeded"] = True
                         result.update({"corrected_exit_stamina" if key == "stamina_at_end" else "corrected_exit_percent": value for key, value in corrected.items()})
                 except Exception as exc:

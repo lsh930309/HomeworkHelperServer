@@ -7,10 +7,8 @@ import math
 import sys
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Protocol
+from src.core.resource_observation import resource_target
 from src.data.data_models import ManagedProcess
-from src.utils.resource_tracking import (
-    is_nikke_outpost_resource,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -37,26 +35,10 @@ class ProcessLifecycleEvent:
     process_name: str
     session_id: Optional[int]
     timestamp: float
-    stamina_tracking_enabled: bool
-    hoyolab_game_id: Optional[str]
     pid: Optional[int] = None
     stamina_at_end: Optional[int] = None
-    stamina_max: Optional[int] = None
-    resource_tracking_enabled: bool = False
-    resource_provider: Optional[str] = None
-    resource_key: Optional[str] = None
     resource_percent_at_end: Optional[float] = None
-
-    def is_hoyoverse_game(self) -> bool:
-        """현재 lifecycle 이벤트가 HoYoLab 기반 스태미나 추적 대상인지 반환합니다."""
-        return self.stamina_tracking_enabled and self.hoyolab_game_id is not None
-
-    def is_nikke_outpost_resource_game(self) -> bool:
-        """현재 lifecycle 이벤트가 NIKKE 전초기지 방어 보상 추적 대상인지 반환합니다."""
-        return bool(
-            self.resource_tracking_enabled
-            and is_nikke_outpost_resource(self.resource_provider, self.resource_key)
-        )
+    resource_target: Optional[tuple[str, ...]] = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -453,12 +435,7 @@ class ProcessMonitor:
                                     process_name=managed_proc.name,
                                     session_id=session.id if session else None,
                                     timestamp=start_timestamp,
-                                    stamina_tracking_enabled=managed_proc.stamina_tracking_enabled,
-                                    hoyolab_game_id=managed_proc.hoyolab_game_id,
                                     pid=actual_process_instance.pid,
-                                    resource_tracking_enabled=getattr(managed_proc, "resource_tracking_enabled", False),
-                                    resource_provider=getattr(managed_proc, "resource_provider", None),
-                                    resource_key=getattr(managed_proc, "resource_key", None),
                                 )
                             )
                             logger.info(f"Process STARTED: '{managed_proc.name}' (PID: {actual_process_instance.pid}, Session ID: {session.id if session else 'N/A'})")
@@ -475,6 +452,7 @@ class ProcessMonitor:
                     if cached_info.get("runtime_stop_pending"):
                         continue
                     termination_time = cached_info.get("pending_termination_time") or time.time()
+                    observed_resource_target = resource_target(managed_proc)
                     previous_last_played = managed_proc.last_played_timestamp
                     managed_proc.last_played_timestamp = termination_time
 
@@ -508,12 +486,7 @@ class ProcessMonitor:
                             process_name=managed_proc.name,
                             session_id=session_id,
                             timestamp=termination_time,
-                            stamina_tracking_enabled=managed_proc.stamina_tracking_enabled,
-                            hoyolab_game_id=managed_proc.hoyolab_game_id,
-                            stamina_max=managed_proc.stamina_max,
-                            resource_tracking_enabled=getattr(managed_proc, "resource_tracking_enabled", False),
-                            resource_provider=getattr(managed_proc, "resource_provider", None),
-                            resource_key=getattr(managed_proc, "resource_key", None),
+                            resource_target=observed_resource_target,
                         )
                     )
                     changed_occurred = True

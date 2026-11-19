@@ -2217,9 +2217,11 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
             invalidate_telemetry=lambda: None,
             shutdown=lambda **_kwargs: resource_shutdown_calls.append("work") or True,
         ),
-        _hoyolab_reconcile=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("hoyo") or True),
-        _nikke_resource_reconcile=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("nikke") or True),
-        _wuwa_resource_reconcile=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("wuwa") or True),
+        _resource_reconcilers={
+            "hoyolab": types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("hoyo") or True),
+            "nikke_blablalink": types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("nikke") or True),
+            "wuwa": types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("wuwa") or True),
+        },
         _daily_checkin=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("checkin") or True),
     )
 

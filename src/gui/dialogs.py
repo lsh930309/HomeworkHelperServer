@@ -21,12 +21,14 @@ from PySide6.QtGui import QIcon # QIcon might be needed if dialogs use icons dir
 # Local imports
 from src.data.data_models import ManagedProcess, GlobalSettings
 from src.core import credential_health
+from src.core.process_progress import calculate_process_progress
+from src.core.resource_observation import resource_target
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
 from src.utils.resource_tracking import (
     NIKKE_OUTPOST_LABEL, WUWA_PROVIDER, WUWA_WAVEPLATE_LABEL, WUWA_WAVEPLATE_RESOURCE_KEY,
-    is_wuwa_waveplate_resource, wuwa_role_id,
-    predict_nikke_outpost_percent, predict_stamina_value,
+    clamp_percent, is_wuwa_waveplate_resource, resource_base_percentage, resource_definition,
+    resource_quantity_percent, wuwa_role_id,
 )
 from src.gui.qt_runtime import is_qobject_valid
 import requests
@@ -1211,9 +1213,9 @@ class ProcessDialog(QDialog):
         self.stamina_test_button.setText("조회 중...")
         self.wuwa_status_label.setText("서버 자원 조회 중...")
         if self._wuwa_work.submit_telemetry(self._wuwa_work_key, _query_wuwa_account, resource_key) is None:
-            self._finish_wuwa_work()
+            self._finish_resource_query()
 
-    def _finish_wuwa_work(self):
+    def _finish_resource_query(self):
         self._resource_query_pending = False
         self.stamina_test_button.setEnabled(True)
         self.stamina_test_button.setText("조회 테스트")
@@ -1221,24 +1223,20 @@ class ProcessDialog(QDialog):
     def _on_wuwa_work_error(self, error):
         if error.key != self._wuwa_work_key or self._resource_dialog_closed:
             return
-        self._finish_wuwa_work()
+        self._finish_resource_query()
         self.wuwa_status_label.setText("명조 자원을 확인하지 못했습니다. 런처 로그인과 연결 상태를 확인하세요.")
 
     def _on_wuwa_work_result(self, result):
         if result.key != self._wuwa_work_key or self._resource_dialog_closed:
             return
-        self._finish_wuwa_work()
+        self._finish_resource_query()
         _operation, selected_account = self._wuwa_operation
         if (self.hoyolab_game_combo.currentData() != "wuwa_waveplate"
                 or _selected_wuwa_account() != selected_account):
             return
         if getattr(self.parent(), "_beholder_restore_runtime_suspended", False) or getattr(self.parent(), "_shutting_down", False):
             return
-        response = result.value
-        if response is None or getattr(response, "status", None) != "ok":
-            self.wuwa_status_label.setText(getattr(response, "message", "") or "런처 로그인과 연결 상태를 확인하세요.")
-            return
-        self._show_resource_test_result("wuwa_waveplate", {"snapshot": response}, stored=False)
+        self._show_resource_test_result("wuwa_waveplate", {"snapshot": result.value}, stored=False)
 
     def _test_wuwa_connection(self):
         selected_account = _selected_wuwa_account()
@@ -1259,7 +1257,13 @@ class ProcessDialog(QDialog):
         if process is None:
             self._start_wuwa_work("preview", WUWA_WAVEPLATE_RESOURCE_KEY)
             return
-        coordinator = getattr(self.parent(), "_wuwa_resource_reconcile")
+        self._request_registered_resource_test("wuwa_waveplate", process)
+
+    def _request_registered_resource_test(self, target, process):
+        expected_target = resource_target(process)
+        if expected_target is None:
+            return
+        coordinator = self.parent()._resource_reconcilers[expected_target[0]]
         dialog_ref = weakref.ref(self)
         process_id = process.id
 
@@ -1267,21 +1271,21 @@ class ProcessDialog(QDialog):
             dialog = dialog_ref()
             if dialog is None or not is_qobject_valid(dialog) or dialog._resource_dialog_closed:
                 return
-            dialog._finish_wuwa_work()
-            current = dialog._registered_tracking_process("wuwa_waveplate")
-            if (dialog.hoyolab_game_combo.currentData() != "wuwa_waveplate"
-                    or _selected_wuwa_account() != selected_account
+            dialog._finish_resource_query()
+            current = dialog._registered_tracking_process(target)
+            if (dialog.hoyolab_game_combo.currentData() != target
                     or current is None or current.id != process_id
+                    or resource_target(current) != expected_target
                     or payload.get("process_id") != process_id):
                 return
-            dialog._show_resource_test_result("wuwa_waveplate", payload, stored=True)
+            dialog._show_resource_test_result(target, payload, stored=True)
 
         self._resource_query_pending = True
         self.stamina_test_button.setEnabled(False)
         self.stamina_test_button.setText("조회 중...")
         if not coordinator.request_refresh(process_id, completed):
-            self._finish_wuwa_work()
-            self.wuwa_status_label.setText("이 게임의 자원 조회가 이미 진행 중입니다. 완료 후 다시 시도하세요.")
+            self._finish_resource_query()
+            QMessageBox.information(self, "조회 진행 중", "이 게임의 자원 조회가 이미 진행 중입니다. 완료 후 다시 시도해주세요.")
 
     def _registered_tracking_process(self, target):
         """미저장 폼 선택이 현재 등록 대상과 같은 경우에만 저장형 조회를 허용한다."""
@@ -1294,18 +1298,9 @@ class ProcessDialog(QDialog):
         process = manager.get_process_by_id(self.existing_process.id)
         if process is None:
             return None
-        if target == "wuwa_waveplate":
-            matches = (process.resource_tracking_enabled and process.resource_provider == WUWA_PROVIDER
-                       and process.resource_key == WUWA_WAVEPLATE_RESOURCE_KEY and bool(_selected_wuwa_account()))
-        elif target == "nikke_outpost_storage":
-            matches = (
-                process.resource_tracking_enabled
-                and process.resource_provider == "nikke_blablalink"
-                and process.resource_key == target
-            )
-        else:
-            matches = process.stamina_tracking_enabled and process.hoyolab_game_id == target
-        return process if matches else None
+        current_target = resource_target(process)
+        resource_key = WUWA_WAVEPLATE_RESOURCE_KEY if target == "wuwa_waveplate" else target
+        return process if current_target is not None and current_target[1] == resource_key else None
 
     def _test_stamina_connection(self):
         """등록 대상은 제공자 큐에서 조회·저장하고 미저장 선택은 읽기만 수행한다."""
@@ -1348,10 +1343,8 @@ class ProcessDialog(QDialog):
                 dialog.exec()
                 parent_window = self.parent()
                 if parent_window is not None:
-                    for name in ("_hoyolab_reconcile", "_nikke_resource_reconcile"):
-                        coordinator = getattr(parent_window, name, None)
-                        if coordinator is not None:
-                            coordinator.cancel_changed_targets()
+                    for coordinator in parent_window._resource_reconcilers.values():
+                        coordinator.cancel_changed_targets()
                 # 설정 저장에서 기존 서비스가 교체되므로 새 계정 경계에서 다시 읽는다.
                 service = get_service()
                 if not service.is_configured():
@@ -1359,45 +1352,14 @@ class ProcessDialog(QDialog):
 
             process = self._registered_tracking_process(target)
             if process is not None:
-                parent_window = self.parent()
-                name = "_nikke_resource_reconcile" if is_nikke else "_hoyolab_reconcile"
-                coordinator = getattr(parent_window, name)
-                dialog_ref = weakref.ref(self)
-                process_id = process.id
-
-                def completed(payload):
-                    dialog = dialog_ref()
-                    if dialog is None or not is_qobject_valid(dialog) or dialog._resource_dialog_closed:
-                        return
-                    dialog._resource_query_pending = False
-                    dialog.stamina_test_button.setEnabled(True)
-                    dialog.stamina_test_button.setText("조회 테스트")
-                    current = dialog._registered_tracking_process(target)
-                    if (
-                        dialog.hoyolab_game_combo.currentData() != target
-                        or current is None
-                        or current.id != process_id
-                        or payload.get("process_id") != process_id
-                    ):
-                        return
-                    dialog._show_resource_test_result(target, payload, stored=True)
-
-                self._resource_query_pending = True
-                self.stamina_test_button.setEnabled(False)
-                self.stamina_test_button.setText("조회 중...")
-                if not coordinator.request_refresh(process_id, completed):
-                    self._resource_query_pending = False
-                    self.stamina_test_button.setEnabled(True)
-                    self.stamina_test_button.setText("조회 테스트")
-                    QMessageBox.information(self, "조회 진행 중", "이 게임의 자원 조회가 이미 진행 중입니다. 완료 후 다시 시도해주세요.")
+                self._request_registered_resource_test(target, process)
                 return
 
             # 신규 등록과 미저장 제공자 선택의 연결 테스트는 기존 DB와 공유 모델을 쓰지 않는다.
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             try:
                 if is_nikke:
-                    snapshot = service.get_outpost_storage()
-                    payload = {"snapshot": snapshot, "fetched_at": snapshot.updated_at.timestamp()}
+                    payload = {"snapshot": service.get_outpost_storage()}
                 else:
                     stamina = service.get_stamina(target)
                     payload = {"stamina": stamina}
@@ -1405,33 +1367,11 @@ class ProcessDialog(QDialog):
             finally:
                 QApplication.restoreOverrideCursor()
         except Exception as exc:
-            self._resource_query_pending = False
-            self.stamina_test_button.setEnabled(True)
-            self.stamina_test_button.setText("조회 테스트")
+            self._finish_resource_query()
             QMessageBox.warning(self, "오류", f"자원 조회 중 오류가 발생했습니다:\n{exc}")
 
     def _show_resource_test_result(self, target, payload, *, stored):
         """등록 대상은 API의 저장 결과를, 미등록 대상은 읽기 전용 응답을 표시한다."""
-        if target == "wuwa_waveplate":
-            if stored:
-                row = payload.get("process_row")
-                if not payload.get("observation_succeeded") or payload.get("cancelled") or not isinstance(row, dict):
-                    QMessageBox.warning(self, "조회 실패", "명조 자원을 조회하거나 저장하지 못했습니다. 런처 로그인과 연결 상태를 확인하세요.")
-                    return
-                values = [row.get(name) for name in ("resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max")]
-                note = "조회 결과가 저장되었습니다."
-            else:
-                snapshot = payload.get("snapshot")
-                if snapshot is None or getattr(snapshot, "status", None) != "ok":
-                    QMessageBox.warning(self, "조회 실패", getattr(snapshot, "message", "") or "명조 자원을 확인하지 못했습니다.")
-                    return
-                values = [snapshot.current, snapshot.maximum, snapshot.reserve_current, snapshot.reserve_max]
-                note = "미저장 설정의 조회 결과이며 등록된 자원 값은 변경하지 않았습니다."
-            current, maximum, reserve, reserve_max = values
-            QMessageBox.information(self, "명조 자원 조회 성공",
-                                    f"일반 자원: {current} / {maximum}\n저장 자원: {reserve} / {reserve_max}\n\n{note}")
-            return
-        is_nikke = target == "nikke_outpost_storage"
         if stored:
             if not payload.get("observation_succeeded") or payload.get("cancelled"):
                 detail = payload.get("error") or "인증 정보와 API 연결 상태를 확인해주세요."
@@ -1442,41 +1382,36 @@ class ProcessDialog(QDialog):
                 detail = payload.get("process_error") or "저장 결과 없음"
                 QMessageBox.warning(self, "저장 실패", f"서버 조회를 마쳤으나 자원 저장에 실패했습니다.\n{detail}")
                 return
-            fetched_at = payload["fetched_at"]
-            if is_nikke:
-                percent = predict_nikke_outpost_percent(row["resource_percent"], row["resource_updated_at"], now=fetched_at)
-                value = f"{row.get('resource_label') or NIKKE_OUTPOST_LABEL}: {percent:.1f}%"
-            else:
-                current = predict_stamina_value(
-                    row["stamina_current"], row["stamina_max"], row["stamina_updated_at"], now=fetched_at,
-                )
-                stamina_name = "배터리" if target == "zenless_zone_zero" else "개척력"
-                value = f"{stamina_name}: {current} / {row['stamina_max']}"
-            observed_time = datetime.datetime.fromtimestamp(fetched_at).strftime("%Y-%m-%d %H:%M:%S")
-            QMessageBox.information(
-                self, "자원 조회 성공",
-                f"✅ 자원 조회 성공!\n\n{value}\n조회 시각: {observed_time}"
-                "\n\n💾 조회 결과가 저장되었습니다. 기존 회복 타이머가 유지될 수 있습니다.",
-            )
-            return
-        observation = payload.get("snapshot" if is_nikke else "stamina")
-        success = observation is not None and (
-            not is_nikke or (observation.status == "ok" and observation.percent is not None)
-        )
-        if not success or payload.get("cancelled"):
-            detail = payload.get("error") or getattr(observation, "message", "") or "인증 정보와 API 연결 상태를 확인해주세요."
-            status = getattr(observation, "status", "")
-            QMessageBox.warning(self, "조회 실패", f"자원 조회에 실패했습니다.\n{status}\n{detail}")
-            return
-        save_result = "\n\nℹ️ 미저장 설정의 조회 결과입니다. 등록된 자원 값은 변경하지 않았습니다."
-        if is_nikke:
-            QMessageBox.information(
-                self, "NIKKE 리소스 조회 성공",
-                f"✅ {NIKKE_OUTPOST_LABEL} 조회 성공!\n\n"
-                f"{NIKKE_OUTPOST_LABEL}: {observation.percent:.1f}%\n"
-                f"조회 시각: {observation.updated_at.strftime('%Y-%m-%d %H:%M:%S')}{save_result}",
-            )
+            observation_time = datetime.datetime.fromtimestamp(payload["fetched_at"])
+            progress = calculate_process_progress(ManagedProcess.from_dict(dict(row)), observation_time)
+            current, maximum = progress.get("resource_current"), progress.get("resource_max")
+            label = progress.get("label") or ("배터리" if target == "zenless_zone_zero" else "개척력")
+            percentage = progress["percentage"]
+            reserve, reserve_max = progress.get("resource_reserve_current"), progress.get("resource_reserve_max")
+            note = "조회 결과가 저장되었습니다. 기존 회복 타이머가 유지될 수 있습니다."
+        elif "snapshot" in payload:
+            snapshot = payload.get("snapshot")
+            if snapshot is None or snapshot.status != "ok" or payload.get("cancelled"):
+                detail = payload.get("error") or getattr(snapshot, "message", "") or "인증 정보와 API 연결 상태를 확인해주세요."
+                status = getattr(snapshot, "status", "")
+                QMessageBox.warning(self, "조회 실패", f"자원 조회에 실패했습니다.\n{status}\n{detail}")
+                return
+            current, maximum = snapshot.current, snapshot.maximum
+            definition = resource_definition(snapshot.provider, snapshot.resource_key)
+            percentage = clamp_percent(resource_base_percentage(definition, snapshot.percent, current, maximum))
+            if percentage is None:
+                QMessageBox.warning(self, "조회 실패", "유효한 자원 수치를 확인하지 못했습니다.")
+                return
+            label = snapshot.label
+            observation_time = snapshot.updated_at
+            reserve, reserve_max = snapshot.reserve_current, snapshot.reserve_max
+            note = "미저장 설정의 조회 결과입니다. 등록된 자원 값은 변경하지 않았습니다."
         else:
+            observation = payload.get("stamina")
+            if observation is None or payload.get("cancelled"):
+                detail = payload.get("error") or "인증 정보와 API 연결 상태를 확인해주세요."
+                QMessageBox.warning(self, "조회 실패", f"자원 조회에 실패했습니다.\n{detail}")
+                return
             names = {"honkai_starrail": ("붕괴: 스타레일", "개척력"), "zenless_zone_zero": ("젠레스 존 제로", "배터리")}
             game_name, stamina_name = names.get(target, (target, "스태미나"))
             full_time = f"\n완전 회복 예상: {observation.full_time.strftime('%Y-%m-%d %H:%M:%S')}" if observation.full_time else ""
@@ -1485,8 +1420,20 @@ class ProcessDialog(QDialog):
                 f"✅ {game_name} 스태미나 조회 성공!\n\n"
                 f"{stamina_name}: {observation.current} / {observation.max}\n"
                 f"회복까지: {observation.recover_time // 60}분{full_time}\n"
-                f"조회 시각: {observation.updated_at.strftime('%Y-%m-%d %H:%M:%S')}{save_result}",
+                f"조회 시각: {observation.updated_at.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                "미저장 설정의 조회 결과입니다. 등록된 자원 값은 변경하지 않았습니다.",
             )
+            return
+
+        value = (f"{label}: {current} / {maximum}" if resource_quantity_percent(current, maximum) is not None
+                 else f"{label}: {percentage:.1f}%")
+        if reserve is not None and reserve_max is not None:
+            value += f"\n저장 자원: {reserve} / {reserve_max}"
+        observed_time = observation_time.strftime("%Y-%m-%d %H:%M:%S")
+        QMessageBox.information(
+            self, "자원 조회 성공",
+            f"✅ 자원 조회 성공!\n\n{value}\n조회 시각: {observed_time}\n\n{note}",
+        )
 
     def populate_fields_from_existing_process(self):
         if not self.existing_process:

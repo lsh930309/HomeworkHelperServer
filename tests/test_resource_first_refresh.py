@@ -139,10 +139,18 @@ def flow(monkeypatch, tmp_path, wuwa_config_memory):
             key, function, args, kwargs = self.tasks.pop(0)
             self.result_ready.emit(SimpleNamespace(key=key, value=function(*args, **kwargs)))
     host._work_coordinator = Work()
-    coordinators = [HoYoStaminaReconcileCoordinator(client, host.process_monitor),
-                    reconciliation.NikkeResourceReconcileCoordinator(client, host.process_monitor),
-                    reconciliation.WuwaResourceReconcileCoordinator(client, host.process_monitor)]
-    host._hoyolab_reconcile, host._nikke_resource_reconcile, host._wuwa_resource_reconcile = coordinators
+    host._resource_reconcilers = {
+        "hoyolab": HoYoStaminaReconcileCoordinator(client, host.process_monitor),
+        "nikke_blablalink": reconciliation.ResourceReconcileCoordinator(
+            client, host.process_monitor, provider="nikke_blablalink", get_service=nikke.get_nikke_service,
+            default_game_id="nikke",
+        ),
+        "wuwa": reconciliation.ResourceReconcileCoordinator(
+            client, host.process_monitor, provider="wuwa", get_service=wuwa.get_wuwa_service,
+            default_game_id="wuthering_waves",
+        ),
+    }
+    coordinators = tuple(host._resource_reconcilers.values())
     for owner in coordinators:
         owner._pool, owner._health_pool = Queue(), Queue()
         owner.resource_updated.connect(lambda _pid: host.populate_process_list())
@@ -215,7 +223,10 @@ def test_new_registration_observes_server_uuid_and_renders_canonical_values(flow
         assert row.resource_current is None and row.resource_reserve_current is None
     assert list(flow.coordinators[2]._jobs) == [(saved.id, None)]
     flow.drain()
-    assert flow.observed_requests() == [("POST", f"/processes/{saved.id}/resource-observation", {"session_id": None})]
+    assert flow.observed_requests() == [(
+        "POST", f"/processes/{saved.id}/resource-observation",
+        {"session_id": None, "expected_target": ["wuwa", KEY, ACCOUNT_KEY]},
+    )]
     with flow.sessions() as db:
         row = db.get(models.Process, saved.id)
         assert (row.resource_current, row.resource_max, row.resource_reserve_current, row.resource_reserve_max) == (240, 240, 120, 480)

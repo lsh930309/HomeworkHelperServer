@@ -61,9 +61,11 @@ from src.core.launch_target import (
 )
 from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
+from src.core.credential_health import PROVIDER_HOYOLAB, PROVIDER_NIKKE_BLABLALINK, PROVIDER_WUWA
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
 from src.core.process_progress import calculate_process_progress
-from src.core.resource_reconcile import NikkeResourceReconcileCoordinator, WuwaResourceReconcileCoordinator
+from src.core.resource_observation import resource_target
+from src.core.resource_reconcile import ResourceReconcileCoordinator
 from src.core.daily_checkin_coordinator import DailyCheckInCoordinator
 from src.core.process_monitor import (
     ProcessLifecycleEvent,
@@ -212,25 +214,22 @@ class MainWindow(QMainWindow):
             QApplication.applicationName(),
             main_window_activated_callback=self.gui_notification_handler.process_system_notification_activation,
         )
-        self._hoyolab_reconcile = HoYoStaminaReconcileCoordinator(
-            self.data_manager,
-            self.process_monitor,
-            self.system_notifier,
-            self,
-        )
-        self._nikke_resource_reconcile = NikkeResourceReconcileCoordinator(
-            self.data_manager,
-            self.process_monitor,
-            self.system_notifier,
-            self,
-        )
-
-        self._wuwa_resource_reconcile = WuwaResourceReconcileCoordinator(
-            self.data_manager, self.process_monitor, self.system_notifier, self,
-        )
-        self._wuwa_resource_reconcile.resource_updated.connect(self.populate_process_list_slot)
-        self._hoyolab_reconcile.resource_updated.connect(self.populate_process_list_slot)
-        self._nikke_resource_reconcile.resource_updated.connect(self.populate_process_list_slot)
+        from src.services.nikke import get_nikke_service
+        from src.services.wuwa import get_wuwa_service
+        coordinator_args = self.data_manager, self.process_monitor, self.system_notifier, self
+        self._resource_reconcilers = {
+            PROVIDER_HOYOLAB: HoYoStaminaReconcileCoordinator(*coordinator_args),
+        }
+        for provider, get_service, default_game_id in (
+            (PROVIDER_NIKKE_BLABLALINK, get_nikke_service, "nikke"),
+            (PROVIDER_WUWA, get_wuwa_service, "wuthering_waves"),
+        ):
+            self._resource_reconcilers[provider] = ResourceReconcileCoordinator(
+                *coordinator_args, provider=provider, get_service=get_service,
+                default_game_id=default_game_id,
+            )
+        for coordinator in self._resource_reconcilers.values():
+            coordinator.resource_updated.connect(self.populate_process_list_slot)
         # 기동한 회차는 기존 startup 조회가 소유한다. 첫 정기 조회는 다음 00/30분이다.
         self._last_resource_monitoring_slot = self._resource_monitoring_slot(
             datetime.datetime.now(_RESOURCE_MONITORING_TIMEZONE)
@@ -474,8 +473,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(300, self._reconcile_open_sessions_after_startup)
         QTimer.singleShot(500, self._poll_beholder_incidents)
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
-        QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
-        QTimer.singleShot(1800, self._nikke_resource_reconcile.schedule_startup_refreshes)
+        QTimer.singleShot(1500, self._resource_reconcilers[PROVIDER_HOYOLAB].schedule_startup_refreshes)
+        QTimer.singleShot(1800, self._resource_reconcilers[PROVIDER_NIKKE_BLABLALINK].schedule_startup_refreshes)
         QTimer.singleShot(2000, self._prepare_wuwa_tracking)
         QTimer.singleShot(2200, self._daily_checkin.schedule_startup_check)
         QTimer.singleShot(800, self._refresh_remote_readiness_indicators)
@@ -709,16 +708,14 @@ class MainWindow(QMainWindow):
             entry = active.get(event.process_id)
             if entry is not None and entry.get("runtime_token") == command.runtime_token:
                 entry["session_id"] = value.session_id
-            self._hoyolab_reconcile.handle_process_started(event)
-            self._nikke_resource_reconcile.handle_process_started(event)
-            self._wuwa_resource_reconcile.handle_process_started(event)
+            for coordinator in self._resource_reconcilers.values():
+                coordinator.handle_process_started(event)
         else:
             process = next((item for item in self.data_manager.managed_processes if item.id == event.process_id), None)
             if process is not None and value.last_played_saved:
                 process.last_played_timestamp = event.timestamp
-            self._hoyolab_reconcile.handle_process_stopped(event)
-            self._nikke_resource_reconcile.handle_process_stopped(event)
-            self._wuwa_resource_reconcile.handle_process_stopped(event)
+            for coordinator in self._resource_reconcilers.values():
+                coordinator.handle_process_stopped(event)
         self.update_process_statuses_only()
 
     def _set_remote_readiness_indicator(self, key: str, color: str, message: str) -> None:
@@ -939,12 +936,12 @@ class MainWindow(QMainWindow):
 
         media = self._stop_media_center(remaining_ms())
         # 아직 외부 응답을 기다리는 writer가 있으면 복구 POST를 허용하지 않는다.
-        hoyo = self._hoyolab_reconcile.shutdown(remaining_ms())
-        nikke = self._nikke_resource_reconcile.shutdown(remaining_ms())
-        wuwa = self._wuwa_resource_reconcile.shutdown(remaining_ms())
+        resource_results = [
+            coordinator.shutdown(remaining_ms()) for coordinator in self._resource_reconcilers.values()
+        ]
         checkin = self._daily_checkin.shutdown(remaining_ms())
         work = self._work_coordinator.shutdown(deadline_seconds=remaining_ms() / 1000.0)
-        return media and hoyo and nikke and wuwa and checkin and work
+        return media and all(resource_results) and checkin and work
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -1445,9 +1442,8 @@ class MainWindow(QMainWindow):
         """자원 추적/자동 출석 관리 다이얼로그를 엽니다."""
         dlg = HoYoLabSettingsDialog(self)
         dlg.exec()
-        self._hoyolab_reconcile.cancel_changed_targets()
-        self._nikke_resource_reconcile.cancel_changed_targets()
-        self._wuwa_resource_reconcile.cancel_changed_targets()
+        for coordinator in self._resource_reconcilers.values():
+            coordinator.cancel_changed_targets()
 
     def _prepare_wuwa_tracking(self):
         """이전 게임별 계정 선택을 제공자 설정으로 옮긴 뒤 기동 조회한다."""
@@ -1459,9 +1455,10 @@ class MainWindow(QMainWindow):
             return
         from src.services.wuwa import reset_wuwa_service
         reset_wuwa_service()
-        self._wuwa_resource_reconcile.cancel_changed_targets()
+        coordinator = self._resource_reconcilers[PROVIDER_WUWA]
+        coordinator.cancel_changed_targets()
         self.populate_process_list()
-        self._wuwa_resource_reconcile.schedule_startup_refreshes()
+        coordinator.schedule_startup_refreshes()
 
     def apply_wuwa_account_selection(self, selected_resource_key):
         """관리창의 계정 확정·해제를 저장하고 기존 현재 자원 조회로 연결한다."""
@@ -1470,15 +1467,13 @@ class MainWindow(QMainWindow):
         if not self.data_manager.update_wuwa_link(selected_resource_key):
             return False
         from src.services.wuwa import reset_wuwa_service
-        from src.utils.resource_tracking import WUWA_PROVIDER, WUWA_WAVEPLATE_RESOURCE_KEY
         reset_wuwa_service()
-        self._wuwa_resource_reconcile.cancel_changed_targets()
+        coordinator = self._resource_reconcilers[PROVIDER_WUWA]
+        coordinator.cancel_changed_targets()
         self.populate_process_list()
         if selected_resource_key:
             for process in self.data_manager.managed_processes:
-                if (process.resource_tracking_enabled and process.resource_provider == WUWA_PROVIDER
-                        and process.resource_key == WUWA_WAVEPLATE_RESOURCE_KEY):
-                    self._wuwa_resource_reconcile.request_refresh(process.id)
+                coordinator.request_refresh(process.id)
         return True
 
     def apply_startup_setting(self):
@@ -1521,15 +1516,10 @@ class MainWindow(QMainWindow):
                     process_name=process.name,
                     session_id=int(entry["session_id"]) if entry.get("session_id") is not None else None,
                     timestamp=float(snapshot.observed_at),
-                    stamina_tracking_enabled=process.stamina_tracking_enabled,
-                    hoyolab_game_id=process.hoyolab_game_id,
                     pid=int(entry.get("pid") or 0),
                     stamina_at_end=process.stamina_current,
-                    stamina_max=process.stamina_max,
-                    resource_tracking_enabled=getattr(process, "resource_tracking_enabled", False),
-                    resource_provider=getattr(process, "resource_provider", None),
-                    resource_key=getattr(process, "resource_key", None),
                     resource_percent_at_end=process.get_resource_percentage(now=float(snapshot.observed_at)),
+                    resource_target=resource_target(process),
                 )
                 command = _LifecycleCommand(
                     "stop",
@@ -1538,9 +1528,8 @@ class MainWindow(QMainWindow):
                     float(entry.get("start_time_approx") or 0.0),
                     str(entry.get("runtime_token") or ""),
                 )
-                self._hoyolab_reconcile.mark_process_stopped(event)
-                self._nikke_resource_reconcile.mark_process_stopped(event)
-                self._wuwa_resource_reconcile.mark_process_stopped(event)
+                for coordinator in self._resource_reconcilers.values():
+                    coordinator.mark_process_stopped(event)
                 self._work_coordinator.submit_lifecycle(
                     process.id, self._persist_lifecycle_command, command
                 )
@@ -1569,12 +1558,7 @@ class MainWindow(QMainWindow):
                 process_name=process.name,
                 session_id=None,
                 timestamp=observed.create_time,
-                stamina_tracking_enabled=process.stamina_tracking_enabled,
-                hoyolab_game_id=process.hoyolab_game_id,
                 pid=observed.pid,
-                resource_tracking_enabled=getattr(process, "resource_tracking_enabled", False),
-                resource_provider=getattr(process, "resource_provider", None),
-                resource_key=getattr(process, "resource_key", None),
             )
             self._work_coordinator.submit_lifecycle(
                 process.id,
@@ -1654,7 +1638,7 @@ class MainWindow(QMainWindow):
         """KST 정규 분에 도달한 회차만 처리하고 기동·절전 중 누락은 보충하지 않는다."""
         if self._shutting_down or getattr(self, "_beholder_restore_runtime_suspended", False):
             return
-        coordinators = (self._hoyolab_reconcile, self._nikke_resource_reconcile, self._wuwa_resource_reconcile)
+        coordinators = self._resource_reconcilers.values()
         for coordinator in coordinators:
             coordinator.expire_exit_windows()
         kst = (now or datetime.datetime.now(_RESOURCE_MONITORING_TIMEZONE)).astimezone(_RESOURCE_MONITORING_TIMEZONE)
@@ -1891,7 +1875,7 @@ class MainWindow(QMainWindow):
 
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
                     saved_process = self.data_manager.get_process_by_id(upd_p.id)
-                    for coordinator in (self._hoyolab_reconcile, self._nikke_resource_reconcile, self._wuwa_resource_reconcile):
+                    for coordinator in self._resource_reconcilers.values():
                         coordinator.handle_process_saved(p_edit, saved_process)
                     self.populate_process_list()
                     QTimer.singleShot(0, self._adjust_window_size_to_content)
@@ -1909,9 +1893,8 @@ class MainWindow(QMainWindow):
                                      QMessageBox.StandardButton.No) # 기본 선택은 'No'
         if reply == QMessageBox.StandardButton.Yes: # 'Yes' 클릭 시
             if self.data_manager.remove_process(pid): # 프로세스 삭제
-                self._hoyolab_reconcile.cancel_changed_targets()
-                self._nikke_resource_reconcile.cancel_changed_targets()
-                self._wuwa_resource_reconcile.cancel_changed_targets()
+                for coordinator in self._resource_reconcilers.values():
+                    coordinator.cancel_changed_targets()
                 self.populate_process_list()
                 QTimer.singleShot(0, self._adjust_window_size_to_content)
                 self._record_status_event(f"'{p_del.name}' 삭제 완료.", 3000)
@@ -2057,7 +2040,7 @@ class MainWindow(QMainWindow):
                                        resource_label=data.get("resource_label"))
                 saved_process = self.data_manager.add_process(new_p)
                 if saved_process is not None:
-                    for coordinator in (self._hoyolab_reconcile, self._nikke_resource_reconcile, self._wuwa_resource_reconcile):
+                    for coordinator in self._resource_reconcilers.values():
                         coordinator.handle_process_saved(None, saved_process)
                     self.populate_process_list()
                     QTimer.singleShot(0, self._adjust_window_size_to_content)
@@ -2370,12 +2353,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_recording_manager'):
             self._recording_manager.shutdown()
 
-        if hasattr(self, '_hoyolab_reconcile'):
-            self._hoyolab_reconcile.shutdown(remaining_ms())
-        if hasattr(self, '_nikke_resource_reconcile'):
-            self._nikke_resource_reconcile.shutdown(remaining_ms())
-        if hasattr(self, '_wuwa_resource_reconcile'):
-            self._wuwa_resource_reconcile.shutdown(remaining_ms())
+        for coordinator in getattr(self, "_resource_reconcilers", {}).values():
+            coordinator.shutdown(remaining_ms())
         if hasattr(self, '_daily_checkin'):
             self._daily_checkin.shutdown(remaining_ms())
         drained = self._work_coordinator.shutdown(

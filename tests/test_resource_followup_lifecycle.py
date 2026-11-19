@@ -5,6 +5,7 @@ import datetime as dt
 import os
 import threading
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -18,7 +19,8 @@ from PySide6.QtWidgets import QApplication
 import src.core.resource_reconcile as resource_module
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
 from src.core.process_monitor import ProcessLifecycleEvent
-from src.core.resource_reconcile import NikkeResourceReconcileCoordinator, WuwaResourceReconcileCoordinator
+from src.core.resource_observation import resource_target
+from src.core.resource_reconcile import ResourceReconcileCoordinator
 from src.data.data_models import ManagedProcess
 
 
@@ -99,21 +101,24 @@ def tracking(request, monkeypatch, app):
     monitor = SimpleNamespace(active_monitored_processes={})
     calls = []
     current_service = SimpleNamespace(value=object())
-    coordinator_type = {"hoyolab": HoYoStaminaReconcileCoordinator, "nikke": NikkeResourceReconcileCoordinator,
-                        "wuwa": WuwaResourceReconcileCoordinator}[request.param]
-    if request.param == "wuwa":
-        # 실제 getter가 같은 coordinator identity를 반환하는지도 함께 검증한다.
-        import src.services.wuwa as wuwa
-        monkeypatch.setattr(wuwa, "_wuwa_service", current_service.value)
+    def get_service():
+        return current_service.value
+
+    if request.param == "hoyolab":
+        monkeypatch.setattr(HoYoStaminaReconcileCoordinator, "_get_service", lambda self: get_service())
+        coordinator = HoYoStaminaReconcileCoordinator(manager, monitor)
     else:
-        monkeypatch.setattr(coordinator_type, "_get_service", lambda self: current_service.value)
-    coordinator = coordinator_type(manager, monitor)
+        coordinator = ResourceReconcileCoordinator(
+            manager, monitor, provider=process.resource_provider, get_service=get_service,
+            default_game_id="fixture_game",
+        )
     coordinator._pool = QueuedPool()
     coordinator._health_pool = QueuedPool()
 
     class Transport:
-        def observe_process_resource(self, pid, sid=None):
+        def observe_process_resource(self, pid, sid=None, *, expected_target=None):
             calls.append(("observe", pid, sid))
+            targets.append(expected_target)
             return {
                 "process_id": pid, "observation_succeeded": True,
                 "session_succeeded": sid is not None, "provider_status": "ok", "fetched_at": clock.wall,
@@ -128,23 +133,21 @@ def tracking(request, monkeypatch, app):
             }
 
 
+    targets = []
     transport = Transport()
     coordinator._transport = transport
 
     def event(sid, timestamp=_TIMESTAMP_BASE + 1000.0):
         return ProcessLifecycleEvent(
             process_id=process.id, process_name=process.name, session_id=sid, timestamp=timestamp,
-            stamina_tracking_enabled=process.stamina_tracking_enabled, hoyolab_game_id=process.hoyolab_game_id,
-            stamina_at_end=100, stamina_max=240,
-            resource_tracking_enabled=process.resource_tracking_enabled,
-            resource_provider=process.resource_provider, resource_key=process.resource_key,
-            resource_percent_at_end=25.0,
+            stamina_at_end=100, resource_percent_at_end=25.0,
+            resource_target=resource_target(process),
         )
 
     state = SimpleNamespace(
         coordinator=coordinator, clock=clock, process=process, manager=manager, monitor=monitor,
         calls=calls, current_service=current_service,
-        transport=transport, event=event, provider=request.param, app=app,
+        transport=transport, event=event, provider=request.param, app=app, targets=targets,
     )
     yield state
     coordinator.shutdown()
@@ -369,6 +372,24 @@ def test_stored_exit_target_cannot_be_reinterpreted_after_edit(tracking):
     assert state.coordinator._jobs == {}
 
 
+@pytest.mark.parametrize("tracking", ["wuwa"], indirect=True)
+def test_delayed_exit_save_keeps_original_account_even_when_resource_key_is_unchanged(tracking, wuwa_config_memory):
+    state = tracking
+    event = state.event(None)
+    state.coordinator.mark_process_stopped(event)
+    wuwa_config_memory.selected = "waveplate@Asia@799900002"
+    state.coordinator.handle_process_stopped(replace(event, session_id=11))
+    assert state.coordinator._jobs == {}
+    assert state.calls == []
+
+    new_event = state.event(12)
+    state.coordinator.handle_process_stopped(new_event)
+    state.coordinator._start_attempt(state.coordinator._jobs[("game", 12)])
+    state.coordinator._pool.run_next()
+    assert state.calls == [("observe", "game", 12)]
+    assert state.targets == [("wuwa", "waveplate", "waveplate@Asia@799900002")]
+
+
 def test_unpersisted_exit_skips_periodic_but_preserves_manual_current_refresh(tracking):
     state = tracking
     state.coordinator.mark_process_stopped(state.event(None))
@@ -388,8 +409,10 @@ def _periodic_window(start, coordinators):
     from src.gui.main_window import MainWindow
     window = SimpleNamespace(
         _shutting_down=False, _beholder_restore_runtime_suspended=False,
-        _hoyolab_reconcile=coordinators[0], _nikke_resource_reconcile=coordinators[1],
-        _wuwa_resource_reconcile=coordinators[2] if len(coordinators) > 2 else coordinators[1],
+        _resource_reconcilers=dict(zip(
+            ("hoyolab", "nikke_blablalink", "wuwa"),
+            (coordinators[0], coordinators[1], coordinators[-1]),
+        )),
         _resource_monitoring_slot=MainWindow._resource_monitoring_slot,
         _last_resource_monitoring_slot=MainWindow._resource_monitoring_slot(start),
     )

@@ -257,12 +257,16 @@ class BackgroundApiTransport:
         process_id: str,
         session_id: int | None = None,
         *,
+        expected_target: tuple[str, ...] | None = None,
         timeout: float = 45.0,
     ) -> dict[str, Any]:
         """제공자 조회·저장을 API에 맡기며 호출자가 값이나 조회 시각을 제출하지 않는다."""
+        body: dict[str, Any] = {"session_id": session_id}
+        if expected_target is not None:
+            body["expected_target"] = list(expected_target)
         result = self.post_json(
             f"/processes/{process_id}/resource-observation",
-            {"session_id": session_id},
+            body,
             timeout=timeout,
         )
         if not isinstance(result.payload, dict):

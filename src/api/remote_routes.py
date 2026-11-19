@@ -30,7 +30,7 @@ from src.core.remote_debug_log import load_config as load_remote_log_config, sav
 from src.core.remote_power import ConfigurablePowerController
 from src.core.remote_power_setup import power_setup_status, register_public_key
 from src.core.process_progress import calculate_process_progress
-from src.utils.resource_tracking import is_wuwa_waveplate_resource, resource_quantity_percent, WUWA_WAVEPLATE_LABEL
+from src.utils.resource_tracking import resource_base_percentage, resource_definition
 from src.core.process_monitor import terminate_managed_process
 from src.core.tailscale import ensure_tailscale_ready, set_tailscale_network_enabled, suggest_remote_base_urls, tailscale_status
 from src.data.database import data_dir
@@ -757,6 +757,11 @@ def create_remote_router(
             last_played = getattr(process, "last_played_timestamp", None)
             stamina_updated = getattr(process, "stamina_updated_at", None)
             resource_updated = getattr(process, "resource_updated_at", None)
+            resource_provider = getattr(process, "resource_provider", None)
+            resource_key = getattr(process, "resource_key", None)
+            resource_current = getattr(process, "resource_current", None)
+            resource_max = getattr(process, "resource_max", None)
+            definition = resource_definition(resource_provider, resource_key)
             for candidate in (last_played, stamina_updated, resource_updated):
                 if candidate is not None:
                     max_updated_at = max(max_updated_at, float(candidate))
@@ -778,14 +783,16 @@ def create_remote_router(
                     "stamina_max": getattr(process, "stamina_max", None),
                     "stamina_updated_at": stamina_updated,
                     "resource_tracking_enabled": getattr(process, "resource_tracking_enabled", None),
-                    "resource_provider": getattr(process, "resource_provider", None),
-                    "resource_key": getattr(process, "resource_key", None),
-                    "resource_label": (WUWA_WAVEPLATE_LABEL if is_wuwa_waveplate_resource(getattr(process, "resource_provider", None), getattr(process, "resource_key", None)) else getattr(process, "resource_label", None)),
-                    "resource_percent": (resource_quantity_percent(getattr(process, "resource_current", None), getattr(process, "resource_max", None)) if is_wuwa_waveplate_resource(getattr(process, "resource_provider", None), getattr(process, "resource_key", None)) else getattr(process, "resource_percent", None)),
+                    "resource_provider": resource_provider,
+                    "resource_key": resource_key,
+                    "resource_label": definition.label if definition and definition.label is not None else getattr(process, "resource_label", None),
+                    "resource_percent": resource_base_percentage(
+                        definition, getattr(process, "resource_percent", None), resource_current, resource_max,
+                    ),
                     "resource_updated_at": resource_updated,
                     "resource_status": getattr(process, "resource_status", None),
-                    "resource_current": getattr(process, "resource_current", None),
-                    "resource_max": getattr(process, "resource_max", None),
+                    "resource_current": resource_current,
+                    "resource_max": resource_max,
                     "resource_reserve_current": getattr(process, "resource_reserve_current", None),
                     "resource_reserve_max": getattr(process, "resource_reserve_max", None),
                 }

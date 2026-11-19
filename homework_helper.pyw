@@ -1054,6 +1054,7 @@ def run_server_main(shutdown_event=None):
 
     class ResourceObservationRequest(BaseModel):
         session_id: int | None = None
+        expected_target: tuple[str, ...] | None = None
 
         class Config:
             extra = "forbid"
@@ -1581,6 +1582,7 @@ def run_server_main(shutdown_event=None):
                 process_id,
                 request.session_id,
                 session_factory=SessionLocal,
+                expected_target=request.expected_target,
                 is_cancelled=lambda: shutdown_event.is_set() or database_coordinator.snapshot().mode != "normal",
             )
 
