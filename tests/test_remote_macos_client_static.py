@@ -822,6 +822,18 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "evaluation.moonlightTarget == target" in moonlight_toggle
     assert "guard observation.canStream else" in moonlight_toggle
     assert 'ensureMoonlightDesktopVisible(trigger: "moonlight.button", observation: observation)' in moonlight_toggle
+    moonlight_install = view_model.split("func installMoonlightViaHomebrew()", 1)[1].split("func registerMoonlightViaTailscaleDirect()", 1)[0]
+    install_verified = moonlight_install.split("if result.succeeded, moonlightSnapshot.installation != nil {", 1)[1].split("} else", 1)[0]
+    assert "moonlightCommandFeedback.action = nil" in install_verified
+    moonlight_registration = view_model.split("func registerMoonlightViaTailscaleDirect()", 1)[1].split("func toggleMoonlightDesktopSession(", 1)[0]
+    registration_verified = moonlight_registration.split("if listResult.succeeded {", 1)[1].split("} else", 1)[0]
+    assert "moonlightCommandFeedback.action = nil" in registration_verified
+    wake_moonlight = view_model.split("private func prepareMoonlightAutoWake(", 1)[1].split("private func resumePendingMoonlightWakeActionIfReady", 1)[0]
+    assert "guard hostObservationStore.identity == currentHostIdentity else" in wake_moonlight
+    assert "let latestObservation = hostObservations" in wake_moonlight
+    veto = "guard observation.shouldWake, latestObservation.shouldWake else"
+    assert wake_moonlight.index(veto) < wake_moonlight.index("await localWake()")
+    assert "observation.apollo == .identityMismatch || latestObservation.apollo == .identityMismatch" in wake_moonlight.split(veto, 1)[0]
     stop_moonlight = view_model.split("private func stopMoonlightDesktopSession()", 1)[1].split("private func focusMoonlightOnPreferredScreen()", 1)[0]
     assert stop_moonlight.index("let applications = LocalMoonlightManager.runningApplications()") < stop_moonlight.index("await LocalMoonlightManager.quit(")
     assert "await LocalMoonlightManager.terminateRunningApplications(applications)" in stop_moonlight

@@ -947,6 +947,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         moonlightSetupInProgress = false
         refreshMoonlightSnapshot()
         if result.succeeded, moonlightSnapshot.installation != nil {
+            moonlightCommandFeedback.action = nil
             message = "Moonlight 설치를 확인했습니다. 이제 Tailscale Direct 등록 또는 기존 host 감지를 진행할 수 있습니다."
         } else if result.succeeded {
             message = "Moonlight 설치 명령은 완료됐지만 앱을 아직 찾지 못했습니다. 설치 위치를 확인한 뒤 설정을 다시 읽어 주세요."
@@ -995,6 +996,7 @@ final class RemoteDashboardViewModel: ObservableObject {
                 .joined(separator: "\n")
             refreshMoonlightSnapshot()
             if listResult.succeeded {
+                moonlightCommandFeedback.action = nil
                 message = "Moonlight Tailscale Direct 등록을 완료했고 앱 목록을 확인했습니다."
             } else {
                 message = "Moonlight pairing은 완료됐지만 앱 목록 확인은 실패했습니다: \(listSummary)"
@@ -1052,14 +1054,25 @@ final class RemoteDashboardViewModel: ObservableObject {
             showMoonlightActionResult(moonlightSnapshot.message, failed: true)
             return
         }
-        if observation.apollo == .identityMismatch {
+        guard hostObservationStore.identity == currentHostIdentity else {
+            showMoonlightActionResult("Moonlight 등록 상태가 바뀌었습니다. 버튼을 다시 눌러 주세요.", failed: true)
+            return
+        }
+        let latestObservation = hostObservations
+        if observation.apollo == .identityMismatch || latestObservation.apollo == .identityMismatch {
             showMoonlightActionResult("Apollo 서버 식별자가 Moonlight 등록과 다릅니다. Moonlight 등록을 확인하세요.", failed: true)
             return
         }
-        guard observation.shouldWake else {
-            let guidance = observation.pc == .reachable || observation.appReady
-                ? "PC가 연결되어 있습니다. Apollo 스트리밍 준비 상태를 확인하세요."
-                : "PC 응답 여부를 확인한 뒤 자동 깨우기를 사용할 수 있습니다."
+        guard observation.shouldWake, latestObservation.shouldWake else {
+            let guidance: String
+            if latestObservation.canStream {
+                guidance = "Apollo 스트리밍이 준비됐습니다. Moonlight 버튼을 다시 눌러 주세요."
+            } else if latestObservation.pc == .reachable || latestObservation.appReady
+                || observation.pc == .reachable || observation.appReady {
+                guidance = "PC가 연결되어 있습니다. Apollo 스트리밍 준비 상태를 확인하세요."
+            } else {
+                guidance = "PC 응답 여부를 확인한 뒤 자동 깨우기를 사용할 수 있습니다."
+            }
             showMoonlightActionResult(guidance, failed: true)
             return
         }
