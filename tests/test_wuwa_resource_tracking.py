@@ -169,7 +169,7 @@ def test_wuwa_editor_stale_quantities_cannot_overwrite_new_canonical_observation
     assert tracked.values() == (120, 240, 80, 480, None, END + 60, 25.0, 20.0)
 
 
-def test_wuwa_read_projection_has_no_unverified_recovery_prediction(tracked):
+def test_wuwa_read_projection_keeps_observed_gauge_values(tracked):
     from src.data.data_models import ManagedProcess
     tracked.observe(None)
     with tracked.sessions() as db:
@@ -180,6 +180,84 @@ def test_wuwa_read_projection_has_no_unverified_recovery_prediction(tracked):
     assert runtime.get_resource_percentage(now=END + 60) == 50.0
     assert runtime.get_resource_percentage(now=END + 86400) == 50.0
     assert runtime.resource_reserve_current == 80
+
+
+def test_wuwa_progress_api_estimates_full_refill_from_latest_observation(tracked):
+    from src.api.remote_routes import _serialize_process
+
+    def progress_at(now):
+        with tracked.sessions() as db:
+            process = db.get(models.Process, "wuwa")
+            return _serialize_process(process, current_dt=dt.datetime.fromtimestamp(now))["progress"]
+
+    tracked.current = 6
+    tracked.observe(None)
+    first_at = tracked.now
+    before = tracked.values()
+    first = progress_at(first_at)
+    expected_duration = 23 * 3600 + 24 * 60
+    assert first["display_text"] == first["gauge_text"] == "6/240"
+    assert first["percentage"] == 2.5
+    assert first["remaining_seconds"] == first["projection"]["remaining_seconds"] == expected_duration
+    assert first["ready_at"] == first["projection"]["ready_at"] == first_at + expected_duration
+    assert first["projection"]["strategy"] == "static_value"
+    assert "overlay_percentage" not in first
+
+    later = progress_at(first_at + 360)
+    assert later["ready_at"] == first["ready_at"]
+    assert later["remaining_seconds"] == expected_duration - 360
+    assert later["display_text"] == "6/240"
+    assert tracked.values() == before
+
+    tracked.now = first_at + 1800
+    tracked.current = 8
+    tracked.observe(None)
+    refreshed = progress_at(tracked.now)
+    assert refreshed["display_text"] == "8/240"
+    assert refreshed["ready_at"] == tracked.now + (240 - 8) * 360
+    assert refreshed["ready_at"] != first["ready_at"]
+
+    elapsed = progress_at(refreshed["ready_at"] + 1)
+    assert elapsed["ready_at"] == refreshed["ready_at"]
+    assert elapsed["remaining_seconds"] == 0
+    assert elapsed["display_text"] == "8/240"
+
+
+def test_wuwa_progress_keeps_reserve_overlay_with_full_base(tracked):
+    from src.core.process_progress import calculate_process_progress
+
+    tracked.current = 240
+    tracked.observe(None)
+    with tracked.sessions() as db:
+        process = db.get(models.Process, "wuwa")
+        progress = calculate_process_progress(process, dt.datetime.fromtimestamp(tracked.now))
+
+    assert progress["display_text"] == progress["gauge_text"] == "80/480"
+    assert progress["resource_current"] == 240
+    assert progress["overlay_percentage"] == pytest.approx(80 / 480 * 100)
+    assert progress["ready_at"] == tracked.now
+    assert progress["remaining_seconds"] == 0
+
+
+@pytest.mark.parametrize("status,observed_at,current", [
+    ("error", END, 6),
+    ("ok", None, 6),
+    ("ok", 0, 6),
+    ("ok", END + 1, 6),
+    ("ok", END, None),
+])
+def test_wuwa_progress_withholds_eta_without_valid_observation(status, observed_at, current):
+    from src.core.process_progress import calculate_process_progress
+
+    process = SimpleNamespace(resource_tracking_enabled=True, resource_provider="wuwa", resource_key=KEY,
+                              resource_status=status, resource_current=current, resource_max=240,
+                              resource_updated_at=observed_at)
+    progress = calculate_process_progress(process, dt.datetime.fromtimestamp(END))
+
+    assert "ready_at" not in progress
+    assert "remaining_seconds" not in progress
+    assert "ready_at" not in progress.get("projection", {})
+    assert "remaining_seconds" not in progress.get("projection", {})
 
 
 def test_wuwa_migration_adds_nullable_current_quantities_without_session_quantity_columns(monkeypatch):

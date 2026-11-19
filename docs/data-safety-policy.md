@@ -126,7 +126,10 @@ HoYo·NIKKE의 현재 자원 PATCH 입력 시각은 관측 시각이고 반환 �
 명조의 일반 현재량·최대치와 저장 현재량·최대치는 Process의 `resource_current`,
 `resource_max`, `resource_reserve_current`, `resource_reserve_max` 네 수량이 소유한다.
 명조의 DB `resource_percent`는 비워 두고 비율과 라벨은 읽을 때 수량에서 계산한다.
-`resource_updated_at`은 이 성공 관측의 시각이며 자연 회복 예측의 기준으로 사용하지 않는다.
+`resource_updated_at`은 성공 관측 시각이다. 유효한 관측의 일반 자원 완료 예상 시각은
+관측 시각에 부족 수량당 6분을 더해 표시할 때 계산한다. 게임의 실제 회복 주기에서
+이미 지난 시간이 기록되지 않아 예상 시각은 최대 한 회복 주기까지 늦을 수 있고, 관측
+뒤 자원을 사용하면 오차가 커질 수 있다. 게이지 수량과 종료 세션 보정에는 관측값을 사용한다.
 기존 HoYo의 `stamina_current`·`stamina_max`와 NIKKE의 비율 저장 권위는 유지한다.
 
 스타레일의 저장량은 서버의 `current_reserve_stamina`를 사용하며, 상한은

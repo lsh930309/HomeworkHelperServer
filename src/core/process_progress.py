@@ -27,6 +27,13 @@ def _clamped_percentage(value: float, maximum: float) -> float:
     return max(0.0, min((value / maximum) * 100.0, 100.0))
 
 
+def _stamina_recovery_timing(
+    current: int, maximum: int, base_timestamp: float, *, now: float
+) -> tuple[float, int]:
+    ready_at = base_timestamp + max(0, int(maximum) - int(current)) * STAMINA_RECOVERY_SECONDS_PER_UNIT
+    return ready_at, max(0, int(ready_at - now))
+
+
 def _remaining_display(remaining_seconds: int) -> str:
     if remaining_seconds <= 0:
         return "0분"
@@ -92,8 +99,10 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
         provider = getattr(process, "resource_provider", None)
         resource_key = getattr(process, "resource_key", None)
         updated_at = getattr(process, "resource_updated_at", None)
+        resource_current = getattr(process, "resource_current", None)
+        resource_max = getattr(process, "resource_max", None)
         is_wuwa = is_wuwa_waveplate_resource(provider, resource_key)
-        quantity_percent = resource_quantity_percent(getattr(process, "resource_current", None), getattr(process, "resource_max", None))
+        quantity_percent = resource_quantity_percent(resource_current, resource_max)
         if quantity_percent is not None:
             percent = quantity_percent
         if is_wuwa:
@@ -140,11 +149,16 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
                         "ready_at": ready_at,
                     }
                 )
+            elif is_wuwa and type(updated_at) in (int, float) and 0 < updated_at <= current_timestamp:
+                ready_at, remaining_seconds = _stamina_recovery_timing(
+                    resource_current, resource_max, updated_at, now=current_timestamp,
+                )
+                projection.update(ready_at=ready_at, remaining_seconds=remaining_seconds)
             return _progress_base(
                 source=SERVER_TRACKED_SOURCE,
                 kind="resource",
                 percentage=percentage,
-                display_text=(f"{process.resource_current}/{process.resource_max}" if quantity_percent is not None else f"{percentage:.1f}%"),
+                display_text=(f"{resource_current}/{resource_max}" if quantity_percent is not None else f"{percentage:.1f}%"),
                 status=status or "ok",
                 projection=projection,
                 remaining_seconds=remaining_seconds,
@@ -153,8 +167,8 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
                 key=resource_key,
                 label=label,
                 updated_at=updated_at,
-                resource_current=getattr(process, "resource_current", None),
-                resource_max=getattr(process, "resource_max", None),
+                resource_current=resource_current,
+                resource_max=resource_max,
                 resource_reserve_current=getattr(process, "resource_reserve_current", None),
                 resource_reserve_max=getattr(process, "resource_reserve_max", None),
             )
@@ -182,8 +196,9 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
             predicted = predict_stamina_value(
                 current, maximum, base_timestamp_value, now=current_timestamp,
             )
-            ready_at = base_timestamp_value + max(0, int(maximum) - int(current)) * STAMINA_RECOVERY_SECONDS_PER_UNIT
-            remaining_seconds = max(0, int(ready_at - current_timestamp))
+            ready_at, remaining_seconds = _stamina_recovery_timing(
+                current, maximum, base_timestamp_value, now=current_timestamp,
+            )
             percentage = _clamped_percentage(float(predicted), float(maximum))
             return _progress_base(
                 source=SERVER_TRACKED_SOURCE,
