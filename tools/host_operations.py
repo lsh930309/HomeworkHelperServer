@@ -20,10 +20,9 @@ from tools.ssh_host_testbench import SSHConfig, run_remote_powershell
 from tools.version_policy import BuildVersion, VersionLedger, VersionPolicyError
 
 RELEASE_PREFLIGHT_FAILURES = {
-    "cli-missing": "Windows에서 GitHub CLI를 찾을 수 없습니다. 병합 전에 호스트의 게시 환경을 준비하세요.",
-    "github-auth": "Windows GitHub CLI의 기존 인증을 확인할 수 없습니다.",
     "repository-mismatch": "Windows 작업 저장소의 origin이 릴리즈 대상 저장소와 다릅니다.",
-    "github-permission": "Windows GitHub CLI의 릴리즈 대상 저장소 쓰기 권한을 확인할 수 없습니다.",
+    "source-dirty": "Windows의 고정 작업 저장소에 변경 사항이 있습니다.",
+    "repository-access": "Windows 작업 저장소에서 origin의 main을 읽을 수 없습니다.",
     "transport": "Windows SSH 연결 또는 릴리즈 사전 점검 응답을 확인할 수 없습니다.",
 }
 
@@ -106,8 +105,13 @@ def remote_script(args, commit: str = "", branch: str = "", version: BuildVersio
     if args.command == "verify":
         values["VerifySource"] = base64.b64encode(gzip.compress(json.dumps({name: (ROOT / name).read_text(encoding="utf-8")
                                                                             for name in VERIFY_FILES}).encode())).decode()
+    if args.command == "release-asset":
+        name, size, digest = args.release_file
+        values.update(ReleaseFile=name, ReleaseSize=size, ReleaseDigest=digest)
     invocation = " ".join(f"-{key} {ps_literal(value)}" for key, value in values.items())
     invocation += f" -Duration {args.duration}"
+    if args.command == "release-build" and args.reuse_release:
+        invocation += " -ReuseRelease"
     if args.allow_protected_time:
         invocation += " -AllowProtectedTime"
     if args.prepare_runtime:
@@ -118,7 +122,7 @@ def remote_script(args, commit: str = "", branch: str = "", version: BuildVersio
 
 
 def release_preflight(args: argparse.Namespace) -> int:
-    """Expose only a known outcome, never SSH or GitHub authentication output."""
+    """Expose only a known outcome, never SSH or source authentication output."""
     reason = "transport"
     try:
         result = run_remote_powershell(SSHConfig(args.host, args.user, args.ssh_port, args.identity),
@@ -138,9 +142,18 @@ def release_preflight(args: argparse.Namespace) -> int:
     return 1
 
 
+def issued_host_release(args: argparse.Namespace) -> BuildVersion:
+    commit = published_release_commit(args.commit)
+    event, version = VersionLedger(ROOT).read_main(commit) or (None, None)
+    if (event not in {"minor", "major"} or version is None or version.product != "host"
+            or args.release_tag != version.tag):
+        raise ValueError("공개 호스트 릴리즈에 발급된 정식 버전과 태그가 필요합니다.")
+    return version
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("command", choices=("inspect", "logs", "prepare-source", "build", "release-preflight", "release-build", "install", "desktop", "verify", "media-qa"))
+    p.add_argument("command", choices=("inspect", "logs", "prepare-source", "build", "release-preflight", "release-build", "release-asset", "install", "desktop", "verify", "media-qa"))
     p.add_argument("--host", required=True, help="Tailscale device/MagicDNS name, explicit IP or external FQDN")
     p.add_argument("--user")
     p.add_argument("--ssh-port", type=int, default=22)
@@ -151,8 +164,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--archived-release", help="install only: reinstall this exact release from build.py archives")
     p.add_argument("--repair-wuwa-link", action="store_true",
                    help="install 전용: 수정본 실행 전에 구버전 명조 연결 정보를 오프라인으로 복구합니다.")
-    p.add_argument("--release-tag", help="release-build only: tag of the existing draft release")
-    p.add_argument("--release-repo", help="release-preflight and release-build only: owner/repository of the release")
+    p.add_argument("--release-tag", help="release-build and release-asset only: the published host tag")
+    p.add_argument("--release-repo", help="owner/repository of the release")
+    p.add_argument("--reuse-release", action="store_true", help="release-build only: require the original packages when a draft has assets")
+    p.add_argument("--release-file", nargs=3, metavar=("NAME", "SIZE", "SHA256"), help="release-asset only: verified Windows release file metadata")
     p.add_argument("--duration", type=int, choices=range(0, 121), default=0,
                    metavar="0..120", help="desktop observation duration; 0 takes one snapshot")
     p.add_argument("--log-lines", type=int, choices=range(1, 2001), default=80, metavar="1..2000")
@@ -176,28 +191,46 @@ def main(argv=None) -> int:
         argument_parser.error("--archived-release는 install에서만 사용하며 --commit과 함께 지정하지 않습니다.")
     if args.repair_wuwa_link and (args.command != "install" or args.archived_release):
         argument_parser.error("--repair-wuwa-link는 새 수정본의 install에서만 사용할 수 있습니다.")
-    if args.command == "release-build":
+    if args.command in {"release-build", "release-asset"}:
         if not (args.commit and args.release_tag and args.release_repo):
-            argument_parser.error("release-build에는 --commit, --release-tag, --release-repo가 필요합니다.")
+            argument_parser.error(f"{args.command}에는 --commit, --release-tag, --release-repo가 필요합니다.")
     elif args.command == "release-preflight":
         if not args.release_repo or args.commit or args.release_tag:
             argument_parser.error("release-preflight에는 --release-repo만 지정하세요. 커밋과 태그는 필요하지 않습니다.")
     elif args.release_tag or args.release_repo:
-        argument_parser.error("--release-tag는 release-build, --release-repo는 release-preflight와 release-build에서 사용합니다.")
+        argument_parser.error("릴리즈 태그 또는 저장소는 릴리즈 명령에서만 사용합니다.")
     if args.release_repo and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.release_repo):
         argument_parser.error("--release-repo는 owner/repository 형식이어야 합니다.")
+    if args.reuse_release and args.command != "release-build":
+        argument_parser.error("--reuse-release는 release-build에서만 사용합니다.")
+    if bool(args.release_file) != (args.command == "release-asset"):
+        argument_parser.error("--release-file은 release-asset에만 필요합니다.")
     if args.command == "release-preflight":
         return release_preflight(args)
+    if args.command == "release-asset":
+        name, size, digest = args.release_file
+        if (not re.fullmatch(r"HomeworkHelper_v[0-9]+\.[0-9]+\.0_(?:Setup\.exe|Portable\.zip)", name)
+                or not re.fullmatch(r"[1-9][0-9]{0,18}", size) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+            argument_parser.error("릴리즈 패키지 이름, 크기 또는 SHA-256이 올바르지 않습니다.")
+        try:
+            version = issued_host_release(args)
+            result = run_remote_powershell(
+                SSHConfig(args.host, args.user, args.ssh_port, args.identity),
+                remote_script(args, version.commit, "main", version), timeout=600, stdout=sys.stdout.buffer,
+            )
+            if result.returncode:
+                raise ValueError(result.stderr.strip() or "Windows 패키지 전송에 실패했습니다.")
+        except (ValueError, OSError, subprocess.SubprocessError, VersionPolicyError) as error:
+            print(f"Windows 패키지 전송 실패: {error}", file=sys.stderr)
+            return 1
+        return 0
     report = args.report_root / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8])
     try:
         report.mkdir(parents=True)
         version = None
         if args.command == "release-build":
-            commit, branch = published_release_commit(args.commit), "main"
-            event, version = VersionLedger(ROOT).read_main(commit) or (None, None)
-            if (event not in {"minor", "major"} or version is None or version.product != "host"
-                    or args.release_tag != version.tag):
-                raise ValueError("공개 호스트 릴리즈에 발급된 정식 버전과 태그가 필요합니다.")
+            version = issued_host_release(args)
+            commit, branch = version.commit, "main"
         else:
             commit, branch = (published_commit(args.commit) if args.command in
                               {"prepare-source", "build", "install", "media-qa"} and not args.archived_release else ("", ""))

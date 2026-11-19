@@ -1,5 +1,7 @@
 import hashlib
+import io
 import json
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -22,11 +24,25 @@ class SimulatedRelease(release_pr.ReleaseCommand):
         self.tags = {}
         self.draft = None
         self.calls = []
-        self.complete_upload = False
+        self.failed_upload = None
+        self.uploads = []
+        self.packages = {}
         self.viewer_permission = "WRITE"
         self.host_preflight = {"ok": True}
         self.remote_main_before_merge = None
         super().__init__(checkout)
+
+    def upload_host_file(self, args, version, draft_id, name, size, digest):
+        assert self.draft["isDraft"] and self.draft["databaseId"] == draft_id
+        assert version.commit == self.pr_data["mergeCommit"]["oid"]
+        assert self.packages[name] == {"size": size, "sha256": digest}
+        assert all(asset["name"] != name for asset in self.draft["assets"])
+        self.uploads.append(name)
+        if name == self.failed_upload:
+            raise subprocess.TimeoutExpired("fixture asset transfer", 1)
+        asset = {"name": name, "size": size, "digest": f"sha256:{digest}", "state": "uploaded"}
+        self.draft["assets"].append(asset)
+        return asset
 
     def run(self, *args, stdin=None, timeout=120):
         self.calls.append(args)
@@ -78,6 +94,7 @@ class SimulatedRelease(release_pr.ReleaseCommand):
             assert "--draft" in args
             self.draft = {
                 "assets": [], "body": stdin, "isDraft": True, "tagName": args[3],
+                "databaseId": 42,
                 "name": args[args.index("--title") + 1],
                 "url": f"https://github.com/fixture/repository/releases/tag/{args[3]}",
             }
@@ -86,22 +103,21 @@ class SimulatedRelease(release_pr.ReleaseCommand):
             assert "--draft=false" in args
             self.draft["isDraft"] = False
             return response()
-        if args[1:3] == ("tools/host_operations.py", "release-preflight"):
+        if len(args) > 2 and Path(args[1]).name == "host_operations.py" and args[2] == "release-preflight":
             assert args[args.index("--release-repo") + 1] == "fixture/repository"
             return response(json.dumps(self.host_preflight), code=0 if self.host_preflight["ok"] else 1)
-        if len(args) > 2 and args[1:3] == ("tools/host_operations.py", "release-build"):
+        if len(args) > 2 and Path(args[1]).name == "host_operations.py" and args[2] == "release-build":
             build_commit = args[args.index("--commit") + 1]
             tag = args[args.index("--release-tag") + 1]
-            assert self.tags[tag] == build_commit and self.draft["isDraft"]
+            assert build_commit == self.pr_data["mergeCommit"]["oid"]
+            if "--reuse-release" in args and not self.packages:
+                return response(stderr="fixture has no original package", code=1)
             version = tag.removeprefix("H/v")
-            hashes = {f"HomeworkHelper_v{version}_Setup.exe": "a" * 64}
-            if self.complete_upload:
-                hashes[f"HomeworkHelper_v{version}_Portable.zip"] = "b" * 64
-            self.draft["assets"] = [
-                {"name": name, "digest": f"sha256:{digest}", "state": "uploaded", "size": 10}
-                for name, digest in hashes.items()
-            ]
-            return response(json.dumps({"ok": True, "commit": build_commit, "result": {"assets": hashes}}))
+            self.packages = {
+                f"HomeworkHelper_v{version}_Setup.exe": {"size": 10, "sha256": "a" * 64},
+                f"HomeworkHelper_v{version}_Portable.zip": {"size": 12, "sha256": "b" * 64},
+            }
+            return response(json.dumps({"ok": True, "commit": build_commit, "result": {"assets": self.packages}}))
         pytest.fail(f"격리 fixture에서 허용하지 않은 명령: {args!r}")
 
 
@@ -124,7 +140,10 @@ def prepare_pr(checkout, path="src/feature.py"):
 
 def test_incomplete_windows_upload_stays_draft_and_retry_keeps_the_merge_version(repo):
     command, args = prepare_pr(repo)
-    with pytest.raises(ValueError, match="필수 패키지"):
+    setup = "HomeworkHelper_v1.7.0_Setup.exe"
+    portable = "HomeworkHelper_v1.7.0_Portable.zip"
+    command.failed_upload = portable
+    with pytest.raises(subprocess.TimeoutExpired):
         command.run_pr(args)
     merged = command.pr_data["mergeCommit"]["oid"]
     assert command.draft["isDraft"]
@@ -133,8 +152,10 @@ def test_incomplete_windows_upload_stays_draft_and_retry_keeps_the_merge_version
     assert command.draft["name"] == "HomeworkHelper Host v 1.7.0"
     assert "변경 설명" in command.draft["body"]
     assert command.pr_data["url"] in command.draft["body"]
+    assert command.uploads == [setup, portable]
+    assert [asset["name"] for asset in command.draft["assets"]] == [setup]
 
-    command.complete_upload = True
+    command.failed_upload = None
     args.base = "b" * 40
     with pytest.raises(ValueError, match="첫 부모"):
         command.run_pr(args)
@@ -142,12 +163,71 @@ def test_incomplete_windows_upload_stays_draft_and_retry_keeps_the_merge_version
     args.base = None
     command.run_pr(args)
     assert not command.draft["isDraft"]
+    assert command.uploads == [setup, portable, portable]
     assert set(command.tags) == {"H/v1.6.0", "C/v1.0.0", "H/v1.7.0"}
     assert sum(call[:3] == ("gh", "pr", "merge") for call in command.calls) == 1
     assert sum(call[:3] == ("gh", "release", "edit") for call in command.calls) == 1
     uploads = sum(len(call) > 2 and call[2] == "release-build" for call in command.calls)
     command.run_pr(args)
     assert sum(len(call) > 2 and call[2] == "release-build" for call in command.calls) == uploads
+
+
+def test_merge_only_keeps_release_stages_independent_from_windows(repo):
+    command, args = prepare_pr(repo)
+    args.merge_only = True
+    args.host = None
+    command.host_preflight = {"ok": False, "reason": "transport"}
+    command.run_pr(args)
+
+    assert command.pr_data["state"] == "MERGED"
+    commit_id = command.pr_data["mergeCommit"]["oid"]
+    assert git(repo, "show", "-s", "--format=%P", commit_id).split() == [args.base, args.head]
+    assert "HomeworkHelper-Release: PR #42 host minor" in git(repo, "show", "-s", "--format=%B", commit_id)
+    assert command.ledger.read_main(commit_id) is None
+    assert command.draft is None
+    assert not any("release-preflight" in call or "release-build" in call for call in command.calls)
+    assert set(command.tags) == {"H/v1.6.0", "C/v1.0.0"}
+
+
+def test_version_build_and_publish_can_each_resume_from_the_verified_merge(repo):
+    command, args = prepare_pr(repo)
+    args.merge_only = True
+    command.run_pr(args)
+    merged = command.pr_data["mergeCommit"]["oid"]
+
+    def stage(name, *extra):
+        return release_pr.parser().parse_args([name, "42", "--head", args.head, *extra])
+
+    with pytest.raises(ValueError, match="version 단계부터"):
+        command.run_stage(stage("publish", "--host", "fixture.invalid"))
+    command.run_stage(stage("version"))
+    version = command.ledger.read_main(merged)[1]
+    assert version.commit == merged and version.tag == "H/v1.7.0"
+    assert version.tag not in command.tags and command.draft is None
+    assert not any("release-build" in call for call in command.calls)
+    with pytest.raises(RuntimeError, match="no original package"):
+        command.run_stage(stage("publish", "--host", "fixture.invalid"))
+    assert version.tag not in command.tags and command.draft is None
+
+    command.run_stage(stage("build", "--host", "fixture.invalid"))
+    assert set(command.packages) == set(release_pr.release_assets(version))
+    assert version.tag not in command.tags and command.draft is None and command.uploads == []
+    command.run_stage(stage("publish", "--host", "fixture.invalid"))
+    assert command.tags[version.tag] == merged and not command.draft["isDraft"]
+    assert set(command.uploads) == set(command.packages)
+    assert sum(call[:3] == ("gh", "pr", "merge") for call in command.calls) == 1
+    assert sum("release-build" in call and "--reuse-release" not in call for call in command.calls) == 1
+
+
+@pytest.mark.parametrize("name", ["version", "build", "publish"])
+def test_post_merge_stage_refuses_an_open_pr_without_mutating_it(repo, name):
+    command, args = prepare_pr(repo)
+    options = [] if name == "version" else ["--host", "fixture.invalid"]
+    stage = release_pr.parser().parse_args([name, "42", "--head", args.head, *options])
+    with pytest.raises(ValueError, match="병합 완료가 확인되지 않았습니다"):
+        command.run_stage(stage)
+    assert command.pr_data["state"] == "OPEN" and command.draft is None
+    assert command.ledger.read_main(args.head) is None and command.uploads == []
 
 
 def test_stale_pr_head_and_dry_run_cannot_merge_or_publish(repo):
@@ -167,19 +247,17 @@ def test_stale_pr_head_and_dry_run_cannot_merge_or_publish(repo):
     assert not any(call[:3] == ("gh", "repo", "view") or "release-preflight" in call for call in command.calls)
 
 
-@pytest.mark.parametrize("product", [None, "client", "host"])
-def test_merge_access_uses_repo_view_positional_repository(repo, product):
-    paths = {None: "docs/feature.md", "client": "clients/macos/Sources/App.swift", "host": "src/feature.py"}
-    command, args = prepare_pr(repo, path=paths[product])
+def test_merge_access_uses_repo_view_positional_repository(repo):
+    command, _ = prepare_pr(repo)
 
-    command.require_merge_access(args, product)
+    command.require_merge_access()
 
     views = [call for call in command.calls if call[:3] == ("gh", "repo", "view")]
     assert views == [(
         "gh", "repo", "view", "github.com/fixture/repository", "--json", "viewerPermission",
     )]
     assert all("--repo" not in call for call in views)
-    assert any("release-preflight" in call for call in command.calls) == (product == "host")
+    assert not any("release-preflight" in call for call in command.calls)
     assert not any(call[:3] in {("gh", "pr", "merge"), ("gh", "release", "create")} for call in command.calls)
     assert not any(call[:2] == ("git", "push") for call in command.calls)
 
@@ -209,17 +287,12 @@ def test_open_pr_requires_the_reviewed_main_revision_until_merge(repo, mode, mes
     assert any(call[:3] == ("git", "ls-remote", "--heads") for call in command.calls) == (mode == "race")
 
 
-@pytest.mark.parametrize("failure", ["mac_github", "windows_preflight", "previous_product_merge"])
+@pytest.mark.parametrize("failure", ["mac_github", "previous_product_merge"])
 def test_preflight_failures_leave_pr_and_release_untouched(repo, failure):
     command, args = prepare_pr(repo)
     if failure == "mac_github":
         command.viewer_permission = "READ"
         message = "GitHub CLI"
-    elif failure == "windows_preflight":
-        command.host_preflight = {"ok": False, "reason": "transport"}
-        from tools.host_operations import RELEASE_PREFLIGHT_FAILURES
-
-        message = RELEASE_PREFLIGHT_FAILURES["transport"]
     else:
         git(repo, "switch", "-c", "previous")
         commit(repo, "src/previous.py", "릴리즈가 없는 제품 변경")
@@ -237,7 +310,111 @@ def test_preflight_failures_leave_pr_and_release_untouched(repo, failure):
     assert command.draft is None and not command.ledger.path.exists()
     assert not any(call[:3] in {("gh", "pr", "merge"), ("gh", "release", "create")} for call in command.calls)
     assert not any(call[:2] == ("git", "push") for call in command.calls)
-    assert any("release-preflight" in call for call in command.calls) == (failure == "windows_preflight")
+    assert not any("release-preflight" in call for call in command.calls)
+
+
+def test_windows_preflight_failure_does_not_undo_merge_or_publish(repo):
+    command, args = prepare_pr(repo)
+    command.host_preflight = {"ok": False, "reason": "transport"}
+    from tools.host_operations import RELEASE_PREFLIGHT_FAILURES
+
+    with pytest.raises((ValueError, RuntimeError), match=RELEASE_PREFLIGHT_FAILURES["transport"]):
+        command.run_pr(args)
+    merged = command.pr_data["mergeCommit"]["oid"]
+    assert command.pr_data["state"] == "MERGED"
+    assert command.ledger.read_main(merged)[1].version == "1.7.0"
+    assert command.uploads == []
+    assert not any("release-build" in call or call[:3] == ("gh", "release", "edit") for call in command.calls)
+
+
+@pytest.mark.parametrize("field", ["size", "digest"])
+def test_resume_rejects_draft_assets_that_differ_from_windows_original(repo, field):
+    command, args = prepare_pr(repo)
+    setup = "HomeworkHelper_v1.7.0_Setup.exe"
+    portable = "HomeworkHelper_v1.7.0_Portable.zip"
+    command.failed_upload = portable
+    with pytest.raises(subprocess.TimeoutExpired):
+        command.run_pr(args)
+    command.failed_upload = None
+    command.draft["assets"][0][field] = 20 if field == "size" else f"sha256:{'0' * 64}"
+
+    with pytest.raises(ValueError, match="기존 초안 자산"):
+        command.run_pr(args)
+
+    assert command.draft["isDraft"]
+    assert command.uploads == [setup, portable]
+
+
+@pytest.mark.parametrize("transfer_fails", [False, True])
+def test_macos_upload_connects_ssh_bytes_to_github_without_a_local_copy(repo, monkeypatch, transfer_fails):
+    command, args = prepare_pr(repo)
+    version = release_pr.BuildVersion("host", "1.7.0", args.head, "1.7.0")
+    name = "HomeworkHelper_v1.7.0_Setup.exe"
+    package = b"MZ\x00\x80\xff\r\n"
+    digest = hashlib.sha256(package).hexdigest()
+    response = {"name": name, "size": len(package), "digest": f"sha256:{digest}", "state": "uploaded"}
+
+    class Recorder(io.BytesIO):
+        def close(self):
+            self.transferred = self.getvalue()
+            super().close()
+
+    class MacUpload:
+        def __init__(self):
+            self.pipe = self.stdin = Recorder()
+            self.returncode = None
+            self.killed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            if not self.pipe.closed:
+                self.pipe.close()
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+            self.killed = True
+
+        def communicate(self, *, timeout):
+            assert not transfer_fails
+            assert self.pipe.closed and self.pipe.transferred == package
+            self.returncode = 0
+            return json.dumps(response).encode(), b""
+
+    upload = MacUpload()
+
+    def popen(argv, **kwargs):
+        assert argv[:5] == ("gh", "api", "--hostname", "github.com", "--method")
+        assert argv[5] == "POST"
+        assert argv[-3:] == ("--input", "-", f"https://uploads.github.com/repos/fixture/repository/releases/42/assets?name={name}")
+        assert "Content-Type: application/octet-stream" in argv
+        length_header = f"Content-Length: {len(package)}"
+        assert argv[argv.index(length_header) - 1] == "--header"
+        assert kwargs["cwd"] == repo and kwargs["stdin"] == subprocess.PIPE
+        return upload
+
+    def remote(parsed_args, stage, *options, timeout, stdout):
+        assert parsed_args is args and stage == "release-asset"
+        assert options[options.index("--commit") + 1] == version.commit
+        assert options[-4:] == ("--release-file", name, str(len(package)), digest)
+        assert stdout is upload.pipe
+        stdout.write(package[:2] if transfer_fails else package)
+        return subprocess.CompletedProcess([], 1 if transfer_fails else 0, None, "fixture SSH failure" if transfer_fails else "")
+
+    monkeypatch.setattr(command, "run_host", remote)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    if transfer_fails:
+        with pytest.raises(RuntimeError, match="fixture SSH failure"):
+            release_pr.ReleaseCommand.upload_host_file(command, args, version, 42, name, len(package), digest)
+        assert upload.killed
+    else:
+        assert release_pr.ReleaseCommand.upload_host_file(command, args, version, 42, name, len(package), digest) == response
+        assert not upload.killed
+    assert not (repo / "release").exists()
 
 
 def test_documentation_pr_merges_without_version_or_release(repo):
@@ -274,7 +451,9 @@ def test_macos_retry_reuses_matching_asset_and_never_overwrites_different_file(r
     path.write_bytes(b"stale local package")
     package = b"package for the exact release commit"
     digest = hashlib.sha256(package).hexdigest()
-    command.draft = {"isDraft": True, "assets": []}
+    command.draft = {"isDraft": True, "assets": [], "tagName": version.tag,
+                     "name": release_pr.release_title(version),
+                     "body": release_pr.release_notes(command.pr_data, version)}
     real_local_run = command.run
     mutations = []
 
@@ -294,12 +473,15 @@ def test_macos_retry_reuses_matching_asset_and_never_overwrites_different_file(r
         return subprocess.CompletedProcess(args, 0, "", "")
 
     monkeypatch.setattr(command, "run", run)
-    assert command.upload_client(version, command.draft) == {path.name: digest}
+    assert command.client_package(version, reuse=False) == (path, digest)
+    assert command.upload_client(command.pr_data, version, path, digest) == {path.name: digest}
     assert mutations == ["build", "upload"]
 
-    assert command.upload_client(version, command.draft) == {path.name: digest}
+    assert command.client_package(version, reuse=True) == (path, digest)
+    assert command.upload_client(command.pr_data, version, path, digest) == {path.name: digest}
     path.write_bytes(b"different local package")
+    changed_path, changed_digest = command.client_package(version, reuse=True)
     with pytest.raises(ValueError, match="SHA-256"):
-        command.upload_client(version, command.draft)
+        command.upload_client(command.pr_data, version, changed_path, changed_digest)
     assert mutations == ["build", "upload"]
     assert command.draft["assets"][0]["digest"] == f"sha256:{digest}"

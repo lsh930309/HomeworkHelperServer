@@ -1,12 +1,12 @@
 param(
-    [ValidateSet('inspect','logs','prepare-source','build','release-preflight','release-build','install','desktop','verify','media-qa')][string]$Command,
+    [ValidateSet('inspect','logs','prepare-source','build','release-preflight','release-build','release-asset','install','desktop','verify','media-qa')][string]$Command,
     [string]$Repo, [string]$Owner, [string]$ExpectedComputer,
     [string]$Commit, [string]$Branch, [string]$VersionSnapshot, [string]$ArchivedRelease,
-    [string]$ReleaseTag, [string]$ReleaseRepo,
+    [string]$ReleaseTag, [string]$ReleaseRepo, [string]$ReleaseFile, [long]$ReleaseSize, [string]$ReleaseDigest,
     [string]$ProbeSource, [string]$SessionSource, [string]$VerifySource,
     [int]$LogLines = 80, [string]$Contains = '',
     [int]$Duration = 0, [string]$Scenario = 'observe', [switch]$PrepareRuntime, [switch]$AllowProtectedTime,
-    [switch]$RepairWuwaLink
+    [switch]$RepairWuwaLink, [switch]$ReuseRelease
 )
 $ErrorActionPreference = 'Stop'
 $env:PYTHONUTF8 = '1'
@@ -82,19 +82,6 @@ function Prepare-PublishedSource([switch]$ReleaseBuild) {
     $null = Git-Checked @('checkout','--detach',$Commit)
     Require-Source
 }
-function Require-DraftRelease {
-    $Version = Read-RequestedVersion
-    if ($Branch -cne 'main' -or $ReleaseTag -cne ('H/v'+$Version.version) -or
-        $ReleaseTag -cnotmatch '^H/v[0-9]+\.[0-9]+\.0\z' -or
-        $ReleaseRepo -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z') {
-        throw 'Windows 릴리즈 대상, 버전 또는 태그 불일치'
-    }
-    $DraftJson = & gh release view $ReleaseTag --repo ('github.com/'+$ReleaseRepo) --json isDraft,tagName,assets
-    if ($LASTEXITCODE -ne 0) { throw 'Windows에서 GitHub 초안 릴리즈를 확인할 수 없습니다' }
-    $Draft = ($DraftJson -join "`n") | ConvertFrom-Json
-    if ($Draft.isDraft -ne $true -or $Draft.tagName -cne $ReleaseTag) { throw '초안 릴리즈에서만 호스트 패키지를 올릴 수 있습니다' }
-    return $Draft
-}
 function Test-ReleaseRepository {
     if ($ReleaseRepo -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z') { return $false }
     $Origin = Git-Checked @('remote','get-url','origin')
@@ -103,23 +90,25 @@ function Test-ReleaseRepository {
 }
 function Get-ReleasePreflight {
     if (!(Test-ReleaseRepository)) { return @{ok=$false;reason='repository-mismatch'} }
-    if (!(Get-Command gh -ErrorAction SilentlyContinue)) { return @{ok=$false;reason='cli-missing'} }
-    $Previous = $ErrorActionPreference
+    if ((Git-Checked @('status','--porcelain'))) { return @{ok=$false;reason='source-dirty'} }
+    $env:GIT_TERMINAL_PROMPT = '0'
     try {
-        $ErrorActionPreference = 'SilentlyContinue'
-        $null = & gh auth status --hostname github.com 2>$null
-        if ($LASTEXITCODE -ne 0) { return @{ok=$false;reason='github-auth'} }
-        $Permission = & gh repo view ('github.com/'+$ReleaseRepo) --json viewerPermission --jq '.viewerPermission' 2>$null
-        if ($LASTEXITCODE -ne 0 -or ($Permission -join '').Trim() -cnotin @('WRITE','MAINTAIN','ADMIN')) {
-            return @{ok=$false;reason='github-permission'}
-        }
-        return @{ok=$true}
-    } finally {
-        $ErrorActionPreference = $Previous
+        $null = Git-Checked @('ls-remote','--exit-code','--heads','origin','refs/heads/main')
+    } catch {
+        return @{ok=$false;reason='repository-access'}
     }
+    return @{ok=$true}
+}
+function Require-ReleaseTarget {
+    $Version = Read-RequestedVersion
+    if ($Branch -cne 'main' -or $ReleaseTag -cne ('H/v'+$Version.version) -or
+        $ReleaseTag -cnotmatch '^H/v[0-9]+\.[0-9]+\.0\z') {
+        throw 'Windows 릴리즈 대상, 버전 또는 태그 불일치'
+    }
+    if (!(Test-ReleaseRepository)) { throw 'Windows origin과 GitHub 릴리즈 저장소가 다릅니다' }
 }
 function Require-PublishedReleaseTag {
-    if (!(Test-ReleaseRepository)) { throw 'Windows origin과 GitHub 릴리즈 저장소가 다릅니다' }
+    Require-ReleaseTarget
     $Ref = 'refs/tags/'+$ReleaseTag
     $Peeled = $Ref+'^{}'
     $DirectCommit = $null
@@ -150,6 +139,18 @@ function Get-CheckedReleaseFiles {
     if ((Get-AuthenticodeSignature -LiteralPath $Files.setup).Status -ne 'Valid') { throw 'Setup 서명 오류' }
     $null = Invoke-Probe 'payload' $Files.portable
     return $Files
+}
+function Open-ReleasePackage([string]$Path) {
+    if ((Get-Item -LiteralPath $Path).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw '릴리즈 패키지 경로가 원본 파일이 아닙니다'
+    }
+    return [IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+}
+function Get-PackageDigest([IO.Stream]$Stream) {
+    $Hash = [Security.Cryptography.SHA256]::Create()
+    try {
+        return [BitConverter]::ToString($Hash.ComputeHash($Stream)).Replace('-','').ToLowerInvariant()
+    } finally { $Hash.Dispose() }
 }
 function Require-ProductionEnvironment {
     foreach ($Name in @('HH_TEST_APPDATA_DIR','HH_API_PORT','HH_SERVER_MUTEX_NAME','HH_TESTBENCH_SESSION_ID')) {
@@ -302,10 +303,10 @@ switch ($Command) {
         Get-ReleasePreflight | ConvertTo-Json -Compress
     }
     'release-build' {
-        $Draft = Require-DraftRelease
+        Require-ReleaseTarget
         $Files = $null
         try { $Files = Get-CheckedReleaseFiles } catch {
-            if ($Draft.assets.Count) {
+            if ($ReuseRelease) {
                 throw ('초안의 기존 자산과 대조할 원본 패키지가 없습니다. 원본을 복구하거나 해당 초안의 자산을 직접 정리한 뒤 다시 실행하세요. '+$_.Exception.Message)
             }
         }
@@ -314,27 +315,36 @@ switch ($Command) {
             Invoke-HostBuild
             $Files = Get-CheckedReleaseFiles
         }
-        $Draft = Require-DraftRelease
         Require-Source
         Require-SyncedVersion
         $Assets = @{}
-        $Pending = @()
         foreach ($File in @($Files.setup,$Files.portable)) {
             $Name = [IO.Path]::GetFileName($File)
-            $Digest = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash.ToLowerInvariant()
-            $Assets[$Name] = $Digest
-            $Existing = @($Draft.assets | Where-Object {$_.name -ceq $Name})
-            if (!$Existing.Count) { $Pending += $File }
-            elseif ($Existing.Count -ne 1 -or $Existing[0].state -cne 'uploaded' -or $Existing[0].digest -cne ('sha256:'+$Digest)) {
-                throw ('기존 초안 자산이 원본과 다릅니다. 해당 초안의 자산을 직접 정리한 뒤 다시 실행하세요. '+$Name)
-            }
-        }
-        if ($Pending.Count) {
-            Require-PublishedReleaseTag
-            $null = & gh release upload $ReleaseTag @Pending --repo ('github.com/'+$ReleaseRepo)
-            if ($LASTEXITCODE -ne 0) { throw 'Windows 패키지 업로드 실패' }
+            $Stream = Open-ReleasePackage $File
+            try { $Assets[$Name] = @{sha256=(Get-PackageDigest $Stream); size=$Stream.Length} }
+            finally { $Stream.Dispose() }
         }
         @{ok=$true; source=$Commit; version=(Read-RequestedVersion); assets=$Assets} | ConvertTo-Json -Depth 5
+    }
+    'release-asset' {
+        Require-PublishedReleaseTag
+        $Files = Get-CheckedReleaseFiles
+        $File = @($Files.setup,$Files.portable) | Where-Object {
+            [IO.Path]::GetFileName($_) -ceq $ReleaseFile
+        }
+        if (!$File -or $ReleaseSize -le 0 -or $ReleaseDigest -cnotmatch '^[0-9a-f]{64}\z') {
+            throw '발급된 호스트 릴리즈의 패키지 정보가 아닙니다'
+        }
+        $Stream = Open-ReleasePackage $File
+        try {
+            if ($Stream.Length -ne $ReleaseSize -or (Get-PackageDigest $Stream) -cne $ReleaseDigest) {
+                throw '전송할 Windows 패키지의 크기 또는 SHA-256이 달라졌습니다'
+            }
+            $Stream.Position = 0
+            $Output = [Console]::OpenStandardOutput()
+            $Stream.CopyTo($Output)
+            $Output.Flush()
+        } finally { $Stream.Dispose() }
     }
     'desktop' {
         $Result = Invoke-Session 'desktop' (Service-Status)

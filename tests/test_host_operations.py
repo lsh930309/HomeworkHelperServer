@@ -108,7 +108,7 @@ def test_release_build_forwards_only_the_issued_host_release(event, monkeypatch,
 
 @pytest.mark.parametrize(("status", "stdout", "expected"), [
     (0, '{"ok":true,"untrusted":"fixture secret"}', {"ok": True}),
-    (0, '{"ok":false,"reason":"cli-missing","untrusted":"fixture secret"}', {"ok": False, "reason": "cli-missing"}),
+    (0, '{"ok":false,"reason":"repository-access","untrusted":"fixture secret"}', {"ok": False, "reason": "repository-access"}),
     (1, 'fixture secret', {"ok": False, "reason": "transport"}),
 ])
 def test_release_preflight_reports_only_known_result_without_build_or_state_write(status, stdout, expected, monkeypatch, tmp_path, capsys):
@@ -130,6 +130,33 @@ def test_release_preflight_reports_only_known_result_without_build_or_state_writ
     assert not list(tmp_path.iterdir())
     assert len(calls) == 1
     assert "-Command 'release-preflight'" in calls[0] and "-ReleaseRepo 'fixture/repo'" in calls[0]
+
+
+def test_release_asset_passes_exact_bytes_to_stdout_without_a_local_package(tmp_path, monkeypatch, capsysbinary):
+    commit = "a" * 40
+    snapshot = BuildVersion("host", "1.7.0", commit, "1.7.0")
+    name = "HomeworkHelper_v1.7.0_Portable.zip"
+    package = b"PK\x03\x04\x00\x80\xff\r\n"
+    digest = hashlib.sha256(package).hexdigest()
+    monkeypatch.setattr(ops, "published_release_commit", lambda target: target)
+    monkeypatch.setattr(ops.VersionLedger, "read_main", lambda _, target: ("minor", snapshot))
+
+    def remote(config, script, *, timeout, stdout):
+        assert config.host == "test.invalid"
+        assert "-Command 'release-asset'" in script and f"-Commit '{commit}'" in script
+        assert f"-ReleaseFile '{name}'" in script and f"-ReleaseSize '{len(package)}'" in script
+        assert f"-ReleaseDigest '{digest}'" in script
+        stdout.write(package)
+        return subprocess.CompletedProcess([], 0, None, "")
+
+    monkeypatch.setattr(ops, "run_remote_powershell", remote)
+    assert ops.main(["release-asset", "--host", "test.invalid", "--commit", commit,
+                     "--release-tag", snapshot.tag, "--release-repo", "fixture/repo",
+                     "--release-file", name, str(len(package)), digest,
+                     "--report-root", str(tmp_path)]) == 0
+    result = capsysbinary.readouterr()
+    assert result.out == package and result.err == b""
+    assert not list(tmp_path.iterdir())
 
 
 def test_inspect_never_requests_publication_or_host_changes(monkeypatch, tmp_path, capsys):
@@ -384,8 +411,8 @@ def test_build_invokes_single_authoritative_builder(monkeypatch, tmp_path, capsy
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Actual Windows PowerShell required")
-@pytest.mark.parametrize("scenario", ["match", "wrong-digest", "wrong-tag"])
-def test_windows_release_upload_preserves_existing_draft_asset(tmp_path, scenario):
+@pytest.mark.parametrize("scenario", ["preflight", "wrong-origin", "build-metadata", "asset", "wrong-digest", "wrong-size", "wrong-tag"])
+def test_windows_release_build_and_transfer_do_not_need_github_cli(tmp_path, scenario):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     python = repo / ".venv/Scripts/python.exe"
@@ -394,16 +421,24 @@ def test_windows_release_upload_preserves_existing_draft_asset(tmp_path, scenari
     snapshot = BuildVersion("host", "1.7.0", "a" * 40, "1.7.0")
     (repo / "build.version.json").write_text(snapshot.to_json(), encoding="utf-8")
     (repo / "release").mkdir()
-    for suffix in ("Setup.exe", "Portable.zip"):
-        (repo / "release" / f"HomeworkHelper_v1.7.0_{suffix}").write_bytes(suffix.encode())
+    packages = {
+        "HomeworkHelper_v1.7.0_Setup.exe": b"MZ\x00\x81\xff\r\n",
+        "HomeworkHelper_v1.7.0_Portable.zip": b"PK\x03\x04\x00\xa0\xfe\r\n",
+    }
+    for name, package in packages.items():
+        (repo / "release" / name).write_bytes(package)
 
     stubs = r'''
 function Git-Checked($Arguments) {
     switch ($Arguments[0]) {
         'status' { return '' }
         'rev-parse' { return $Commit }
-        'remote' { return 'https://github.com/fixture/repo.git' }
+        'remote' {
+            if ($global:Scenario -eq 'wrong-origin') { return 'https://github.com/fixture/other.git' }
+            return 'https://github.com/fixture/repo.git'
+        }
         'ls-remote' {
+            if ($Arguments -contains '--heads') { return "$Commit`trefs/heads/main" }
             $Target = if ($global:Scenario -eq 'wrong-tag') { 'b' * 40 } else { $Commit }
             return "$Target`trefs/tags/H/v1.7.0"
         }
@@ -416,41 +451,52 @@ function Invoke-Probe($Kind, $Portable) {
     if ($Kind -eq 'payload') { return @{} }
     throw 'existing packages must not trigger a rebuild'
 }
-function gh {
-    $global:LASTEXITCODE = 0
-    if ($args[1] -eq 'view') {
-        $Digest = (Get-FileHash (Join-Path $Repo 'release/HomeworkHelper_v1.7.0_Setup.exe')).Hash.ToLowerInvariant()
-        if ($global:Scenario -eq 'wrong-digest') { $Digest = '0' * 64 }
-        return @{isDraft=$true;tagName=$ReleaseTag;assets=@(@{name='HomeworkHelper_v1.7.0_Setup.exe';state='uploaded';digest=('sha256:'+$Digest)})} | ConvertTo-Json -Depth 6
-    }
-    if ($args[1] -ne 'upload' -or $args -contains '--clobber') { throw 'unexpected mutation' }
-    $global:Uploads = @($args | Where-Object {$_ -match '\.(zip|exe)\z'} | ForEach-Object {[IO.Path]::GetFileName($_)})
-}
+function gh { throw 'Windows 릴리즈 단계는 GitHub CLI를 호출하지 않습니다' }
 '''
     source = (ops.ROOT / "tools/windows_host_operations.ps1").read_text(encoding="utf-8")
     source = source.replace("switch ($Command) {", stubs + "\nswitch ($Command) {")
+    command = "release-asset"
+    if scenario in {"preflight", "wrong-origin"}:
+        command = "release-preflight"
+    elif scenario == "build-metadata":
+        command = "release-build"
     arguments = {
-        "Command": "release-build", "Repo": str(repo), "Owner": getpass.getuser(),
+        "Command": command, "Repo": str(repo), "Owner": getpass.getuser(),
         "Commit": snapshot.commit, "Branch": "main", "VersionSnapshot": snapshot.to_json(),
         "ReleaseRepo": "fixture/repo", "ReleaseTag": snapshot.tag,
     }
+    name = "HomeworkHelper_v1.7.0_Portable.zip"
+    package = packages[name]
+    digest = hashlib.sha256(package).hexdigest()
+    if command == "release-asset":
+        arguments.update(ReleaseFile=name, ReleaseSize=str(len(package) + (scenario == "wrong-size")),
+                         ReleaseDigest="0" * 64 if scenario == "wrong-digest" else digest)
     invocation = " ".join(f"-{key} {ops.ps_literal(value)}" for key, value in arguments.items())
-    source = (f"$global:Scenario={ops.ps_literal(scenario)}\n$global:Uploads=@()\n$Failure=''\n"
+    source = (f"$global:Scenario={ops.ps_literal(scenario)}\n"
               "try { & {\n" + source + "\n} " + invocation + " -ExpectedComputer $env:COMPUTERNAME\n"
-              "} catch { $Failure=$_.Exception.Message }\n"
-              "@{uploads=$global:Uploads;failure=$Failure} | ConvertTo-Json -Compress")
-    bootstrap = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))"
+              "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }\n")
+    bootstrap = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))"
     environment = {key: value for key, value in os.environ.items() if not key.startswith("HH_")}
     result = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", base64.b64encode(bootstrap.encode("utf-16-le")).decode()],
-                            input=source, text=True, encoding="utf-8", errors="strict", capture_output=True,
-                            timeout=20, env=environment, check=True)
-    trace = json.loads(result.stdout.strip().splitlines()[-1])
-    if scenario == "match":
-        assert trace == {"uploads": ["HomeworkHelper_v1.7.0_Portable.zip"], "failure": ""}
-    elif scenario == "wrong-digest":
-        assert trace["uploads"] == [] and "기존 초안 자산이 원본과 다릅니다" in trace["failure"]
+                            input=source.encode("utf-8"), capture_output=True, timeout=20, env=environment, check=False)
+    if scenario in {"preflight", "wrong-origin", "build-metadata"}:
+        assert result.returncode == 0, result.stderr.decode("utf-8")
+        trace = json.loads(result.stdout.decode("utf-8"))
+        if scenario == "build-metadata":
+            assert trace["source"] == snapshot.commit
+            assert trace["assets"] == {
+                name: {"size": len(package), "sha256": hashlib.sha256(package).hexdigest()}
+                for name, package in packages.items()
+            }
+        else:
+            assert trace == ({"ok": True} if scenario == "preflight" else {"ok": False, "reason": "repository-mismatch"})
+    elif scenario == "asset":
+        assert result.returncode == 0, result.stderr.decode("utf-8")
+        assert result.stdout == package
     else:
-        assert trace["uploads"] == [] and "릴리즈 태그와 빌드 커밋이 다릅니다" in trace["failure"]
+        assert result.returncode != 0 and result.stdout == b""
+        message = "릴리즈 태그와 빌드 커밋" if scenario == "wrong-tag" else "크기 또는 SHA-256"
+        assert message in result.stderr.decode("utf-8")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Actual Windows PowerShell required")

@@ -21,7 +21,7 @@ import sys
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.core.tailscale import tailscale_status
@@ -135,7 +135,9 @@ def _ssh_args(config: SSHConfig) -> list[str]:
     return args
 
 
-def run_remote_powershell(config: SSHConfig, script: str, *, timeout: int) -> subprocess.CompletedProcess[str]:
+def run_remote_powershell(
+    config: SSHConfig, script: str, *, timeout: int, stdout: BinaryIO | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Run a PowerShell script over SSH without writing a production-host file."""
     # Stdin command mode evaluates statements independently. Read the whole input
     # as one program; keep the command line short even for a large testbench.
@@ -162,7 +164,8 @@ def run_remote_powershell(config: SSHConfig, script: str, *, timeout: int) -> su
     ]
     return subprocess.run(
         command, input=script, text=True, encoding="utf-8", errors="strict",
-        capture_output=True, timeout=timeout, check=False,
+        stdout=subprocess.PIPE if stdout is None else stdout, stderr=subprocess.PIPE,
+        timeout=timeout, check=False,
     )
 
 

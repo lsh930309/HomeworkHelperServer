@@ -11,6 +11,8 @@ import platform
 import re
 import subprocess
 import sys
+from typing import BinaryIO
+from urllib.parse import urlencode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +23,7 @@ from tools.version_policy import BuildVersion, START_TAGS, START_VERSIONS, Versi
 
 MAIN = "refs/remotes/origin/main"
 PR_FIELDS = "baseRefName,headRefOid,mergeCommit,state,title,body,url,headRefName,isDraft"
-RELEASE_FIELDS = "assets,body,isDraft,tagName,name,url"
+RELEASE_FIELDS = "assets,body,databaseId,isDraft,tagName,name,url"
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
 TRAILER = re.compile(r"^HomeworkHelper-Release: PR #(\d+) (host|client|none) (minor|major)$", re.M)
@@ -92,9 +94,9 @@ class ReleaseCommand:
     @staticmethod
     def output(result: subprocess.CompletedProcess) -> str:
         if result.returncode:
-            message = (result.stderr or result.stdout).strip()
+            message = (result.stderr or result.stdout or "").strip()
             raise RuntimeError(message or f"{result.args[0]} 명령 실패 (종료 코드 {result.returncode})")
-        return result.stdout.strip()
+        return (result.stdout or "").strip()
 
     def git(self, *args: str) -> str:
         return self.output(self.run("git", *args))
@@ -169,6 +171,7 @@ class ReleaseCommand:
             raise ValueError("열린 PR에는 검토한 main의 전체 SHA를 --base로 지정하세요.")
         if args.base != published:
             raise ValueError("현재 GitHub main이 검토한 --base와 다릅니다. 변경을 다시 리뷰하고 병합 동의를 받으세요.")
+        self.refresh_baseline()
         self.ledger.check_main_ready(published)
         self.git("fetch", "--no-tags", "origin", f"refs/pull/{args.number}/head")
         if self.git("rev-parse", "FETCH_HEAD") != args.head:
@@ -183,13 +186,11 @@ class ReleaseCommand:
         if len(branch_products | products) > 1:
             raise ValueError("호스트와 클라이언트가 함께 바뀌는 PR은 제품별로 분리하세요.")
         product = next(iter(products), None)
-        if product == "host" and not args.host:
-            raise ValueError("호스트 릴리즈를 준비하려면 --host를 지정하세요.")
         if args.approved_major and not product:
             raise ValueError("메이저 승격은 제품 변경이 있는 PR에만 적용됩니다.")
         return MergeRelease(args.number, product, "major" if args.approved_major else "minor")
 
-    def require_merge_access(self, args: argparse.Namespace, product: str | None) -> None:
+    def require_merge_access(self) -> None:
         error = "맥 GitHub CLI의 인증과 대상 저장소 쓰기 권한을 확인할 수 없습니다."
         try:
             repository = json.loads(self.output(self.run(
@@ -199,9 +200,8 @@ class ReleaseCommand:
             raise ValueError(error) from None
         if not isinstance(repository, dict) or repository.get("viewerPermission") not in ("WRITE", "MAINTAIN", "ADMIN"):
             raise ValueError(error)
-        if product != "host":
-            return
 
+    def require_host_access(self, args: argparse.Namespace) -> None:
         from tools.host_operations import RELEASE_PREFLIGHT_FAILURES
 
         reason = "transport"
@@ -228,7 +228,7 @@ class ReleaseCommand:
         if "HomeworkHelper-Release:" in message:
             raise ValueError("릴리즈 표시는 병합 명령이 자동으로 붙입니다.")
         subject, _, body = message.strip().partition("\n")
-        self.require_merge_access(args, event.product)
+        self.require_merge_access()
         remote_main = self.git("ls-remote", "--heads", "origin", "refs/heads/main")
         if remote_main != f"{args.base}\trefs/heads/main":
             raise ValueError("병합 준비 중 GitHub main이 검토한 --base에서 바뀌었습니다. 변경을 다시 리뷰하고 병합 동의를 받으세요.")
@@ -250,7 +250,7 @@ class ReleaseCommand:
         if len(markers) != 1 or markers[0][0] != str(args.number):
             raise ValueError("이 명령에서 시작한 PR 병합을 찾을 수 없습니다.")
         _, expected, event = markers[0]
-        if args.approved_major and event != "major":
+        if getattr(args, "approved_major", False) and event != "major":
             raise ValueError("이미 마이너로 병합된 PR을 메이저로 변경할 수 없습니다.")
         products = changed_products(self.repo, parents[0], commit)
         if products and products != {expected}:
@@ -276,26 +276,84 @@ class ReleaseCommand:
         return json.loads(self.output(result))
 
     def run_host(self, args: argparse.Namespace, command: str, *options: str,
-                 timeout: int) -> subprocess.CompletedProcess:
+                 timeout: int, stdout: BinaryIO | None = None) -> subprocess.CompletedProcess:
         if not args.host:
             raise ValueError("호스트 빌드·첨부를 재개하려면 --host를 지정하세요.")
-        argv = [sys.executable, "tools/host_operations.py", command, "--host", args.host,
+        argv = [sys.executable, str(ROOT / "tools/host_operations.py"), command, "--host", args.host,
                 *options, "--ssh-port", str(args.ssh_port)]
         if args.user:
             argv.extend(["--user", args.user])
         if args.identity:
             argv.extend(["--identity", args.identity])
-        return self.run(*argv, timeout=timeout)
+        if stdout is None:
+            return self.run(*argv, timeout=timeout)
+        return subprocess.run(argv, cwd=self.repo, stdout=stdout, stderr=subprocess.PIPE, text=True,
+                              encoding="utf-8", timeout=timeout)
 
-    def upload_host(self, args: argparse.Namespace, version: BuildVersion) -> dict[str, str]:
+    def upload_host_file(self, args: argparse.Namespace, version: BuildVersion, draft_id: int,
+                         name: str, size: int, digest: str) -> dict:
+        url = f"https://uploads.github.com/repos/{self.github_repo}/releases/{draft_id}/assets?{urlencode({'name': name})}"
+        command = ("gh", "api", "--hostname", "github.com", "--method", "POST",
+                   "--header", "Content-Type: application/octet-stream",
+                   "--header", f"Content-Length: {size}", "--input", "-", url)
+        with subprocess.Popen(command, cwd=self.repo, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE) as upload:
+            try:
+                result = self.run_host(args, "release-asset", "--commit", version.commit, "--release-tag", version.tag,
+                                       "--release-repo", self.github_repo, "--release-file", name, str(size), digest,
+                                       timeout=620, stdout=upload.stdin)
+                self.output(result)
+                upload.stdin.close()
+                upload.stdin = None
+                body, error = upload.communicate(timeout=600)
+                result = subprocess.CompletedProcess(command, upload.returncode, body.decode("utf-8"), error.decode("utf-8"))
+                return json.loads(self.output(result))
+            finally:
+                if upload.poll() is None:
+                    upload.kill()
+
+    def host_packages(self, args: argparse.Namespace, version: BuildVersion, *, reuse: bool) -> dict:
+        options = ("--reuse-release",) if reuse else ()
         result = self.run_host(args, "release-build", "--commit", version.commit, "--release-tag", version.tag,
-                               "--release-repo", self.github_repo, timeout=2460)
+                               "--release-repo", self.github_repo, *options, timeout=2460)
         payload = json.loads(self.output(result))
         if not payload["ok"] or payload["commit"] != version.commit:
             raise ValueError("Windows 빌드의 대상 커밋 또는 결과를 확인할 수 없습니다.")
-        return payload["result"]["assets"]
+        files = payload["result"]["assets"]
+        if not isinstance(files, dict) or files.keys() != set(release_assets(version)) or any(
+            not isinstance(info, dict) or type(info.get("size")) is not int or info["size"] <= 0
+            or not isinstance(info.get("sha256"), str) or not DIGEST.fullmatch(info["sha256"])
+            for info in files.values()
+        ):
+            raise ValueError("Windows 빌드의 필수 패키지 크기 또는 SHA-256을 확인할 수 없습니다.")
+        return files
 
-    def upload_client(self, version: BuildVersion, draft: dict) -> dict[str, str]:
+    def upload_host(self, args: argparse.Namespace, pr: dict, version: BuildVersion, draft: dict, files: dict) -> dict[str, str]:
+        current = self.verify_release(self.release(version.tag), pr, version)
+        draft_id = current.get("databaseId")
+        if not current["isDraft"] or type(draft_id) is not int or draft_id <= 0 or draft_id != draft.get("databaseId"):
+            raise ValueError("패키지를 첨부할 GitHub 초안이 달라졌습니다.")
+
+        def matches(asset: dict, name: str) -> bool:
+            return (name in files and asset.get("name") == name and asset.get("state") == "uploaded"
+                    and asset.get("size") == files[name]["size"]
+                    and asset.get("digest") == f"sha256:{files[name]['sha256']}")
+
+        existing = set()
+        for asset in current["assets"]:
+            name = asset["name"]
+            if name in existing or not matches(asset, name):
+                raise ValueError(f"기존 초안 자산을 Windows 원본과 대조하지 못했습니다: {name}")
+            existing.add(name)
+        for name, info in files.items():
+            if name in existing:
+                continue
+            asset = self.upload_host_file(args, version, draft_id, name, info["size"], info["sha256"])
+            if not matches(asset, name):
+                raise ValueError(f"업로드한 자산을 Windows 원본과 대조하지 못했습니다: {name}")
+        return {name: info["sha256"] for name, info in files.items()}
+
+    def client_package(self, version: BuildVersion, *, reuse: bool) -> tuple[Path, str]:
         from build import sha256_file
 
         branch = self.git("branch", "--show-current")
@@ -309,14 +367,15 @@ class ReleaseCommand:
             raise ValueError("릴리즈 커밋과 맥 패키지의 checkout이 일치해야 합니다.")
         name, = release_assets(version)
         path = self.repo / "release" / name
-        if not draft["assets"]:
+        if not reuse:
             self.output(self.run(sys.executable, "build.py", "--no-prune-archives", timeout=1800))
         if not path.is_file() or path.is_symlink() or path.stat().st_size <= 0:
             raise ValueError(f"release/{name}의 기존 PKG를 확인한 뒤 다시 실행하세요.")
-        expected = {name: sha256_file(path)}
-        current = draft if draft["assets"] else self.release(version.tag)
-        if not current:
-            raise ValueError("맥 패키지를 첨부할 draft 릴리즈를 찾을 수 없습니다.")
+        return path, sha256_file(path)
+
+    def upload_client(self, pr: dict, version: BuildVersion, path: Path, digest: str) -> dict[str, str]:
+        expected = {path.name: digest}
+        current = self.verify_release(self.release(version.tag), pr, version)
         if current["assets"]:
             if asset_hashes(current, version) != expected:
                 raise ValueError("첨부된 PKG와 로컬 PKG의 SHA-256이 다릅니다. 기존 PKG를 확인한 뒤 다시 실행하세요.")
@@ -333,9 +392,35 @@ class ReleaseCommand:
             raise ValueError("GitHub 릴리즈의 태그·제목·원본 PR을 확인할 수 없습니다.")
         return release
 
-    def publish(self, args: argparse.Namespace, pr: dict, version: BuildVersion) -> None:
-        self.ensure_tag(version, create=True)
+    def build_release(self, args: argparse.Namespace, pr: dict, version: BuildVersion) -> None:
         release = self.release(version.tag)
+        if release is not None:
+            release = self.verify_release(release, pr, version)
+            if not release["isDraft"]:
+                asset_hashes(release, version)
+                return
+        reuse = bool(release and release["assets"])
+        if version.product == "host":
+            self.require_host_access(args)
+            self.host_packages(args, version, reuse=reuse)
+        else:
+            self.client_package(version, reuse=reuse)
+
+    def publish(self, args: argparse.Namespace, pr: dict, version: BuildVersion) -> None:
+        release = self.release(version.tag)
+        if release is not None:
+            release = self.verify_release(release, pr, version)
+            if not release["isDraft"]:
+                self.ensure_tag(version, create=False)
+                asset_hashes(release, version)
+                print(release["url"])
+                return
+        if version.product == "host":
+            files = self.host_packages(args, version, reuse=True)
+        else:
+            path, digest = self.client_package(version, reuse=True)
+
+        self.ensure_tag(version, create=True)
         if release is None:
             self.gh("release", "create", version.tag, "--verify-tag", "--target", version.commit,
                     "--draft", "--title", release_title(version), "--notes-file", "-",
@@ -343,10 +428,11 @@ class ReleaseCommand:
             release = self.release(version.tag)
         release = self.verify_release(release, pr, version)
         if not release["isDraft"]:
-            asset_hashes(release, version)
-            print(release["url"])
-            return
-        hashes = self.upload_host(args, version) if version.product == "host" else self.upload_client(version, release)
+            raise ValueError("패키지 첨부 준비 중 초안이 이미 공개되었습니다.")
+        if version.product == "host":
+            hashes = self.upload_host(args, pr, version, release, files)
+        else:
+            hashes = self.upload_client(pr, version, path, digest)
         release = self.verify_release(self.release(version.tag), pr, version)
         if asset_hashes(release, version) != hashes:
             raise ValueError("빌드한 패키지의 SHA-256이 GitHub 업로드 자산과 다릅니다.")
@@ -358,10 +444,39 @@ class ReleaseCommand:
             raise ValueError("GitHub에서 실제 게시 결과를 확인할 수 없습니다.")
         print(published["url"])
 
+    def issue_version(self, commit: str, product: str | None, event: str) -> BuildVersion | None:
+        baseline = self.refresh_baseline()
+        self.git("merge-base", "--is-ancestor", baseline, commit)
+        if commit == baseline:
+            raise ValueError("버전 정책 시작 커밋 이전 PR은 릴리즈하지 않습니다.")
+        return self.ledger.record_main(commit, event=event, expected_product=product,
+                                       major_approved=event == "major")
+
+    def run_stage(self, args: argparse.Namespace) -> None:
+        self.require_clean()
+        published = self.refresh_main()
+        pr = self.pr(args.number)
+        commit, product, event = self.merged_event(args, pr, published)
+        if args.command == "version":
+            version = self.issue_version(commit, product, event)
+        else:
+            issued = self.ledger.read_main(commit)
+            if issued is None or issued[0] != event or (issued[1].product if issued[1] else None) != product:
+                raise ValueError("병합 커밋에 발급된 릴리즈 버전을 확인할 수 없습니다. version 단계부터 실행하세요.")
+            version = issued[1]
+        if version is None:
+            print(f"#{args.number} 패키지 변경 없음 {commit}")
+        elif args.command == "version":
+            print(version.to_json())
+        elif args.command == "build":
+            self.build_release(args, pr, version)
+            print(f"#{args.number} 빌드 준비 완료 {version.tag} {commit}")
+        else:
+            self.publish(args, pr, version)
+
     def run_pr(self, args: argparse.Namespace) -> None:
         self.require_clean()
         published = self.refresh_main()
-        baseline = self.refresh_baseline()
         pr = self.pr(args.number)
         if pr["state"] != "MERGED":
             if pr["headRefOid"] != args.head:
@@ -374,17 +489,17 @@ class ReleaseCommand:
             pr = self.pr(args.number)
             published = self.refresh_main()
         commit, product, event = self.merged_event(args, pr, published)
-        self.git("merge-base", "--is-ancestor", baseline, commit)
-        if commit == baseline:
-            raise ValueError("버전 정책 시작 커밋 이전 PR은 릴리즈하지 않습니다.")
         if args.dry_run:
             print(f"{commit} {product or '제품 변경 없음'} {event}")
             return
-        version = self.ledger.record_main(commit, event=event, expected_product=product,
-                                          major_approved=event == "major")
+        if args.merge_only:
+            print(f"#{args.number} 병합 완료 {commit}")
+            return
+        version = self.issue_version(commit, product, event)
         if version is None:
             print(f"#{args.number} 병합 완료 (패키지 변경 없음)")
             return
+        self.build_release(args, pr, version)
         self.publish(args, pr, version)
 
 
@@ -397,16 +512,21 @@ def full_sha(value: str) -> str:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     commands = p.add_subparsers(dest="command", required=True)
-    merge = commands.add_parser("merge", allow_abbrev=False)
-    merge.add_argument("number", type=int)
-    merge.add_argument("--head", required=True, type=full_sha)
-    merge.add_argument("--base", type=full_sha, help="열린 PR에서 리뷰한 GitHub main의 전체 SHA")
+    for stage in ("merge", "version", "build", "publish"):
+        subcommand = commands.add_parser(stage, allow_abbrev=False)
+        subcommand.add_argument("number", type=int)
+        subcommand.add_argument("--head", required=True, type=full_sha)
+        subcommand.add_argument("--base", type=full_sha, help="리뷰한 GitHub main의 전체 SHA")
+        if stage != "version":
+            subcommand.add_argument("--host")
+            subcommand.add_argument("--user")
+            subcommand.add_argument("--identity")
+            subcommand.add_argument("--ssh-port", type=int, default=22)
+        if stage == "merge":
+            merge = subcommand
     merge.add_argument("--message-file", type=Path)
     merge.add_argument("--approved-major", action="store_true")
-    merge.add_argument("--host")
-    merge.add_argument("--user")
-    merge.add_argument("--identity")
-    merge.add_argument("--ssh-port", type=int, default=22)
+    merge.add_argument("--merge-only", action="store_true")
     merge.add_argument("--dry-run", action="store_true")
     bootstrap = commands.add_parser("bootstrap", allow_abbrev=False)
     bootstrap.add_argument("--commit", required=True, type=full_sha)
@@ -425,7 +545,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if args.number <= 0:
                 raise ValueError("양의 PR 번호가 필요합니다.")
-            command.run_pr(args)
+            if args.command == "merge":
+                command.run_pr(args)
+            else:
+                command.run_stage(args)
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         print(f"릴리즈 작업 실패: {error}", file=sys.stderr)
         return 1
