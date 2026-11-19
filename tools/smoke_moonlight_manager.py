@@ -38,7 +38,37 @@ def _write_fake_moonlight_app(root: Path) -> Path:
         )
     )
     executable = executable_dir / "Moonlight"
-    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.write_text(
+        """#!/bin/sh
+case "$1:$2" in
+  quit:fixture-success)
+    printf 'fixture quit %s\\n' "$2"
+    ;;
+  quit:fixture-failure)
+    printf 'fixture warning\\n' >&2
+    exit 7
+    ;;
+  quit:fixture-verbose)
+    i=0
+    while [ "$i" -lt 4096 ]; do
+      printf 'fixture diagnostic line %s on stdout\\n' "$i"
+      printf 'fixture diagnostic line %s on stderr\\n' "$i" >&2
+      i=$((i + 1))
+    done
+    ;;
+  quit:fixture-inherited-output)
+    /bin/sleep 7 &
+    printf 'fixture helper exited\\n'
+    ;;
+  quit:fixture-timeout)
+    trap '' TERM
+    exec /bin/sleep 7
+    ;;
+  *) exit 64 ;;
+esac
+""",
+        encoding="utf-8",
+    )
     executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
     return app
 
@@ -86,9 +116,90 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
             }}
         }}
 
+        func testManualStreamDetection(_ selected: LocalMoonlightSnapshot) {{
+            let title = "LSH_Desktop"
+            expect(selected.manualStreamWindowTitle == title, "the selected registration should supply its exact unique hostname")
+
+            let target = selected.targetHost!
+            func registration(hostname: String) -> LocalMoonlightHostCandidate {{
+                LocalMoonlightHostCandidate(
+                    uuid: "fixture-alternate", hostname: hostname,
+                    localAddress: "", localPort: 0, manualAddress: "", manualPort: 0,
+                    remoteAddress: "", remotePort: 0, ipv6Address: "", ipv6Port: 0,
+                    apps: target.apps
+                )
+            }}
+            func selectedTitle(_ host: LocalMoonlightHostCandidate, among hosts: [LocalMoonlightHostCandidate]) -> String? {{
+                LocalMoonlightSnapshot(
+                    installation: selected.installation, preferencesPath: selected.preferencesPath,
+                    preferencesReadable: true, hosts: hosts, targetHost: host,
+                    readiness: .ready, message: ""
+                ).manualStreamWindowTitle
+            }}
+            let duplicate = registration(hostname: title)
+            expect(selectedTitle(target, among: [target, duplicate]) == nil, "two registrations using the same title are ambiguous")
+            let blank = registration(hostname: "   ")
+            expect(selectedTitle(blank, among: [blank]) == nil, "a blank registration cannot match an untitled window")
+            let launcher = registration(hostname: "Moonlight")
+            expect(selectedTitle(launcher, among: [launcher]) == nil, "the generic launcher title cannot identify a host session")
+
+            var titleReads: [pid_t] = []
+            let matchingEvidence = LocalMoonlightManager.streamEvidence(
+                for: [11, 22, 33, 44, 55, 66, 77], targetHostArgument: "HOST-2",
+                manualStreamWindowTitle: selected.manualStreamWindowTitle,
+                windowTitles: {{ pid in
+                    titleReads.append(pid)
+                    switch pid {{
+                    case 11: return [title]
+                    case 22: return ["Moonlight"]
+                    case 33: return ["KDLPCWIN01"]
+                    case 44: return [""]
+                    case 55: return [title.lowercased(), "Moonlight – \\(title)"]
+                    case 88: return [title]
+                    default: return []
+                    }}
+                }},
+                commandLine: {{ pid in
+                    switch pid {{
+                    case 66: return "/fixture/Moonlight stream HOST-2 Desktop"
+                    case 77: return "/fixture/Moonlight stream HOST-1 Desktop"
+                    default: return "/fixture/Moonlight"
+                    }}
+                }}
+            )
+            expect(matchingEvidence == [11: .windowTitle, 66: .commandLine], "evidence must distinguish a reusable manual GUI from a CLI stream")
+            expect(!titleReads.contains(66), "the matching CLI evidence should avoid consulting Accessibility")
+            expect(!titleReads.contains(88), "a window outside the current running Moonlight PIDs must not be considered")
+
+            let inactiveStream = LocalMoonlightSessionSnapshot(
+                runningApplicationCount: 7, hasVisibleWindow: false, hasFocusedApplication: false,
+                accessibilityTrusted: true, streamEvidenceByPID: matchingEvidence
+            )
+            expect(inactiveStream.hasDesktopSession && !inactiveStream.hasUnconfirmedSession, "window evidence should confirm the session outside the current visible space")
+            expect(inactiveStream.streamProcessIDs == [11, 66], "both kinds of stream evidence should contribute their PID")
+            let activeLauncher = LocalMoonlightSessionSnapshot(
+                runningApplicationCount: 1, hasVisibleWindow: true, hasFocusedApplication: true,
+                accessibilityTrusted: true, streamEvidenceByPID: [:]
+            )
+            expect(!activeLauncher.hasDesktopSession && activeLauncher.hasUnconfirmedSession, "a foreground launcher alone must not expose the OFF action")
+
+            let noTitleEvidence = LocalMoonlightManager.streamEvidence(
+                for: [11, 66], targetHostArgument: "HOST-2", manualStreamWindowTitle: nil,
+                windowTitles: {{ _ in fatalError("Accessibility reader must not run without an eligible title") }},
+                commandLine: {{ $0 == 66 ? "/fixture/Moonlight stream HOST-2 Desktop" : "/fixture/Moonlight" }}
+            )
+            expect(noTitleEvidence == [66: .commandLine], "permission denial or an ambiguous target must preserve only CLI evidence")
+            let closedProcesses = LocalMoonlightManager.streamEvidence(
+                for: [], targetHostArgument: "HOST-2", manualStreamWindowTitle: title,
+                windowTitles: {{ _ in fatalError("a closed process must not be observed") }},
+                commandLine: {{ _ in fatalError("a closed process has no command line") }}
+            )
+            expect(closedProcesses.isEmpty, "manual evidence cannot survive after its process disappears")
+        }}
+
         @main
         struct LocalMoonlightManagerSmoke {{
-            static func main() {{
+            static func main() async {{
                 setenv("HH_REMOTE_MOONLIGHT_APP_PATHS", "{app_path}", 1)
                 setenv("HH_REMOTE_MOONLIGHT_PREFS_PATH", "{plist_path}", 1)
 
@@ -96,6 +207,7 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
                 expect(ambiguous.readiness == .needsTailscaleRegistration, "Moonlight registrations must not choose a host without HomeworkHelper identity")
                 expect(ambiguous.hosts.count == 2, "fixture should expose two hosts")
                 expect(ambiguous.usableHosts.count == 2, "both fixture hosts should expose Desktop")
+                expect(ambiguous.manualStreamWindowTitle == nil, "an unselected host must not supply a manual stream title")
 
                 let matched = LocalMoonlightManager.snapshot(baseURLHost: "172.30.1.34")
                 expect(matched.readiness == .ready, "base URL host should select matching Moonlight host")
@@ -121,6 +233,26 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
                 expect(selected.readiness == .ready, "HomeworkHelper address must own the stream target")
                 expect(selected.targetHost?.uuid == "HOST-2", "HomeworkHelper address must select HOST-2")
                 expect(selected.installation?.version == "6.1.0-fixture", "fake app version should be detected")
+                testManualStreamDetection(selected)
+
+                let success = await LocalMoonlightManager.quit(host: "fixture-success", installation: selected.installation)
+                expect(success.succeeded && success.stdout == "fixture quit fixture-success", "quit should pass the selected target and capture normal output")
+
+                let failure = await LocalMoonlightManager.quit(host: "fixture-failure", installation: selected.installation)
+                expect(!failure.succeeded && failure.exitStatus == 7 && !failure.timedOut && failure.stderr == "fixture warning", "quit should preserve helper failure and its diagnostic")
+
+                let verbose = await LocalMoonlightManager.quit(host: "fixture-verbose", installation: selected.installation, timeoutSeconds: 3)
+                expect(verbose.succeeded, "both stdout and stderr should be drained while the quit helper runs")
+
+                let inheritedStart = ContinuousClock.now
+                let inherited = await LocalMoonlightManager.quit(host: "fixture-inherited-output", installation: selected.installation)
+                expect(inherited.succeeded && inherited.stdout == "fixture helper exited", "quit output should survive until its helper exits")
+                expect(ContinuousClock.now - inheritedStart < .seconds(5), "quit must not wait for inherited output held by a separate process")
+
+                let start = ContinuousClock.now
+                let timeout = await LocalMoonlightManager.quit(host: "fixture-timeout", installation: selected.installation, timeoutSeconds: 1)
+                expect(timeout.timedOut && !timeout.succeeded, "quit must report timeout when the fixture ignores normal termination")
+                expect(ContinuousClock.now - start < .seconds(5), "quit must return before the stuck fixture exits on its own")
 
                 print("LocalMoonlightManager smoke passed: hosts=\\(selected.hosts.count), target=\\(selected.targetHost?.displayTitle ?? "-")")
             }}
@@ -140,6 +272,8 @@ def main() -> int:
         compile_cmd = [
             "swiftc",
             "-parse-as-library",
+            "-module-cache-path",
+            str(root / "swift-module-cache"),
             str(MOONLIGHT_MANAGER),
             str(smoke_source),
             "-o",
@@ -151,7 +285,7 @@ def main() -> int:
             return compile_result.returncode
         env = os.environ.copy()
         fixture_before = plist_path.read_bytes()
-        run_result = subprocess.run([str(binary)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, check=False)
+        run_result = subprocess.run([str(binary)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, check=False, timeout=20)
         if run_result.stdout:
             print(run_result.stdout, end="")
         if plist_path.read_bytes() != fixture_before:

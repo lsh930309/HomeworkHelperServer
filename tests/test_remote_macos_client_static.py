@@ -323,10 +323,26 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "performClose" not in resign_source
     outside_click_source = app.split("private func installPopoverOutsideClickMonitor()", 1)[1].split("private func installPopoverKeyDownMonitor()", 1)[0]
     assert 'closePopoverForFocusLoss(origin: "outsideClick")' in outside_click_source
+    assert "self.popover === monitoredPopover" in outside_click_source
     toggle_source = app.split("private func togglePopover", 1)[1].split("private func showPopover(relativeTo", 1)[0]
+    assert "if popover.isShown && !popoverIsOutsideActiveSpace" in toggle_source
     assert 'closePopoverForFocusLoss(origin: "statusToggle")' in toggle_source
+    outside_space_source = app.split("private var popoverIsOutsideActiveSpace: Bool", 1)[1].split("private func togglePopover", 1)[0]
+    assert "guard popover.isShown," in outside_space_source
+    assert "let window = popover.contentViewController?.viewIfLoaded?.window else { return false }" in outside_space_source
+    assert "return !window.isOnActiveSpace" in outside_space_source
+    replace_source = app.split("private func replacePopoverOutsideActiveSpace()", 1)[1].split("private func showPopover(relativeTo", 1)[0]
+    assert "guard popoverIsOutsideActiveSpace else { return }" in replace_source
+    assert replace_source.index("previousPopover.delegate = nil") < replace_source.index("previousPopover.close()")
+    assert replace_source.index("stopPopoverPresentationTracking()") < replace_source.index("popover = makePopover()")
+    cleanup_source = app.split("private func stopPopoverPresentationTracking()", 1)[1].split("private func closePopoverForFocusLoss", 1)[0]
+    assert "popoverFocusIntent = nil" in cleanup_source
+    assert "removePopoverOutsideClickMonitor()" in cleanup_source
+    assert "removePopoverKeyDownMonitor()" in cleanup_source
     assert "func popoverDidClose" in app
-    assert "removePopoverOutsideClickMonitor()" in app
+    for callback in ("popoverWillShow", "popoverDidShow", "popoverWillClose", "popoverDidClose"):
+        callback_source = app.split(f"func {callback}(_ notification: Notification)", 1)[1].split("\n    }", 1)[0]
+        assert "guard (notification.object as? NSPopover) === popover else { return }" in callback_source
     assert "focusPopoverWindow(for:" in app
     did_show_source = app.split("func popoverDidShow", 1)[1].split("\n    }", 1)[0]
     assert "DispatchQueue.main.async" in did_show_source
@@ -382,11 +398,12 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)" in app
     show_popover_body = app.split("private func showPopover(relativeTo button: NSStatusBarButton)", 1)[1].split("private func focusPopoverWindow", 1)[0]
     assert "RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()" in show_popover_body
+    assert show_popover_body.index("replacePopoverOutsideActiveSpace()") < show_popover_body.index("popover.show(relativeTo:")
+    assert "self.popover === displayedPopover, displayedPopover.isShown" in show_popover_body
     assert "popover.behavior = .semitransient" in app
     assert "popover.behavior = .transient" not in app
     assert "popover.behavior =" not in show_popover_body
     assert "RemotePlaceholderWindowAccessor" in app
-    assert "schedulePlaceholderHide()" in app
     assert "Window(RemoteAppDelegate.placeholderWindowTitle, id: RemoteAppDelegate.placeholderWindowIdentifier)" in app
     scene_source = app.split("var body: some Scene", 1)[1].split("struct GameIconView", 1)[0]
     placeholder_scene_source = scene_source.split(".commands {", 1)[0]
@@ -404,10 +421,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "CommandGroup(replacing: .appSettings)" in app
     assert app.count("RemoteAppDelegate.showSettingsWindow()") >= 3
     assert "SettingsLink" not in app
-    assert "RemoteSettingsOpenBridge" in app
-    assert "@Environment(\\.openSettings)" in app
-    assert "RemoteAppDelegate.installSettingsOpener" in app
-    assert "openSettings()" in app
+    assert "RemoteSettingsOpenBridge" not in app
+    assert "schedulePlaceholderHide" not in app
+    placeholder_accessor_source = window_accessor.split("struct RemotePlaceholderWindowAccessor", 1)[1].split("struct RemoteSettingsWindowAccessor", 1)[0]
+    assert "@Environment(\\.openSettings)" in placeholder_accessor_source
+    attachment = placeholder_accessor_source.split("override func viewDidMoveToWindow()", 1)[1]
+    assert "guard let window else { return }" in attachment
+    assert "self.window === window" in attachment
+    assert placeholder_accessor_source.index("RemoteAppDelegate.installSettingsOpener") < placeholder_accessor_source.index("window.orderOut(nil)")
     assert "homeworkHelperRemoteOpenSettings" not in app
     assert 'Selector(("showSettingsWindow:"))' not in app
     assert 'Selector(("showPreferencesWindow:"))' not in app
@@ -741,14 +762,21 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "needsTailscaleRegistration" in local_moonlight
     assert "LocalMoonlightCommandResult" in local_moonlight
     assert "LocalMoonlightSessionSnapshot" in local_moonlight
-    assert "desktopStreamProcessCount" in local_moonlight
+    assert "streamProcessIDs" in local_moonlight
     assert "hasFocusedApplication" in local_moonlight
     assert "apps.contains { $0.isActive }" in local_moonlight
     assert "hasDesktopStreamSession" in local_moonlight
     assert "isDesktopStreamVisible" in local_moonlight
     assert "hasDesktopSession" in local_moonlight
-    assert "hasDesktopStreamSession || isVisible" in local_moonlight
+    assert "var hasDesktopSession: Bool { hasDesktopStreamSession }" in local_moonlight
+    assert "var hasUnconfirmedSession: Bool { isRunning && !hasDesktopSession }" in local_moonlight
     assert "targetHostArgument: String? = nil" in local_moonlight
+    assert "for: runningApps.map(\\.processIdentifier)" in local_moonlight
+    assert "manualStreamWindowTitle: trusted ? manualStreamWindowTitle : nil" in local_moonlight
+    window_titles = local_moonlight.split("func accessibilityWindowTitles(pid:", 1)[1].split("func commandLineIndicatesDesktopStream", 1)[0]
+    assert "AXUIElementCreateApplication(pid)" in window_titles
+    assert "kAXWindowsAttribute" in window_titles and "kAXTitleAttribute" in window_titles
+    assert "AXUIElementSetMessagingTimeout" in window_titles
     assert "processCommandLine(pid:" in local_moonlight
     assert "commandLineIndicatesDesktopStream" in local_moonlight
     assert "installViaHomebrew" in local_moonlight
@@ -808,11 +836,53 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "toggleMoonlightDesktopSession" in view_model
     assert "ensureMoonlightDesktopVisible" in view_model
     assert "stopMoonlightDesktopSession" in view_model
-    assert "if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopSession" in view_model
-    assert "await prepareMoonlightAutoWake(action: .streamOnly)" in view_model
+    session_refresh = view_model.split("func refreshMoonlightSessionSnapshot()", 1)[1].split("func refreshMoonlightSnapshot()", 1)[0]
+    assert "manualStreamWindowTitle: moonlightSnapshot.manualStreamWindowTitle" in session_refresh
+    ensure_moonlight = view_model.split("private func ensureMoonlightDesktopVisible", 1)[1].split("private func stopMoonlightDesktopSession", 1)[0]
+    assert ensure_moonlight.index("moonlightSessionSnapshot.hasUnconfirmedSession") < ensure_moonlight.index("LocalMoonlightManager.startDesktopStream(")
+    assert "terminateRunningApplications" not in ensure_moonlight
+    assert "await prepareMoonlightAutoWake(action: .streamOnly, observation: observation)" in view_model
     assert "hostAvailabilityState == .online" in view_model
     assert "if pendingMoonlightWakeAction != nil { return true }" in view_model
-    assert "앱 종료 fallback만 수행합니다" in view_model
+    moonlight_toggle = view_model.split("func toggleMoonlightDesktopSession(stopRequested: Bool)", 1)[1].split("private func prepareMoonlightAutoWake", 1)[0]
+    assert "guard !moonlightFooterButtonDisabled else { return }" in moonlight_toggle
+    assert "guard moonlightSessionSnapshot.hasDesktopSession == stopRequested else" in moonlight_toggle
+    assert moonlight_toggle.index("moonlightSetupInProgress = true") < moonlight_toggle.index("await observeConnectionNow")
+    assert "evaluation.moonlightTarget == target" in moonlight_toggle
+    assert "guard observation.canStream else" in moonlight_toggle
+    assert 'ensureMoonlightDesktopVisible(trigger: "moonlight.button", observation: observation)' in moonlight_toggle
+    moonlight_install = view_model.split("func installMoonlightViaHomebrew()", 1)[1].split("func registerMoonlightViaTailscaleDirect()", 1)[0]
+    install_verified = moonlight_install.split("if result.succeeded, moonlightSnapshot.installation != nil {", 1)[1].split("} else", 1)[0]
+    assert "moonlightCommandFeedback.action = nil" in install_verified
+    moonlight_registration = view_model.split("func registerMoonlightViaTailscaleDirect()", 1)[1].split("func toggleMoonlightDesktopSession(", 1)[0]
+    registration_verified = moonlight_registration.split("if listResult.succeeded {", 1)[1].split("} else", 1)[0]
+    assert "moonlightCommandFeedback.action = nil" in registration_verified
+    wake_moonlight = view_model.split("private func prepareMoonlightAutoWake(", 1)[1].split("private func resumePendingMoonlightWakeActionIfReady", 1)[0]
+    assert "guard hostObservationStore.identity == currentHostIdentity else" in wake_moonlight
+    assert "let latestObservation = hostObservations" in wake_moonlight
+    veto = "guard observation.shouldWake, latestObservation.shouldWake else"
+    assert wake_moonlight.index(veto) < wake_moonlight.index("await localWake()")
+    assert "observation.apollo == .identityMismatch || latestObservation.apollo == .identityMismatch" in wake_moonlight.split(veto, 1)[0]
+    stop_moonlight = view_model.split("private func stopMoonlightDesktopSession()", 1)[1].split("private func focusMoonlightOnPreferredScreen(", 1)[0]
+    assert stop_moonlight.index("LocalMoonlightManager.runningApplications()") < stop_moonlight.index("await LocalMoonlightManager.quit(")
+    before_quit, after_quit = stop_moonlight.split("await LocalMoonlightManager.quit(", 1)
+    assert "streamEvidenceByPID" in before_quit
+    assert "let target = moonlightSnapshot.targetHost" in before_quit
+    assert "let installation = moonlightSnapshot.installation" in before_quit
+    assert "evidence[$0.processIdentifier] == .commandLine" in before_quit
+    assert "evidence[$0.processIdentifier] == .windowTitle" in before_quit
+    before_local_terminate = after_quit.split("await LocalMoonlightManager.terminateRunningApplications(cliApplications)", 1)[0]
+    assert "moonlightSnapshot.targetHost == target" in before_local_terminate
+    assert "moonlightSnapshot.installation == installation" in before_local_terminate
+    assert "await LocalMoonlightManager.terminateRunningApplications(cliApplications)" in after_quit
+    assert "await LocalMoonlightManager.terminateRunningApplications(applications)" not in stop_moonlight
+    assert "원격 세션 종료 여부는 미확인입니다" in stop_moonlight
+    assert "terminate?.succeeded == false || quit?.succeeded != true" in stop_moonlight
+    assert "Moonlight 처리 중" in app
+    assert "viewModel.moonlightFooterActionFailed" in app
+    assert "viewModel.moonlightFooterHelp" in app
+    assert "let stopRequested = viewModel.moonlightSessionSnapshot.hasDesktopSession" in app
+    assert "viewModel.toggleMoonlightDesktopSession(stopRequested: stopRequested)" in app
     assert "updateMoonlightPreferredScreen" in view_model
     assert "focusMoonlightOnPreferredScreen" in view_model
     assert "Accessibility 권한" in view_model
@@ -1064,7 +1134,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "NSApp.currentEvent?.clickCount" not in app
     assert "popover.performClose(nil)" in app
     assert "window.orderOut(nil)" in app
-    assert ".close()" not in app
+    assert ".close()" not in app.replace("previousPopover.close()", "", 1)
     assert "--ui-test-show-popover" in ui_test_flags
     assert "HH_REMOTE_SHOW_POPOVER" in ui_test_flags
     assert "--ui-test-click-status-item" in ui_test_flags
