@@ -475,6 +475,7 @@ private enum RemoteClientDesktopLogger {
 
 @MainActor
 final class RemoteDashboardViewModel: ObservableObject {
+    private static let unconfirmedMoonlightSessionMessage = "Moonlight에서 선택한 호스트의 세션을 확인할 수 없습니다. 열린 Moonlight에서 연결하거나, 앱을 정상 종료한 뒤 Moonlight ON을 눌러 주세요."
     private static let shortDateTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "ko_KR")
@@ -749,7 +750,9 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     var moonlightFooterHelp: String {
-        moonlightCommandFeedback.action?.message ?? moonlightBindingStatusDisplay
+        if let action = moonlightCommandFeedback.action { return action.message }
+        if moonlightSessionSnapshot.hasUnconfirmedSession { return Self.unconfirmedMoonlightSessionMessage }
+        return moonlightBindingStatusDisplay
     }
 
     var moonlightFooterActionFailed: Bool {
@@ -765,13 +768,13 @@ final class RemoteDashboardViewModel: ObservableObject {
         let optIn = moonlightBindingEnabled ? "Opt-in ON" : "Opt-in OFF"
         let session: String
         if moonlightSessionSnapshot.isDesktopStreamVisible {
-            session = "Desktop 세션 표시 중"
+            session = "Moonlight 스트림 표시 중"
         } else if moonlightSessionSnapshot.hasDesktopStreamSession {
-            session = "Desktop 세션 실행 중 · 창 미표시"
+            session = "Moonlight 스트림 실행 중 · 창 미표시"
         } else if moonlightSessionSnapshot.isVisible {
-            session = "Moonlight 창 표시 중 · Desktop 세션으로 간주"
+            session = "Moonlight 창 표시 중 · 스트림 미확인"
         } else if moonlightSessionSnapshot.isRunning {
-            session = "Moonlight 실행 중 · Desktop 세션 미확인"
+            session = "Moonlight 실행 중 · 스트림 미확인"
         } else if let pendingMoonlightWakeAction {
             session = "호스트 부팅 후 \(pendingMoonlightWakeAction.label) 대기 중"
         } else {
@@ -897,7 +900,8 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     func refreshMoonlightSessionSnapshot() {
         moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot(
-            targetHostArgument: moonlightSnapshot.targetHost?.targetHostArgument
+            targetHostArgument: moonlightSnapshot.targetHost?.targetHostArgument,
+            manualStreamWindowTitle: moonlightSnapshot.manualStreamWindowTitle
         )
     }
 
@@ -1019,6 +1023,10 @@ final class RemoteDashboardViewModel: ObservableObject {
             await stopMoonlightDesktopSession()
             return
         }
+        guard !moonlightSessionSnapshot.hasUnconfirmedSession else {
+            showMoonlightActionResult(Self.unconfirmedMoonlightSessionMessage, failed: true)
+            return
+        }
         if !moonlightBindingEnabled {
             moonlightBindingEnabled = true
         }
@@ -1133,21 +1141,17 @@ final class RemoteDashboardViewModel: ObservableObject {
             showMoonlightActionResult(moonlightSnapshot.message, failed: true)
             return false
         }
-        guard ensureMoonlightAccessibilityIfNeeded() else {
-            showMoonlightActionResult(message, failed: true)
-            return false
-        }
-
         moonlightSetupInProgress = true
         defer { moonlightSetupInProgress = false }
         moonlightLastCommandSummary = ""
         refreshMoonlightSessionSnapshot()
-
-        if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopSession {
-            let applications = LocalMoonlightManager.runningApplications()
-            let cleanup = await LocalMoonlightManager.terminateRunningApplications(applications)
-            moonlightLastCommandSummary = cleanup.outputSummary
-            refreshMoonlightSessionSnapshot()
+        guard !moonlightSessionSnapshot.hasUnconfirmedSession else {
+            showMoonlightActionResult(Self.unconfirmedMoonlightSessionMessage, failed: true)
+            return false
+        }
+        guard ensureMoonlightAccessibilityIfNeeded() else {
+            showMoonlightActionResult(message, failed: true)
+            return false
         }
 
         guard currentHostIdentity == identity,
@@ -1169,7 +1173,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
         guard currentHostIdentity == identity,
               moonlightSnapshot.targetHost == target, moonlightSnapshot.installation == installation else { return false }
-        let focus = await focusMoonlightOnPreferredScreen()
+        let focus = await focusMoonlightOnPreferredScreen(target: target)
         guard currentHostIdentity == identity,
               moonlightSnapshot.targetHost == target, moonlightSnapshot.installation == installation else { return false }
         moonlightLastCommandSummary = [moonlightLastCommandSummary, focus.outputSummary]
@@ -1178,7 +1182,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             .joined(separator: "\n")
         refreshMoonlightSessionSnapshot()
         if moonlightSessionSnapshot.hasDesktopSession || focus.succeeded {
-            showMoonlightActionResult("Moonlight Desktop 세션을 현재 화면으로 불러왔습니다.", failed: false)
+            showMoonlightActionResult("Moonlight 세션을 현재 화면으로 불러왔습니다.", failed: false)
             return true
         }
         showMoonlightActionResult("Moonlight Desktop 창을 확인하지 못했습니다. Moonlight에서 연결 오류가 표시되는지 확인하세요.", failed: true)
@@ -1193,15 +1197,24 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
         moonlightLastCommandSummary = ""
         let identity = currentHostIdentity
-        let applications = LocalMoonlightManager.runningApplications()
+        let target = moonlightSnapshot.targetHost
+        let installation = moonlightSnapshot.installation
+        let evidence = moonlightSessionSnapshot.streamEvidenceByPID
+        let applications = LocalMoonlightManager.runningApplications().filter {
+            evidence[$0.processIdentifier] != nil
+        }
+        guard !applications.isEmpty else {
+            showMoonlightActionResult("Moonlight 세션 상태가 바뀌었습니다. 버튼 상태를 확인하고 다시 눌러 주세요.", failed: true)
+            return
+        }
+        let cliApplications = applications.filter { evidence[$0.processIdentifier] == .commandLine }
+        let hasManualApplication = applications.contains { evidence[$0.processIdentifier] == .windowTitle }
         let quit: LocalMoonlightCommandResult?
-        if let target = moonlightSnapshot.targetHost {
-            quit = await LocalMoonlightManager.quit(host: target.targetHostArgument, installation: moonlightSnapshot.installation)
+        if let target {
+            quit = await LocalMoonlightManager.quit(host: target.targetHostArgument, installation: installation)
         } else {
             quit = nil
         }
-        let terminate = await LocalMoonlightManager.terminateRunningApplications(applications)
-        guard currentHostIdentity == identity else { return }
         let remoteMessage: String
         if let quit {
             if quit.timedOut {
@@ -1212,19 +1225,45 @@ final class RemoteDashboardViewModel: ObservableObject {
                 remoteMessage = "호스트 종료 명령이 실패했습니다."
             }
         } else {
-            remoteMessage = "호스트 종료 대상을 확인할 수 없어 Mac 앱 종료만 시도했습니다."
+            remoteMessage = "호스트 종료 대상을 확인할 수 없습니다."
         }
-        let localMessage = terminate.succeeded ? "Mac의 기존 Moonlight 앱이 종료됐습니다." : "Mac에 기존 Moonlight 앱이 남아 있습니다."
-        moonlightLastCommandSummary = [remoteMessage, quit?.outputSummary, terminate.outputSummary]
+        guard !Task.isCancelled else { return }
+        guard currentHostIdentity == identity,
+              moonlightSnapshot.targetHost == target,
+              moonlightSnapshot.installation == installation else {
+            showMoonlightActionResult("\(remoteMessage) Moonlight 대상 설정이 바뀌어 Mac 앱 종료를 중단했습니다.", failed: true)
+            return
+        }
+        // A GUI process can open another stream while the remote quit is pending.
+        // Only a CLI-launched process is tied to the session that was selected here.
+        let terminate: LocalMoonlightCommandResult?
+        if cliApplications.isEmpty {
+            terminate = nil
+        } else {
+            terminate = await LocalMoonlightManager.terminateRunningApplications(cliApplications)
+        }
+        guard currentHostIdentity == identity,
+              moonlightSnapshot.targetHost == target,
+              moonlightSnapshot.installation == installation else { return }
+        var messages = [remoteMessage]
+        if let terminate {
+            messages.append(terminate.succeeded ? "Mac의 CLI Moonlight 앱이 종료됐습니다." : "Mac에 CLI Moonlight 앱이 남아 있습니다.")
+        }
+        if hasManualApplication {
+            messages.append("수동으로 실행한 Moonlight 앱은 열어 뒀습니다.")
+        }
+        moonlightLastCommandSummary = [remoteMessage, quit?.outputSummary, terminate?.outputSummary]
             .compactMap { $0 }
             .joined(separator: "\n")
-        showMoonlightActionResult("\(localMessage) \(remoteMessage)", failed: !terminate.succeeded || quit?.succeeded != true)
+        showMoonlightActionResult(messages.joined(separator: " "), failed: terminate?.succeeded == false || quit?.succeeded != true)
     }
 
-    private func focusMoonlightOnPreferredScreen() async -> LocalMoonlightCommandResult {
+    private func focusMoonlightOnPreferredScreen(target: LocalMoonlightHostCandidate) async -> LocalMoonlightCommandResult {
+        let identity = currentHostIdentity
         let requiresAccessibility = NSScreen.screens.count > 1
         let frame = requiresAccessibility ? (moonlightPreferredScreenFrame ?? NSScreen.main?.visibleFrame) : nil
         var last = LocalMoonlightManager.focusAndMoveToScreen(
+            processIDs: moonlightSessionSnapshot.streamProcessIDs,
             visibleFrame: frame,
             requireAccessibility: requiresAccessibility,
             promptForAccessibility: false
@@ -1232,7 +1271,12 @@ final class RemoteDashboardViewModel: ObservableObject {
         if last.succeeded { return last }
         for _ in 0..<6 {
             try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled,
+                  currentHostIdentity == identity,
+                  moonlightSnapshot.targetHost == target else { return last }
+            refreshMoonlightSessionSnapshot()
             last = LocalMoonlightManager.focusAndMoveToScreen(
+                processIDs: moonlightSessionSnapshot.streamProcessIDs,
                 visibleFrame: frame,
                 requireAccessibility: requiresAccessibility,
                 promptForAccessibility: false

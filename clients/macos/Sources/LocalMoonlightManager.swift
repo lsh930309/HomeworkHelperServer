@@ -211,6 +211,16 @@ struct LocalMoonlightSnapshot: Equatable {
     var usableHosts: [LocalMoonlightHostCandidate] {
         hosts.filter { !$0.targetHostArgument.isEmpty && $0.hasDesktopApp }
     }
+
+    var manualStreamWindowTitle: String? {
+        guard let hostname = targetHost?.hostname,
+              !hostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              hostname.caseInsensitiveCompare("Moonlight") != .orderedSame,
+              hosts.filter({ $0.hostname.caseInsensitiveCompare(hostname) == .orderedSame }).count == 1 else {
+            return nil
+        }
+        return hostname
+    }
 }
 
 struct LocalMoonlightCommandResult: Equatable {
@@ -238,18 +248,25 @@ struct LocalMoonlightCommandResult: Equatable {
     }
 }
 
+enum LocalMoonlightStreamEvidence: Equatable {
+    case commandLine
+    case windowTitle
+}
+
 struct LocalMoonlightSessionSnapshot: Equatable {
     let runningApplicationCount: Int
     let hasVisibleWindow: Bool
     let hasFocusedApplication: Bool
     let accessibilityTrusted: Bool
-    let desktopStreamProcessCount: Int
+    let streamEvidenceByPID: [pid_t: LocalMoonlightStreamEvidence]
 
     var isRunning: Bool { runningApplicationCount > 0 }
     var isVisible: Bool { isRunning && (hasVisibleWindow || hasFocusedApplication) }
-    var hasDesktopStreamSession: Bool { desktopStreamProcessCount > 0 }
+    var streamProcessIDs: Set<pid_t> { Set(streamEvidenceByPID.keys) }
+    var hasDesktopStreamSession: Bool { !streamEvidenceByPID.isEmpty }
     var isDesktopStreamVisible: Bool { hasDesktopStreamSession && (hasVisibleWindow || hasFocusedApplication) }
-    var hasDesktopSession: Bool { hasDesktopStreamSession || isVisible }
+    var hasDesktopSession: Bool { hasDesktopStreamSession }
+    var hasUnconfirmedSession: Bool { isRunning && !hasDesktopSession }
 }
 
 enum LocalMoonlightManager {
@@ -432,16 +449,23 @@ enum LocalMoonlightManager {
     }
 
     @MainActor
-    static func sessionSnapshot(targetHostArgument: String? = nil) -> LocalMoonlightSessionSnapshot {
+    static func sessionSnapshot(
+        targetHostArgument: String? = nil,
+        manualStreamWindowTitle: String? = nil
+    ) -> LocalMoonlightSessionSnapshot {
         let runningApps = runningApplications()
+        let trusted = accessibilityTrusted(prompt: false)
         return LocalMoonlightSessionSnapshot(
             runningApplicationCount: runningApps.count,
             hasVisibleWindow: hasVisibleWindow(for: runningApps),
             hasFocusedApplication: hasFocusedApplication(for: runningApps),
-            accessibilityTrusted: accessibilityTrusted(prompt: false),
-            desktopStreamProcessCount: desktopStreamProcessCount(
-                for: runningApps,
-                targetHostArgument: targetHostArgument
+            accessibilityTrusted: trusted,
+            streamEvidenceByPID: streamEvidence(
+                for: runningApps.map(\.processIdentifier),
+                targetHostArgument: targetHostArgument,
+                manualStreamWindowTitle: trusted ? manualStreamWindowTitle : nil,
+                windowTitles: accessibilityWindowTitles,
+                commandLine: processCommandLine
             )
         )
     }
@@ -507,10 +531,10 @@ enum LocalMoonlightManager {
     }
 
     @MainActor
-    static func focusAndMoveToScreen(visibleFrame: CGRect?, requireAccessibility: Bool, promptForAccessibility: Bool) -> LocalMoonlightCommandResult {
-        let runningApps = runningApplications()
+    static func focusAndMoveToScreen(processIDs: Set<pid_t>, visibleFrame: CGRect?, requireAccessibility: Bool, promptForAccessibility: Bool) -> LocalMoonlightCommandResult {
+        let runningApps = runningApplications().filter { processIDs.contains($0.processIdentifier) }
         guard !runningApps.isEmpty else {
-            return LocalMoonlightCommandResult(action: "moonlight focus", executablePath: bundleIdentifier, arguments: [], exitStatus: nil, stdout: "", stderr: "실행 중인 Moonlight 앱을 찾지 못했습니다.", timedOut: false)
+            return LocalMoonlightCommandResult(action: "moonlight focus", executablePath: bundleIdentifier, arguments: [], exitStatus: nil, stdout: "", stderr: "확인된 Moonlight 스트림을 찾지 못했습니다.", timedOut: false)
         }
 
         if requireAccessibility && !accessibilityTrusted(prompt: promptForAccessibility) {
@@ -824,14 +848,42 @@ enum LocalMoonlightManager {
         apps.contains { $0.isActive }
     }
 
-    @MainActor
-    private static func desktopStreamProcessCount(for apps: [NSRunningApplication], targetHostArgument: String?) -> Int {
-        apps.filter { app in
-            commandLineIndicatesDesktopStream(
-                processCommandLine(pid: app.processIdentifier),
-                targetHostArgument: targetHostArgument
-            )
-        }.count
+    static func streamEvidence(
+        for processIDs: [pid_t],
+        targetHostArgument: String?,
+        manualStreamWindowTitle: String?,
+        windowTitles: (pid_t) -> [String],
+        commandLine: (pid_t) -> String
+    ) -> [pid_t: LocalMoonlightStreamEvidence] {
+        var evidence: [pid_t: LocalMoonlightStreamEvidence] = [:]
+        for pid in processIDs {
+            if commandLineIndicatesDesktopStream(commandLine(pid), targetHostArgument: targetHostArgument) {
+                evidence[pid] = .commandLine
+            } else if let title = manualStreamWindowTitle, !title.isEmpty, windowTitles(pid).contains(title) {
+                evidence[pid] = .windowTitle
+            }
+        }
+        return evidence
+    }
+
+    private static func accessibilityWindowTitles(pid: pid_t) -> [String] {
+        // Moonlight names its macOS stream window after the host.
+        // Bound each cross-process read because this also runs when the popover opens.
+        let app = AXUIElementCreateApplication(pid)
+        var windowsValue: CFTypeRef?
+        guard AXUIElementSetMessagingTimeout(app, 0.1) == .success,
+              AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsValue) == .success,
+              let windows = windowsValue as? [AXUIElement] else {
+            return []
+        }
+        return windows.compactMap { window in
+            var title: CFTypeRef?
+            guard AXUIElementSetMessagingTimeout(window, 0.1) == .success,
+                  AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &title) == .success else {
+                return nil
+            }
+            return title as? String
+        }
     }
 
     private static func commandLineIndicatesDesktopStream(_ commandLine: String, targetHostArgument: String?) -> Bool {

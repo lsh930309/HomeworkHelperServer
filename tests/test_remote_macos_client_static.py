@@ -762,14 +762,21 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "needsTailscaleRegistration" in local_moonlight
     assert "LocalMoonlightCommandResult" in local_moonlight
     assert "LocalMoonlightSessionSnapshot" in local_moonlight
-    assert "desktopStreamProcessCount" in local_moonlight
+    assert "streamProcessIDs" in local_moonlight
     assert "hasFocusedApplication" in local_moonlight
     assert "apps.contains { $0.isActive }" in local_moonlight
     assert "hasDesktopStreamSession" in local_moonlight
     assert "isDesktopStreamVisible" in local_moonlight
     assert "hasDesktopSession" in local_moonlight
-    assert "hasDesktopStreamSession || isVisible" in local_moonlight
+    assert "var hasDesktopSession: Bool { hasDesktopStreamSession }" in local_moonlight
+    assert "var hasUnconfirmedSession: Bool { isRunning && !hasDesktopSession }" in local_moonlight
     assert "targetHostArgument: String? = nil" in local_moonlight
+    assert "for: runningApps.map(\\.processIdentifier)" in local_moonlight
+    assert "manualStreamWindowTitle: trusted ? manualStreamWindowTitle : nil" in local_moonlight
+    window_titles = local_moonlight.split("func accessibilityWindowTitles(pid:", 1)[1].split("func commandLineIndicatesDesktopStream", 1)[0]
+    assert "AXUIElementCreateApplication(pid)" in window_titles
+    assert "kAXWindowsAttribute" in window_titles and "kAXTitleAttribute" in window_titles
+    assert "AXUIElementSetMessagingTimeout" in window_titles
     assert "processCommandLine(pid:" in local_moonlight
     assert "commandLineIndicatesDesktopStream" in local_moonlight
     assert "installViaHomebrew" in local_moonlight
@@ -829,7 +836,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "toggleMoonlightDesktopSession" in view_model
     assert "ensureMoonlightDesktopVisible" in view_model
     assert "stopMoonlightDesktopSession" in view_model
-    assert "if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopSession" in view_model
+    session_refresh = view_model.split("func refreshMoonlightSessionSnapshot()", 1)[1].split("func refreshMoonlightSnapshot()", 1)[0]
+    assert "manualStreamWindowTitle: moonlightSnapshot.manualStreamWindowTitle" in session_refresh
+    ensure_moonlight = view_model.split("private func ensureMoonlightDesktopVisible", 1)[1].split("private func stopMoonlightDesktopSession", 1)[0]
+    assert ensure_moonlight.index("moonlightSessionSnapshot.hasUnconfirmedSession") < ensure_moonlight.index("LocalMoonlightManager.startDesktopStream(")
+    assert "terminateRunningApplications" not in ensure_moonlight
     assert "await prepareMoonlightAutoWake(action: .streamOnly, observation: observation)" in view_model
     assert "hostAvailabilityState == .online" in view_model
     assert "if pendingMoonlightWakeAction != nil { return true }" in view_model
@@ -852,11 +863,21 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     veto = "guard observation.shouldWake, latestObservation.shouldWake else"
     assert wake_moonlight.index(veto) < wake_moonlight.index("await localWake()")
     assert "observation.apollo == .identityMismatch || latestObservation.apollo == .identityMismatch" in wake_moonlight.split(veto, 1)[0]
-    stop_moonlight = view_model.split("private func stopMoonlightDesktopSession()", 1)[1].split("private func focusMoonlightOnPreferredScreen()", 1)[0]
-    assert stop_moonlight.index("let applications = LocalMoonlightManager.runningApplications()") < stop_moonlight.index("await LocalMoonlightManager.quit(")
-    assert "await LocalMoonlightManager.terminateRunningApplications(applications)" in stop_moonlight
+    stop_moonlight = view_model.split("private func stopMoonlightDesktopSession()", 1)[1].split("private func focusMoonlightOnPreferredScreen(", 1)[0]
+    assert stop_moonlight.index("LocalMoonlightManager.runningApplications()") < stop_moonlight.index("await LocalMoonlightManager.quit(")
+    before_quit, after_quit = stop_moonlight.split("await LocalMoonlightManager.quit(", 1)
+    assert "streamEvidenceByPID" in before_quit
+    assert "let target = moonlightSnapshot.targetHost" in before_quit
+    assert "let installation = moonlightSnapshot.installation" in before_quit
+    assert "evidence[$0.processIdentifier] == .commandLine" in before_quit
+    assert "evidence[$0.processIdentifier] == .windowTitle" in before_quit
+    before_local_terminate = after_quit.split("await LocalMoonlightManager.terminateRunningApplications(cliApplications)", 1)[0]
+    assert "moonlightSnapshot.targetHost == target" in before_local_terminate
+    assert "moonlightSnapshot.installation == installation" in before_local_terminate
+    assert "await LocalMoonlightManager.terminateRunningApplications(cliApplications)" in after_quit
+    assert "await LocalMoonlightManager.terminateRunningApplications(applications)" not in stop_moonlight
     assert "원격 세션 종료 여부는 미확인입니다" in stop_moonlight
-    assert "!terminate.succeeded || quit?.succeeded != true" in stop_moonlight
+    assert "terminate?.succeeded == false || quit?.succeeded != true" in stop_moonlight
     assert "Moonlight 처리 중" in app
     assert "viewModel.moonlightFooterActionFailed" in app
     assert "viewModel.moonlightFooterHelp" in app
