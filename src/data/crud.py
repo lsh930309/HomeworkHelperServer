@@ -5,7 +5,13 @@ from src.data import schemas
 from src.data import beholder
 from src.data.data_models import normalize_sidebar_mode, SIDEBAR_MODE_DISABLED, SIDEBAR_MODE_VALUES
 from src.utils.app_paths import validate_capture_output_path
-from src.utils.resource_tracking import is_nikke_outpost_resource, predict_nikke_outpost_percent, predict_stamina_value
+from src.utils.resource_tracking import (
+    STAMINA_RECOVERY_SECONDS_PER_UNIT,
+    clamp_percent,
+    predict_stamina_value,
+    resource_definition,
+    resource_recovery_delta,
+)
 from typing import Any, Optional
 from pathlib import Path
 import re
@@ -155,12 +161,24 @@ def update_process(
         if actor == "process_editor":
             for runtime_field in beholder.PROCESS_RUNTIME_FIELDS:
                 update_data.pop(runtime_field, None)
+        previous_identity = (db_process.resource_provider, db_process.resource_key, db_process.hoyolab_game_id)
+        next_identity = tuple(update_data.get(field, getattr(db_process, field))
+                              for field in ("resource_provider", "resource_key", "hoyolab_game_id"))
+        reset_fields = set()
+        if previous_identity != next_identity:
+            reset_fields = {"resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max"}
+            if any(
+                definition is not None and definition.unit == "count"
+                for definition in (resource_definition(*previous_identity[:2]), resource_definition(*next_identity[:2]))
+            ):
+                reset_fields.update({"resource_percent", "resource_updated_at", "resource_status"})
+            update_data.update({field: None for field in reset_fields})
         changed = {key for key, value in update_data.items() if hasattr(db_process, key) and getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
-            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: beholder.PROCESS_EDITOR_FIELDS - {"id"}},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: (beholder.PROCESS_EDITOR_FIELDS - {"id"}) | reset_fields},
             evidence={
                 "changed_fields": sorted(changed),
                 "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
@@ -177,6 +195,98 @@ def update_process(
         db.refresh(db_process)
     return db_process
 
+def configure_wuwa_link(
+    db: Session, selected_resource_key: str | None = None, *, migrate: bool = False, config=None,
+) -> dict[str, Any]:
+    """명시적 계정 저장/구버전 이동. GUI 없이도 같은 보호·백업 경계로 실행한다."""
+    from src.utils.resource_tracking import WUWA_PROVIDER, WUWA_WAVEPLATE_RESOURCE_KEY, wuwa_role_id
+    from src.utils.wuwa_config import WuwaConfig
+
+    config = config if config is not None else WuwaConfig()
+    if not migrate and selected_resource_key is not None and wuwa_role_id(selected_resource_key) is None:
+        raise ValueError("연결할 명조 계정 정보가 올바르지 않습니다.")
+
+    config_written = False
+    try:
+        # 연결 선택과 이전 수량 초기화를 자원 관측 writer와 직렬화한다.
+        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        existed = config.exists()
+        previous_account = config.load_selected_resource_key()
+        rows = db.query(models.Process).filter(models.Process.resource_provider == WUWA_PROVIDER).all()
+        candidates = {row.resource_key for row in rows if wuwa_role_id(row.resource_key) is not None}
+        if migrate:
+            selected_resource_key = previous_account if existed else next(iter(candidates)) if len(candidates) == 1 else None
+
+        changed_rows = []
+        normalized_count = cleared_count = 0
+        quantity_fields = {"resource_percent", "resource_updated_at", "resource_status", "resource_label",
+                           "resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max"}
+        for row in rows:
+            legacy_account = row.resource_key if wuwa_role_id(row.resource_key) is not None else None
+            if legacy_account is None and row.resource_key != WUWA_WAVEPLATE_RESOURCE_KEY:
+                continue
+            values = {"resource_key": WUWA_WAVEPLATE_RESOURCE_KEY}
+            account_for_values = legacy_account if legacy_account is not None else previous_account
+            if selected_resource_key is None or account_for_values != selected_resource_key:
+                values.update({field: None for field in quantity_fields})
+            changed = {field for field, value in values.items() if getattr(row, field) != value}
+            if not changed:
+                continue
+            operation = beholder.BeholderOperation(
+                kind="wuwa_link_migration" if migrate else "wuwa_link_update", actor="resource_settings",
+                allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
+                allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"resource_key"} | quantity_fields},
+                evidence={"changed_fields": sorted(changed), "context": {"process_id": row.id}},
+            )
+            beholder.guard_process_update(db, row, values, operation, changed)
+            _backup_model_snapshot_or_raise(row, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation.kind)
+            normalized_count += int("resource_key" in changed)
+            cleared_count += int(bool(changed & quantity_fields))
+            changed_rows.append((row, values))
+
+        write_config = not existed or previous_account != selected_resource_key
+        for row, values in changed_rows:
+            for field, value in values.items():
+                setattr(row, field, value)
+        db.flush()
+        if write_config:
+            if not config.save_account(selected_resource_key):
+                raise ValueError("명조 연결 설정을 저장하지 못했습니다. 기존 데이터를 유지했습니다.")
+            config_written = True
+        db.commit()
+    except Exception:
+        try:
+            if config_written:
+                restored = config.save_account(previous_account) if existed else config.remove_created_account()
+                if not restored:
+                    raise RuntimeError("명조 연결 저장에 실패했고 이전 연결도 복원하지 못했습니다. 앱을 종료한 뒤 복구가 필요합니다.") from None
+        finally:
+            db.rollback()
+        raise
+    return {"connected": selected_resource_key is not None, "migrated": bool(migrate and not existed),
+            "selection_required": selected_resource_key is None and len(candidates) > 1,
+            "normalized_count": normalized_count, "cleared_count": cleared_count}
+
+
+def _count_observation_matches_projection(
+    base_count: int | None,
+    maximum: int | None,
+    base_timestamp: float | None,
+    observed_count: int | None,
+    observed_at: float | None,
+    *,
+    recovery_seconds_per_unit: int,
+) -> bool:
+    # 줄어든 상한 밖의 기존 기준 수량이나 유효하지 않은 새 관측은 그대로 검증한다.
+    return (
+        base_count is not None and maximum is not None and base_count <= maximum and base_timestamp is not None
+        and observed_count is not None and observed_at is not None and math.isfinite(observed_at) and observed_at >= 0
+        and predict_stamina_value(
+            base_count, maximum, base_timestamp, now=observed_at, recovery_seconds_per_unit=recovery_seconds_per_unit,
+        ) == observed_count
+    )
+
+
 def _stamina_observation_values(
     process: models.Process,
     current: int | None,
@@ -186,19 +296,12 @@ def _stamina_observation_values(
     """Keep the recovery anchor when the observed count matches its projection."""
     values = {"stamina_current": current, "stamina_max": maximum, "stamina_updated_at": observed_at}
     values = {key: value for key, value in values.items() if value is not None}
-    if (
-        current is not None and observed_at is not None
-        and math.isfinite(observed_at) and observed_at >= 0
-        and process.stamina_updated_at is not None
+    if _count_observation_matches_projection(
+        process.stamina_current, maximum if maximum is not None else process.stamina_max,
+        process.stamina_updated_at, current, observed_at, recovery_seconds_per_unit=STAMINA_RECOVERY_SECONDS_PER_UNIT,
     ):
-        prediction_maximum = maximum if maximum is not None else process.stamina_max
-        predicted = predict_stamina_value(
-            process.stamina_current, prediction_maximum, process.stamina_updated_at, now=observed_at,
-        )
-        # A reduced maximum cannot keep a stored base outside the new valid range.
-        if predicted == current and process.stamina_current <= prediction_maximum:
-            values.pop("stamina_current", None)
-            values.pop("stamina_updated_at", None)
+        values.pop("stamina_current", None)
+        values.pop("stamina_updated_at", None)
     return values
 
 
@@ -208,24 +311,50 @@ def _resource_observation_values(
     observed_at: float | None,
     status: str | None,
     label: str | None,
+    *,
+    resource_current: int | None = None,
+    resource_max: int | None = None,
+    resource_reserve_current: int | None = None,
+    resource_reserve_max: int | None = None,
 ) -> dict[str, Any]:
     """Store metadata independently from the successful value's recovery anchor."""
     values = {"resource_status": status, "resource_label": label}
     values = {key: value for key, value in values.items() if value is not None}
-    if percent is None or status not in (None, "ok"):
+    if status not in (None, "ok"):
         return values
-    is_nikke = is_nikke_outpost_resource(process.resource_provider, process.resource_key)
-    # Preserve invalid input for the existing Beholder guard rather than rounding it into range.
-    observed_percent = round(float(percent), 1) if is_nikke and 0 <= float(percent) <= 100 else percent
+    definition = resource_definition(process.resource_provider, process.resource_key)
+    if definition is not None and definition.unit == "count":
+        if resource_current is None or resource_max is None:
+            return values
+        values.update(
+            resource_current=resource_current, resource_max=resource_max,
+            resource_reserve_current=resource_reserve_current, resource_reserve_max=resource_reserve_max,
+            resource_percent=None, resource_label=None, resource_updated_at=observed_at,
+        )
+        if _count_observation_matches_projection(
+            process.resource_current, resource_max, process.resource_updated_at, resource_current, observed_at,
+            recovery_seconds_per_unit=definition.recovery_seconds_per_unit,
+        ):
+            values.pop("resource_current")
+            values.pop("resource_updated_at")
+        return values
+    if percent is None:
+        return values
+    full_recovery_seconds = definition.full_recovery_seconds if definition is not None else None
+    # 범위를 벗어난 관측이 기존 Beholder 검사를 통과하지 않도록 반올림하지 않는다.
+    observed_percent = round(float(percent), 1) if full_recovery_seconds is not None and 0 <= float(percent) <= 100 else percent
     if (
         observed_at is not None and math.isfinite(observed_at) and observed_at >= 0
         and process.resource_updated_at is not None
     ):
-        predicted = (
-            predict_nikke_outpost_percent(process.resource_percent, process.resource_updated_at, now=observed_at)
-            if is_nikke else process.resource_percent
-        )
-        if predicted is not None and (round(predicted, 1) if is_nikke else predicted) == observed_percent:
+        predicted = process.resource_percent
+        if full_recovery_seconds is not None:
+            predicted = clamp_percent(predicted)
+            if predicted is not None:
+                elapsed = observed_at - process.resource_updated_at
+                recovered = resource_recovery_delta(elapsed, full_recovery_seconds=full_recovery_seconds)
+                predicted = round(clamp_percent(predicted + recovered), 1)
+        if predicted is not None and predicted == observed_percent:
             return values
     values["resource_percent"] = observed_percent
     if observed_at is not None:
@@ -241,19 +370,27 @@ def update_process_stamina(
     stamina_current: int,
     stamina_max: int,
     stamina_updated_at: float,
+    resource_reserve_current: int | None = None,
+    resource_reserve_max: int | None = None,
     actor: str = "runtime_stamina_tracker",
     operation_kind: str = "process_stamina_update",
     override_token: str | None = None,
+    validate_observation=None,
 ):
+    if validate_observation is not None:
+        validate_observation(db)
     db_process = get_process_by_id(db, process_id)
     if db_process:
         update_data = _stamina_observation_values(db_process, stamina_current, stamina_max, stamina_updated_at)
+        # 새 서버 관측에 없는 값은 unknown으로 바꾸고 이전 관측의 초과량을 섞지 않는다.
+        update_data.update(resource_reserve_current=resource_reserve_current, resource_reserve_max=resource_reserve_max)
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
-            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"stamina_current", "stamina_max", "stamina_updated_at"}},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"stamina_current", "stamina_max", "stamina_updated_at",
+                                                              "resource_reserve_current", "resource_reserve_max"}},
             evidence={
                 "changed_fields": sorted(changed),
                 "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
@@ -280,21 +417,31 @@ def update_process_resource(
     resource_updated_at: float | None,
     resource_status: str | None,
     resource_label: str | None = None,
+    resource_current: int | None = None,
+    resource_max: int | None = None,
+    resource_reserve_current: int | None = None,
+    resource_reserve_max: int | None = None,
     actor: str = "resource_tracker",
     operation_kind: str = "process_resource_update",
     override_token: str | None = None,
+    validate_observation=None,
 ):
+    if validate_observation is not None:
+        validate_observation(db)
     db_process = get_process_by_id(db, process_id)
     if db_process:
         update_data = _resource_observation_values(
             db_process, resource_percent, resource_updated_at, resource_status, resource_label,
+            resource_current=resource_current, resource_max=resource_max,
+            resource_reserve_current=resource_reserve_current, resource_reserve_max=resource_reserve_max,
         )
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
-            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"resource_percent", "resource_updated_at", "resource_status", "resource_label"}},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"resource_percent", "resource_updated_at", "resource_status", "resource_label",
+                                                              "resource_current", "resource_max", "resource_reserve_current", "resource_reserve_max"}},
             evidence={
                 "changed_fields": sorted(changed),
                 "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
@@ -1220,71 +1367,38 @@ def get_last_session(db: Session, process_id: str):
 
 
 @db_retry_on_lock
-def update_session_stamina(
-    db: Session,
-    session_id: int,
-    stamina_at_end: int,
-    *,
-    actor: str = "runtime_stamina_tracker",
-    operation_kind: str = "session_stamina_update",
-    override_token: str | None = None,
-) -> bool:
-    """세션의 종료 스태미나 값을 업데이트합니다."""
-    db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
-    if db_session:
-        operation = beholder.BeholderOperation(
-            kind=operation_kind,
-            actor=actor,
-            allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
-            allowed_columns={beholder.PROCESS_SESSIONS_TABLE: {"stamina_at_end"}},
-            evidence={
-                "changed_fields": ["stamina_at_end"],
-                "context": {"session_id": session_id},
-                "proposed_values": {"stamina_at_end": stamina_at_end},
-            },
-            override_token=override_token,
-        )
-        beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
+def apply_session_resource_observation(db: Session, observation, *, validate_observation=None) -> dict:
+    """API가 직접 실행한 관측만 그 관측에 고정된 종료 세션에 적용한다."""
+    from src.core.resource_observation import ResourceObservation
+
+    if not isinstance(observation, ResourceObservation):
+        raise ValueError("세션 보정에는 실제 제공자 관측이 필요합니다.")
+    if validate_observation is not None:
+        validate_observation(db)
+    db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == observation.session_id).first()
+    process = get_process_by_id(db, observation.process_id)
+    values = observation.session_values(process, db_session)
+    operation_kind = "resource_observation_session_correction"
+    operation = beholder.BeholderOperation(
+        kind=operation_kind,
+        actor="resource_observation",
+        allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
+        allowed_columns={beholder.PROCESS_SESSIONS_TABLE: set(values)},
+        evidence={
+            "changed_fields": sorted(values),
+            "context": {"session_id": observation.session_id, "process_id": observation.process_id},
+            "proposed_values": values,
+        },
+    )
+    beholder.guard_process_session_update(db, db_session, set(values), operation, observation=observation)
+    changed = any(getattr(db_session, key) != value for key, value in values.items())
+    if changed:
         _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
-        db_session.stamina_at_end = stamina_at_end
+        for key, value in values.items():
+            setattr(db_session, key, value)
         db.commit()
         db.refresh(db_session)
-        return True
-    return False
-
-
-@db_retry_on_lock
-def update_session_resource(
-    db: Session,
-    session_id: int,
-    resource_percent_at_end: float,
-    *,
-    actor: str = "resource_slow_followup",
-    operation_kind: str = "resource_session_percent_rewrite",
-    override_token: str | None = None,
-) -> bool:
-    """세션의 종료 외부 리소스 백분율을 업데이트합니다."""
-    db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
-    if db_session:
-        operation = beholder.BeholderOperation(
-            kind=operation_kind,
-            actor=actor,
-            allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
-            allowed_columns={beholder.PROCESS_SESSIONS_TABLE: {"resource_percent_at_end"}},
-            evidence={
-                "changed_fields": ["resource_percent_at_end"],
-                "context": {"session_id": session_id},
-                "proposed_values": {"resource_percent_at_end": resource_percent_at_end},
-            },
-            override_token=override_token,
-        )
-        beholder.guard_process_session_update(db, db_session, {"resource_percent_at_end"}, operation)
-        _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
-        db_session.resource_percent_at_end = resource_percent_at_end
-        db.commit()
-        db.refresh(db_session)
-        return True
-    return False
+    return values
 
 
 @db_retry_on_lock

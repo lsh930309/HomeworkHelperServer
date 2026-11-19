@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("resource_test_isolation")
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
@@ -69,8 +71,8 @@ def manual(request, monkeypatch, app):
     coordinator = Coordinator()
     parent = QWidget()
     parent.data_manager = Manager()
-    parent._hoyolab_reconcile = coordinator
-    parent._nikke_resource_reconcile = coordinator
+    parent._resource_reconcilers = {"hoyolab": coordinator, "nikke_blablalink": coordinator}
+    from src.utils.resource_tracking import GameResourceSnapshot
     observation = SimpleNamespace(
         current=120, max=240, recover_time=720, full_time=None,
         percent=35.0, status="ok", label="전초기지 방어 보상", message="",
@@ -91,7 +93,10 @@ def manual(request, monkeypatch, app):
 
         def get_outpost_storage(self):
             provider_calls.append("nikke_outpost_storage")
-            return observation
+            return GameResourceSnapshot(
+                "nikke_blablalink", "nikke_outpost_storage", observation.label,
+                observation.percent, observation.status, observation.updated_at,
+            )
 
     service = Service()
     monkeypatch.setattr(hoyolab_module, "get_hoyolab_service", lambda: service)
@@ -109,8 +114,9 @@ def manual(request, monkeypatch, app):
             if provider == "hoyolab" else
             {"id": "game", "resource_percent": 25.0, "resource_updated_at": _TIMESTAMP_BASE + 1000.0, "resource_status": "ok", "resource_label": observation.label}
         )
+        row = {**process.to_dict(), **row}
         payload = {
-            "process_id": "game", "stamina" if provider == "hoyolab" else "snapshot": observation,
+            "process_id": "game", "observation_succeeded": True, "provider_status": "ok",
             "fetched_at": _TIMESTAMP_BASE + 1300.0, "process_row": row,
         }
         payload.update(overrides)
@@ -230,12 +236,13 @@ def test_lookup_success_and_save_failure_are_reported_separately(manual):
     before = state.process.to_dict()
     state.dialog._test_stamina_connection()
     state.coordinator.requests[0][1](state.result(process_row=None, process_error="DB unavailable"))
-    assert "저장 실패: DB unavailable" in state.popups[0][1]
+    assert state.popups[0][0] == "저장 실패"
+    assert "DB unavailable" in state.popups[0][1]
     assert state.process.to_dict() == before
     assert state.dialog.stamina_test_button.isEnabled()
 
 
-@pytest.mark.parametrize("failed_owner", [None, "hoyo", "nikke", "checkin", "work"])
+@pytest.mark.parametrize("failed_owner", [None, "media", "hoyo", "nikke", "wuwa", "checkin", "work"])
 def test_restore_admission_requires_all_writer_owners_drained(failed_owner, monkeypatch):
     import threading
     import src.gui.main_window as main_window
@@ -256,9 +263,11 @@ def test_restore_admission_requires_all_writer_owners_drained(failed_owner, monk
         _timer_registry=SimpleNamespace(suspend=lambda *args: calls.append(("timers", args))),
         _work_coordinator=Owner("work"),
         _lifecycle_shutdown_event=threading.Event(),
-        _hoyolab_reconcile=Owner("hoyo"),
-        _nikke_resource_reconcile=Owner("nikke"),
+        _resource_reconcilers={
+            "hoyolab": Owner("hoyo"), "nikke_blablalink": Owner("nikke"), "wuwa": Owner("wuwa"),
+        },
         _daily_checkin=Owner("checkin"),
+        _stop_media_center=lambda *args: Owner("media").shutdown(*args),
     )
     window._work_coordinator.invalidate_telemetry = lambda: calls.append(("invalidate",))
     allowed = main_window.MainWindow.prepare_database_restore(window)
@@ -266,17 +275,17 @@ def test_restore_admission_requires_all_writer_owners_drained(failed_owner, monk
     assert window._beholder_restore_runtime_suspended
     assert window._lifecycle_shutdown_event.is_set()
     assert window.process_monitor.active_monitored_processes == {}
-    assert [item[0] for item in calls] == ["timers", "invalidate", "hoyo", "nikke", "checkin", "work"]
+    assert [item[0] for item in calls] == ["timers", "invalidate", "media", "hoyo", "nikke", "wuwa", "checkin", "work"]
     main_window.MainWindow.prepare_database_restore(window)
     assert len([item for item in calls if item[0] == "timers"]) == 1
 
 
-def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitted(manual, monkeypatch):
+def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitted(manual, monkeypatch, request):
     import threading
     import time
     from src.core.daily_checkin_coordinator import DailyCheckInCoordinator
     from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
-    from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
+    from src.core.resource_reconcile import ResourceReconcileCoordinator
     from src.core.process_monitor import ProcessLifecycleEvent
     from src.gui.work_coordinator import GuiWorkCoordinator
     import src.gui.main_window as main_window
@@ -310,12 +319,21 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
     service = SlowService()
     monkeypatch.setattr(hoyolab_module, "get_hoyolab_service", lambda: service)
     monkeypatch.setattr(nikke_module, "get_nikke_service", lambda: service)
-    resource_type = HoYoStaminaReconcileCoordinator if state.provider == "hoyolab" else NikkeResourceReconcileCoordinator
-    resource = resource_type(state.parent.data_manager, monitor)
-    transport = SimpleNamespace(
-        update_process_stamina=lambda *args: writes.append("stamina"),
-        update_process_resource=lambda *args: writes.append("resource"),
-    )
+    if state.provider == "hoyolab":
+        resource = HoYoStaminaReconcileCoordinator(state.parent.data_manager, monitor)
+    else:
+        resource = ResourceReconcileCoordinator(
+            state.parent.data_manager, monitor, provider="nikke_blablalink",
+            get_service=lambda: service, default_game_id="nikke",
+        )
+
+    def observe_resource(pid, sid=None, *, expected_target=None):
+        resource_started.set()
+        assert release.wait(2)
+        writes.append("resource")
+        return {"process_id": pid, "observation_succeeded": False}
+
+    transport = SimpleNamespace(observe_process_resource=observe_resource)
     resource._transport = transport
     assert resource.request_refresh("game")
     resource._start_attempt(resource._jobs[("game", None)])
@@ -334,6 +352,16 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
     assert checkin_started.wait(2)
 
     work = GuiWorkCoordinator(max_threads=1)
+    import weakref
+    resource_ref = weakref.ref(resource)
+    def cleanup_workers():
+        release.set()
+        remaining_resource = resource_ref()
+        if remaining_resource is not None:
+            remaining_resource.shutdown(2000)
+        checkin.shutdown(2000)
+        work.shutdown(deadline_seconds=2)
+    request.addfinalizer(cleanup_workers)
     window = SimpleNamespace(
         _beholder_restore_runtime_suspended=False,
         process_monitor=monitor,
@@ -344,10 +372,14 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
         _lifecycle_session_ids={},
         _app_instance_id="test-app",
         _daily_checkin=checkin,
+        _stop_media_center=lambda *args: True,
     )
     inactive = SimpleNamespace(shutdown=lambda *args: True)
-    window._hoyolab_reconcile = resource if state.provider == "hoyolab" else inactive
-    window._nikke_resource_reconcile = resource if state.provider == "nikke" else inactive
+    resource_provider = "hoyolab" if state.provider == "hoyolab" else "nikke_blablalink"
+    window._resource_reconcilers = {
+        provider: resource if provider == resource_provider else inactive
+        for provider in ("hoyolab", "nikke_blablalink", "wuwa")
+    }
 
     def start_session(**kwargs):
         lifecycle_started.set()
@@ -362,7 +394,6 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
     )
     event = ProcessLifecycleEvent(
         process_id="game", process_name="게임", session_id=11, timestamp=_TIMESTAMP_BASE + 1000,
-        stamina_tracking_enabled=False, hoyolab_game_id=None,
     )
     start = main_window._LifecycleCommand("start", event, 1, _TIMESTAMP_BASE + 1000, "instance")
     stop = main_window._LifecycleCommand("stop", event, 1, _TIMESTAMP_BASE + 1000, "instance")
@@ -383,7 +414,7 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
         QApplication.instance().processEvents()
         time.sleep(0.002)
     assert writes[-1] == "restore"
-    assert sorted(writes[:-1]) == ["checkin", "start"]
+    assert sorted(writes[:-1]) == ["checkin", "resource", "start"]
     assert "queued-stop" not in writes
     assert "queued-runtime" not in writes
 
@@ -391,8 +422,7 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
     # owner/child를 함께 소멸시키면 다음 복구 modal event loop가 충돌한다.
     import gc
     from PySide6.QtCore import QEventLoop, QTimer
-    window._hoyolab_reconcile = inactive
-    window._nikke_resource_reconcile = inactive
+    window._resource_reconcilers[resource_provider] = inactive
     del resource
     gc.collect()
     loop = QEventLoop()

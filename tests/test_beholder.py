@@ -166,7 +166,7 @@ def test_fallback_user_summary_does_not_expose_internal_identity(monkeypatch):
     assert "process_monitor" not in summary
 
 
-def test_beholder_allows_long_session_with_override_token(monkeypatch):
+def test_beholder_allows_long_session_with_override_token(monkeypatch, resource_test_isolation):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
     start = dt.datetime(2026, 1, 1, 0, 0).timestamp()
@@ -285,7 +285,7 @@ def test_runtime_stop_override_allows_retry_timestamp_drift(monkeypatch):
     assert db.query(models.BeholderIncident).one().override_used_at is not None
 
 
-def test_session_end_override_token_covers_later_stamina_guard(monkeypatch):
+def test_session_end_override_token_covers_later_stamina_guard(monkeypatch, resource_test_isolation):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
     start = dt.datetime(2026, 5, 8, 10, 0).timestamp()
@@ -477,7 +477,7 @@ def test_legacy_open_session_duplicate_recommends_abandon_and_start_new(monkeypa
     assert db.query(models.ProcessSession).filter_by(process_id="game-a", end_timestamp=None).count() == 1
 
 
-def test_open_session_recovery_closes_at_last_app_heartbeat(monkeypatch):
+def test_open_session_recovery_closes_at_last_app_heartbeat(monkeypatch, resource_test_isolation):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
     start = dt.datetime(2026, 5, 8, 10, 0).timestamp()
@@ -932,7 +932,7 @@ def test_delete_process_resolution_aborts_when_snapshot_fails(monkeypatch, tmp_p
     assert still_open.session_status == "open"
 
 
-def test_close_at_heartbeat_resolution_aborts_when_session_snapshot_fails(monkeypatch, tmp_path):
+def test_close_at_heartbeat_resolution_aborts_when_session_snapshot_fails(monkeypatch, tmp_path, resource_test_isolation):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
     monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
@@ -1069,7 +1069,7 @@ def test_shortcut_delete_aborts_when_snapshot_fails(monkeypatch, tmp_path):
     assert db.query(models.WebShortcut).filter_by(id=shortcut.id).one_or_none() is not None
 
 
-def test_end_session_aborts_when_snapshot_fails(monkeypatch, tmp_path):
+def test_end_session_aborts_when_snapshot_fails(monkeypatch, tmp_path, resource_test_isolation):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
     monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
@@ -1501,69 +1501,17 @@ def test_stamina_refresh_client_uses_hoyolab_specific_patch(monkeypatch):
     assert client.managed_processes == ["fresh-stamina"]
 
 
-def test_resource_session_refresh_client_uses_resource_specific_patch(monkeypatch):
-    from src.api.client import ApiClient
-
-    client = object.__new__(ApiClient)
-    client.base_url = "http://testserver"
-    client._pending_beholder_overrides = {}
-    calls = []
-
-    class _Response:
-        status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {}
-
-    import src.api.client as client_mod
-
-    def _patch(*args, **kwargs):
-        calls.append((args, kwargs))
-        return _Response()
-
-    monkeypatch.setattr(client_mod.requests, "patch", _patch)
-
-    assert client.update_session_resource(7, 12.5) is True
-
-    assert calls[0][0] == ("http://testserver/sessions/7/resource",)
-    assert calls[0][1]["params"] == {"resource_percent_at_end": 12.5}
-    assert calls[0][1]["headers"] == {
-        "X-HH-Beholder-Actor": "resource_slow_followup",
-        "X-HH-Beholder-Operation": "resource_session_percent_rewrite",
-    }
+def test_raw_session_resource_client_writers_are_removed():
+    from src.api.client import ApiClient, BackgroundApiTransport
+    for client_type in (ApiClient, BackgroundApiTransport):
+        assert not hasattr(client_type, "update_session_stamina")
+        assert not hasattr(client_type, "update_session_resource")
 
 
 
-def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatch, tmp_path):
-    SessionLocal = _session_factory(monkeypatch)
-    import src.data.crud as crud_mod
-    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
-    db = SessionLocal()
-    session = models.ProcessSession(
-        process_id="game-a",
-        process_name="Game A",
-        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
-        stamina_at_end=10,
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-
-    try:
-        crud.update_session_stamina(db, session.id, -1)
-        pytest.fail("negative stamina should be blocked")
-    except beholder.BeholderBlocked as exc:
-        assert "invalid_negative_stamina" in exc.incident.risk_factors
-
-    db.expire_all()
-    unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
-    assert unchanged.stamina_at_end == 10
 
 
-def test_end_session_blocks_negative_stamina_and_keeps_session_open(monkeypatch, tmp_path):
+def test_end_session_blocks_negative_stamina_and_keeps_session_open(monkeypatch, tmp_path, resource_test_isolation):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
     monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
@@ -2010,129 +1958,38 @@ def test_open_sessions_context_without_target_matches_nothing(monkeypatch):
     assert db.query(models.ProcessSession).filter(models.ProcessSession.end_timestamp.is_(None)).count() == 2
 
 
-def test_hoyolab_followup_session_stamina_rewrite_is_allowed(monkeypatch, tmp_path):
+@pytest.mark.parametrize("kind,actor,field,value", [
+    ("hoyolab_session_stamina_rewrite", "hoyolab_slow_followup", "stamina_at_end", 92),
+    ("resource_session_percent_rewrite", "resource_slow_followup", "resource_percent_at_end", 12.5),
+])
+@pytest.mark.parametrize("age", [60, 601])
+def test_closed_session_raw_resource_write_requires_observation_even_with_legacy_actor(
+    monkeypatch, tmp_path, resource_test_isolation, kind, actor, field, value, age,
+):
     SessionLocal = _session_factory(monkeypatch)
-    import src.data.crud as crud_mod
-    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
-    db = SessionLocal()
-    session = models.ProcessSession(
-        process_id="game-a",
-        process_name="Game A",
-        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
-        end_timestamp=dt.datetime(2026, 5, 8, 13, 0).timestamp(),
-        session_duration=3600,
-        stamina_at_end=100,
-        session_status="closed",
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-
-    assert crud.update_session_stamina(
-        db,
-        session.id,
-        92,
-        actor="hoyolab_slow_followup",
-        operation_kind="hoyolab_session_stamina_rewrite",
-    ) is True
-
-    db.expire_all()
-    updated = db.query(models.ProcessSession).filter_by(id=session.id).one()
-    assert updated.stamina_at_end == 92
-    assert beholder.active_incidents(db) == []
+    monkeypatch.setattr(crud, "base_dir", str(tmp_path))
+    end = dt.datetime(2026, 11, 17, 10, 0).timestamp()
+    with SessionLocal() as db:
+        session = models.ProcessSession(process_id="game", process_name="Game",
+            start_timestamp=end - 3600, end_timestamp=end, session_duration=3600,
+            stamina_at_end=100, resource_percent_at_end=10, session_status="closed")
+        db.add(session)
+        db.commit()
+        monkeypatch.setattr(crud.time, "time", lambda: end + age)
+        operation = beholder.BeholderOperation(kind=kind, actor=actor,
+            allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
+            allowed_columns={beholder.PROCESS_SESSIONS_TABLE: {field}},
+            evidence={"changed_fields": [field], "proposed_values": {field: value}})
+        with pytest.raises(ValueError, match="관측"):
+            beholder.guard_process_session_update(db, session, {field}, operation)
+        db.expire_all()
+        assert getattr(db.get(models.ProcessSession, session.id), field) == (100 if field == "stamina_at_end" else 10)
 
 
-def test_hoyolab_followup_session_stamina_rewrite_aborts_when_snapshot_fails(monkeypatch, tmp_path):
-    SessionLocal = _session_factory(monkeypatch)
-    import src.data.crud as crud_mod
-    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
-    db = SessionLocal()
-    session = models.ProcessSession(
-        process_id="game-a",
-        process_name="Game A",
-        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
-        end_timestamp=dt.datetime(2026, 5, 8, 13, 0).timestamp(),
-        session_duration=3600,
-        stamina_at_end=100,
-        session_status="closed",
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    monkeypatch.setattr(crud_mod, "backup_model_snapshot", lambda *args, **kwargs: None)
-
-    with pytest.raises(ValueError, match="백업"):
-        crud.update_session_stamina(
-            db,
-            session.id,
-            92,
-            actor="hoyolab_slow_followup",
-            operation_kind="hoyolab_session_stamina_rewrite",
-        )
-
-    db.rollback()
-    db.expire_all()
-    unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
-    assert unchanged.stamina_at_end == 100
 
 
-def test_resource_followup_session_percent_rewrite_is_allowed(monkeypatch, tmp_path):
-    SessionLocal = _session_factory(monkeypatch)
-    import src.data.crud as crud_mod
-    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
-    db = SessionLocal()
-    session = models.ProcessSession(
-        process_id="nikke",
-        process_name="NIKKE",
-        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
-        end_timestamp=dt.datetime(2026, 5, 8, 13, 0).timestamp(),
-        session_duration=3600,
-        resource_percent_at_end=10.0,
-        session_status="closed",
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-
-    assert crud.update_session_resource(
-        db,
-        session.id,
-        12.5,
-        actor="resource_slow_followup",
-        operation_kind="resource_session_percent_rewrite",
-    ) is True
-
-    db.expire_all()
-    updated = db.query(models.ProcessSession).filter_by(id=session.id).one()
-    assert updated.resource_percent_at_end == 12.5
-    assert beholder.active_incidents(db) == []
 
 
-def test_resource_session_percent_range_is_guarded(monkeypatch, tmp_path):
-    SessionLocal = _session_factory(monkeypatch)
-    import src.data.crud as crud_mod
-    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
-    db = SessionLocal()
-    session = models.ProcessSession(
-        process_id="nikke",
-        process_name="NIKKE",
-        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
-        end_timestamp=dt.datetime(2026, 5, 8, 13, 0).timestamp(),
-        session_duration=3600,
-        resource_percent_at_end=10.0,
-        session_status="closed",
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-
-    with pytest.raises(beholder.BeholderBlocked) as exc_info:
-        crud.update_session_resource(db, session.id, 120.0)
-
-    assert "invalid_resource_percent" in exc_info.value.incident.risk_factors
-    db.expire_all()
-    unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
-    assert unchanged.resource_percent_at_end == 10.0
 
 
 def test_process_monitor_does_not_persist_stop_state_after_blocked_close(monkeypatch):

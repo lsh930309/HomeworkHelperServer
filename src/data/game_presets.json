@@ -117,10 +117,10 @@
             "stamina_max_default": null,
             "stamina_recovery_minutes": null,
             "launcher_patterns": null,
-            "resource_tracking_enabled": false,
-            "resource_provider": null,
+            "resource_tracking_enabled": true,
+            "resource_provider": "wuwa",
             "resource_key": null,
-            "resource_label": null
+            "resource_label": "웨이브플레이트"
         }
     ]
 }

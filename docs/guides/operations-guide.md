@@ -14,6 +14,7 @@
 | `tools/windows_session_probe.py` | 일회성 InteractiveToken에서 비활성 데스크톱 관찰 또는 설치에 필요한 OBS 정상 종료. SYSTEM 토큰 복제·강제 종료 없음 |
 | `tools/windows_media_probe.py` | 설치 전 미디어·음량·포커스 검수와 격리된 실제 사이드바 렌더링. 운영 DB는 표시 필드만 읽고 조작은 명시한 시나리오만 수행 |
 | `tools/ssh_host_testbench.py` | 설치 패키지 shadow copy의 격리 API 시험. 운영 설치·서비스·전원·게임 시험에 사용하지 않음 |
+| `tools/wuwa_resource_testbench.py` | 명조 글로벌 아시아 런처 인증을 호스트 안에서만 사용해 일반·초과 자원 필드를 1회 읽고 허용한 수치·상태만 출력 |
 | `tools/verify_remote_controller.py`, `tools/smoke_*.py` | 기존 원격 계약 자동 검증. 변경 범위에 필요한 검사만 선택 |
 | `tools/diagnose_button.py` | 명시적으로 요청된 Windows 입력 이벤트 조사. 일반 진단에서 자동 실행하지 않음 |
 | `tools/validate_commit_message.py` | 한국어 계층형 메시지 검사 |
@@ -141,6 +142,35 @@ inspect 결과에는 로컬 HEAD·실제 공개 브랜치 HEAD와 Windows source
 service.log가 있다고 추측하지 않는다.
 문자열 필터는 과거 오류도 찾을 수 있다. 반환된 로그 시각을 현재 상태와 구분하고 최근 상태는
 해당 날짜를 contains로 지정하거나 현재 실행 시각 이후의 행에서 확인한다.
+
+### 명조 글로벌 아시아 자원 읽기 시험
+
+제품의 명조 연동은 Windows 공식 런처에 로그인한 뒤 자원/출석 관리 → 계정/토큰 →
+명조 / 글로벌 아시아에서 `런처에서 계정 확인` → 계정 선택 → `선택 계정 연결`로 설정한다.
+연결 변경과 `연동 해제`도 같은 관리 화면에서 수행한다. 게임 편집에서는 추적 사용 여부와
+명조 자원만 선택하며, 저장 후 현재 자원을 조회한다. 이미 추적 중인 게임은 계정 연결을
+확정하면 바로 갱신되므로 게임 편집을 다시 저장하지 않는다. 이전 버전의 게임별 계정 선택은
+기존 게임 ID와 세션 기록을 유지한 채 제공자 설정으로 옮긴다. 해제는 앱 연결만 끊고 공식
+런처의 로그인 캐시는 유지한다.
+
+기본 실행은 캐시·네트워크·SSH에 접근하지 않는 dry-run이다. 실계정 읽기 시험이 승인된
+경우에만 `--live`를 붙이고, 기존 SSH 대상·사용자와 런처 캐시를 소유한 Windows 사용자를
+`--host`, `--user`, `--owner`로 명시한다. 이 도구는 위 공용 SSH 경계와 고정 저장소의
+`.venv` Python을 재사용하며 동일 소스를 stdin으로 전달한다. 원격 파일·checkout·예약 작업을
+만들지 않고, 지정 사용자의 SID·프로필에서 Roaming AppData를 확인한다.
+
+```bash
+./.venv/bin/python tools/wuwa_resource_testbench.py
+./.venv/bin/python tools/wuwa_resource_testbench.py --live \
+  --host "$HOST_TARGET" --user "$SSH_USER" --owner "$WINDOWS_OWNER"
+```
+
+실행은 고정 글로벌 서버의 계정 조회·아시아 자원 조회 두 번으로 제한한다. 여러 캐시 계정이
+있으면 `account_selection_required`로 중단하며 `--account-index`에 1부터 시작하는 번호를
+명시해야 한다. 각 HTTPS 대기 제한은 기본 10초(`--timeout`, 1~20초)이며 자동 재시도·로그인·
+토큰 갱신·게임 조작·DB/캐시 저장은 하지 않는다. 인증값·UID·닉네임·캐시 경로·원본 응답·
+전송 예외는 출력하지 않는다. 성공은 일반·저장 자원의 수량·최대치·회복 관련 시간 6개 필드가
+모두 숫자로 확인된 경우이며, 회복 시간의 단위·응답 신선도·인증 수명까지 검증했다는 뜻은 아니다.
 
 ## 소스 준비·빌드·설치
 
@@ -290,6 +320,9 @@ Windows checkout의 `artifacts/host-operations-build.log`에 전체 출력을 �
 
 install은 release·서명/payload·DB·게임·OBS 출력·지정 사용자 세션을 확인하고 기존 writer로 정상
 백업한 뒤에만 종료·Setup·일반 사용자 앱 시작을 수행한다. 설치 전후 파일·서명·API·안전한 설정을 대조한다.
+명조 구버전 연결 정보의 오프라인 복구까지 승인받은 경우에만 `install --repair-wuwa-link`를
+사용한다. 수정본 설치와 앱 실행 사이의 복구·보존 확인 순서는
+[Windows 설치 가이드](windows-package-install-guide.md#3-setup-적용)를 따른다.
 설치는 Setup, 자동 시작·OBS 준비는 기존 제품이 소유한다. 녹화·방송·가상 카메라·활성 리플레이·상태
 미확인이면 중단한다. 강제 종료·자동 재시도·전원 조작은 포함하지 않는다.
 

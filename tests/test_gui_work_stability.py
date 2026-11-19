@@ -326,8 +326,6 @@ def _lifecycle_command():
         process_name="Game A",
         session_id=None,
         timestamp=100.0,
-        stamina_tracking_enabled=False,
-        hoyolab_game_id=None,
         pid=321,
     )
     return _LifecycleCommand("start", event, 321, 100.0, "instance:game-a:321:100.000000")
@@ -608,14 +606,8 @@ def test_stop_persistence_keeps_cached_resource_baseline() -> None:
         process_name="Game A",
         session_id=77,
         timestamp=200.0,
-        stamina_tracking_enabled=True,
-        hoyolab_game_id="genshin",
         pid=321,
         stamina_at_end=45,
-        stamina_max=200,
-        resource_tracking_enabled=True,
-        resource_provider="nikke_blablalink",
-        resource_key="nikke_outpost_storage",
         resource_percent_at_end=12.5,
     )
     command = _LifecycleCommand("stop", event, 321, 100.0, "instance:game-a:321:100.000000")
@@ -693,7 +685,7 @@ def test_shell_thumbnail_balances_com_on_early_return(monkeypatch) -> None:
 
 def test_saved_stop_survives_last_played_failure_and_starts_followup_once():
     from src.gui.main_window import MainWindow, _LifecycleCommand
-    event = ProcessLifecycleEvent(process_id="game-a", process_name="Game", session_id=77, timestamp=200.0, stamina_tracking_enabled=False, hoyolab_game_id=None)
+    event = ProcessLifecycleEvent(process_id="game-a", process_name="Game", session_id=77, timestamp=200.0)
     command = _LifecycleCommand("stop", event, 321, 100.0, "runtime-game-a")
     calls = []
     class Transport:
@@ -709,8 +701,10 @@ def test_saved_stop_survives_last_played_failure_and_starts_followup_once():
         _lifecycle_session_ids={}, _lifecycle_shutdown_event=SimpleNamespace(is_set=lambda:False, wait=lambda _:False),
         process_monitor=SimpleNamespace(active_monitored_processes={}),
         data_manager=SimpleNamespace(managed_processes=[]),
-        _hoyolab_reconcile=SimpleNamespace(handle_process_stopped=lambda e:calls.append(("hoyo",e.session_id))),
-        _nikke_resource_reconcile=SimpleNamespace(handle_process_stopped=lambda e:calls.append(("nikke",e.session_id))),
+        _resource_reconcilers={
+            "hoyolab": SimpleNamespace(handle_process_stopped=lambda e: calls.append(("hoyo", e.session_id))),
+            "nikke_blablalink": SimpleNamespace(handle_process_stopped=lambda e: calls.append(("nikke", e.session_id))),
+        },
         _record_status_event=lambda *args:None, update_process_statuses_only=lambda:None,
     )
     result = MainWindow._persist_lifecycle_command(window, command)

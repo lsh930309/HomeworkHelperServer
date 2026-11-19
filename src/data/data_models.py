@@ -4,12 +4,8 @@ import time
 import uuid # 프로세스 ID 생성을 위해 추가
 from typing import List, Optional, Dict, Any, Tuple
 
-from src.utils.resource_tracking import (
-    clamp_percent,
-    is_nikke_outpost_resource,
-    predict_nikke_outpost_percent,
-    predict_stamina_value,
-)
+from src.core.process_progress import calculate_process_progress
+from src.utils.resource_tracking import predict_stamina_value
 
 SIDEBAR_MODE_ALWAYS = "always"
 SIDEBAR_MODE_GAME = "game"
@@ -62,6 +58,10 @@ class ManagedProcess:
                  resource_percent: Optional[float] = None,
                  resource_updated_at: Optional[float] = None,
                  resource_status: Optional[str] = None,
+                 resource_current: Optional[int] = None,
+                 resource_max: Optional[int] = None,
+                 resource_reserve_current: Optional[int] = None,
+                 resource_reserve_max: Optional[int] = None,
                  # 앱 볼륨 제어
                  default_volume: Optional[int] = None,
                  default_muted: bool = False):
@@ -102,6 +102,10 @@ class ManagedProcess:
         self.resource_percent = resource_percent
         self.resource_updated_at = resource_updated_at
         self.resource_status = resource_status
+        self.resource_current = resource_current
+        self.resource_max = resource_max
+        self.resource_reserve_current = resource_reserve_current
+        self.resource_reserve_max = resource_reserve_max
 
         # 앱 볼륨 제어
         self.default_volume = default_volume
@@ -180,11 +184,9 @@ class ManagedProcess:
         """범용 리소스 백분율 반환 (0.0 ~ 100.0)."""
         if not self.is_external_resource_game():
             return None
-        if self.resource_percent is None or self.resource_status not in (None, "ok"):
-            return None
-        if is_nikke_outpost_resource(self.resource_provider, self.resource_key):
-            return predict_nikke_outpost_percent(self.resource_percent, self.resource_updated_at, now=now)
-        return clamp_percent(self.resource_percent)
+        current_dt = datetime.datetime.fromtimestamp(now) if now is not None else None
+        progress = calculate_process_progress(self, current_dt)
+        return progress["percentage"] if progress["status"] == "ok" else None
     
     def get_predicted_stamina(self, *, now: float | None = None) -> Optional[Tuple[int, int]]:
         """현재 시점의 예측 스태미나와 최대치를 반환.

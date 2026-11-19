@@ -61,8 +61,11 @@ from src.core.launch_target import (
 )
 from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
+from src.core.credential_health import PROVIDER_HOYOLAB, PROVIDER_NIKKE_BLABLALINK, PROVIDER_WUWA
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
-from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
+from src.core.process_progress import calculate_process_progress
+from src.core.resource_observation import resource_target
+from src.core.resource_reconcile import ResourceReconcileCoordinator
 from src.core.daily_checkin_coordinator import DailyCheckInCoordinator
 from src.core.process_monitor import (
     ProcessLifecycleEvent,
@@ -83,8 +86,7 @@ from src.gui.widgets_style import (
     CapsuleProgressBar,
     apply_modern_widgets_style,
     apply_widgets_palette,
-    calculate_game_progress,
-    progress_bar_format,
+    resource_gauge_description,
     tint_icon,
     widgets_theme_tokens,
 )
@@ -112,6 +114,7 @@ class _LifecyclePersistenceResult:
 
 
 _GUI_CLEANUP_DEADLINE_SECONDS = 2.0
+_RESOURCE_MONITORING_TIMEZONE = datetime.timezone(datetime.timedelta(hours=9), "KST")
 
 
 class IconDownloader(QThread):
@@ -211,21 +214,26 @@ class MainWindow(QMainWindow):
             QApplication.applicationName(),
             main_window_activated_callback=self.gui_notification_handler.process_system_notification_activation,
         )
-        self._hoyolab_reconcile = HoYoStaminaReconcileCoordinator(
-            self.data_manager,
-            self.process_monitor,
-            self.system_notifier,
-            self,
+        from src.services.nikke import get_nikke_service
+        from src.services.wuwa import get_wuwa_service
+        coordinator_args = self.data_manager, self.process_monitor, self.system_notifier, self
+        self._resource_reconcilers = {
+            PROVIDER_HOYOLAB: HoYoStaminaReconcileCoordinator(*coordinator_args),
+        }
+        for provider, get_service, default_game_id in (
+            (PROVIDER_NIKKE_BLABLALINK, get_nikke_service, "nikke"),
+            (PROVIDER_WUWA, get_wuwa_service, "wuthering_waves"),
+        ):
+            self._resource_reconcilers[provider] = ResourceReconcileCoordinator(
+                *coordinator_args, provider=provider, get_service=get_service,
+                default_game_id=default_game_id,
+            )
+        for coordinator in self._resource_reconcilers.values():
+            coordinator.resource_updated.connect(self.populate_process_list_slot)
+        # 기동한 회차는 기존 startup 조회가 소유한다. 첫 정기 조회는 다음 00/30분이다.
+        self._last_resource_monitoring_slot = self._resource_monitoring_slot(
+            datetime.datetime.now(_RESOURCE_MONITORING_TIMEZONE)
         )
-        self._nikke_resource_reconcile = NikkeResourceReconcileCoordinator(
-            self.data_manager,
-            self.process_monitor,
-            self.system_notifier,
-            self,
-        )
-
-        self._hoyolab_reconcile.resource_updated.connect(self.populate_process_list_slot)
-        self._nikke_resource_reconcile.resource_updated.connect(self.populate_process_list_slot)
 
         self._daily_checkin = DailyCheckInCoordinator(
             self.data_manager,
@@ -465,8 +473,9 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(300, self._reconcile_open_sessions_after_startup)
         QTimer.singleShot(500, self._poll_beholder_incidents)
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
-        QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
-        QTimer.singleShot(1800, self._nikke_resource_reconcile.schedule_startup_refreshes)
+        QTimer.singleShot(1500, self._resource_reconcilers[PROVIDER_HOYOLAB].schedule_startup_refreshes)
+        QTimer.singleShot(1800, self._resource_reconcilers[PROVIDER_NIKKE_BLABLALINK].schedule_startup_refreshes)
+        QTimer.singleShot(2000, self._prepare_wuwa_tracking)
         QTimer.singleShot(2200, self._daily_checkin.schedule_startup_check)
         QTimer.singleShot(800, self._refresh_remote_readiness_indicators)
 
@@ -699,14 +708,14 @@ class MainWindow(QMainWindow):
             entry = active.get(event.process_id)
             if entry is not None and entry.get("runtime_token") == command.runtime_token:
                 entry["session_id"] = value.session_id
-            self._hoyolab_reconcile.handle_process_started(event)
-            self._nikke_resource_reconcile.handle_process_started(event)
+            for coordinator in self._resource_reconcilers.values():
+                coordinator.handle_process_started(event)
         else:
             process = next((item for item in self.data_manager.managed_processes if item.id == event.process_id), None)
             if process is not None and value.last_played_saved:
                 process.last_played_timestamp = event.timestamp
-            self._hoyolab_reconcile.handle_process_stopped(event)
-            self._nikke_resource_reconcile.handle_process_stopped(event)
+            for coordinator in self._resource_reconcilers.values():
+                coordinator.handle_process_stopped(event)
         self.update_process_statuses_only()
 
     def _set_remote_readiness_indicator(self, key: str, color: str, message: str) -> None:
@@ -927,11 +936,12 @@ class MainWindow(QMainWindow):
 
         media = self._stop_media_center(remaining_ms())
         # 아직 외부 응답을 기다리는 writer가 있으면 복구 POST를 허용하지 않는다.
-        hoyo = self._hoyolab_reconcile.shutdown(remaining_ms())
-        nikke = self._nikke_resource_reconcile.shutdown(remaining_ms())
+        resource_results = [
+            coordinator.shutdown(remaining_ms()) for coordinator in self._resource_reconcilers.values()
+        ]
         checkin = self._daily_checkin.shutdown(remaining_ms())
         work = self._work_coordinator.shutdown(deadline_seconds=remaining_ms() / 1000.0)
-        return media and hoyo and nikke and checkin and work
+        return media and all(resource_results) and checkin and work
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -1432,8 +1442,39 @@ class MainWindow(QMainWindow):
         """자원 추적/자동 출석 관리 다이얼로그를 엽니다."""
         dlg = HoYoLabSettingsDialog(self)
         dlg.exec()
-        self._hoyolab_reconcile.cancel_changed_targets()
-        self._nikke_resource_reconcile.cancel_changed_targets()
+        for coordinator in self._resource_reconcilers.values():
+            coordinator.cancel_changed_targets()
+
+    def _prepare_wuwa_tracking(self):
+        """이전 게임별 계정 선택을 제공자 설정으로 옮긴 뒤 기동 조회한다."""
+        if self._shutting_down or getattr(self, "_beholder_restore_runtime_suspended", False):
+            return
+        if not self.data_manager.migrate_wuwa_link():
+            logger.warning("명조 연결 설정을 이전하지 못했습니다. 기존 데이터는 유지됩니다.")
+            self._record_status_event("명조 연결 설정을 복구하지 못했습니다. 자원/출석 관리에서 확인하세요.", 5000)
+            return
+        from src.services.wuwa import reset_wuwa_service
+        reset_wuwa_service()
+        coordinator = self._resource_reconcilers[PROVIDER_WUWA]
+        coordinator.cancel_changed_targets()
+        self.populate_process_list()
+        coordinator.schedule_startup_refreshes()
+
+    def apply_wuwa_account_selection(self, selected_resource_key):
+        """관리창의 계정 확정·해제를 저장하고 기존 현재 자원 조회로 연결한다."""
+        if self._shutting_down or getattr(self, "_beholder_restore_runtime_suspended", False):
+            return False
+        if not self.data_manager.update_wuwa_link(selected_resource_key):
+            return False
+        from src.services.wuwa import reset_wuwa_service
+        reset_wuwa_service()
+        coordinator = self._resource_reconcilers[PROVIDER_WUWA]
+        coordinator.cancel_changed_targets()
+        self.populate_process_list()
+        if selected_resource_key:
+            for process in self.data_manager.managed_processes:
+                coordinator.request_refresh(process.id)
+        return True
 
     def apply_startup_setting(self):
         """DB 설정을 로그인 시 서비스가 읽으며 GUI는 별도 writer를 만들지 않습니다."""
@@ -1475,15 +1516,10 @@ class MainWindow(QMainWindow):
                     process_name=process.name,
                     session_id=int(entry["session_id"]) if entry.get("session_id") is not None else None,
                     timestamp=float(snapshot.observed_at),
-                    stamina_tracking_enabled=process.stamina_tracking_enabled,
-                    hoyolab_game_id=process.hoyolab_game_id,
                     pid=int(entry.get("pid") or 0),
                     stamina_at_end=process.stamina_current,
-                    stamina_max=process.stamina_max,
-                    resource_tracking_enabled=getattr(process, "resource_tracking_enabled", False),
-                    resource_provider=getattr(process, "resource_provider", None),
-                    resource_key=getattr(process, "resource_key", None),
-                    resource_percent_at_end=getattr(process, "resource_percent", None),
+                    resource_percent_at_end=process.get_resource_percentage(now=float(snapshot.observed_at)),
+                    resource_target=resource_target(process),
                 )
                 command = _LifecycleCommand(
                     "stop",
@@ -1492,6 +1528,8 @@ class MainWindow(QMainWindow):
                     float(entry.get("start_time_approx") or 0.0),
                     str(entry.get("runtime_token") or ""),
                 )
+                for coordinator in self._resource_reconcilers.values():
+                    coordinator.mark_process_stopped(event)
                 self._work_coordinator.submit_lifecycle(
                     process.id, self._persist_lifecycle_command, command
                 )
@@ -1520,12 +1558,7 @@ class MainWindow(QMainWindow):
                 process_name=process.name,
                 session_id=None,
                 timestamp=observed.create_time,
-                stamina_tracking_enabled=process.stamina_tracking_enabled,
-                hoyolab_game_id=process.hoyolab_game_id,
                 pid=observed.pid,
-                resource_tracking_enabled=getattr(process, "resource_tracking_enabled", False),
-                resource_provider=getattr(process, "resource_provider", None),
-                resource_key=getattr(process, "resource_key", None),
             )
             self._work_coordinator.submit_lifecycle(
                 process.id,
@@ -1596,6 +1629,29 @@ class MainWindow(QMainWindow):
                 self.activate_and_show() # 창을 다시 표시
                 self._record_status_event("모든 게임 종료: 창이 다시 표시되었습니다.", 3000)
 
+    @staticmethod
+    def _resource_monitoring_slot(now: datetime.datetime) -> tuple[int, int, int]:
+        kst = now.astimezone(_RESOURCE_MONITORING_TIMEZONE)
+        return kst.date().toordinal(), kst.hour, kst.minute // 30
+
+    def _maybe_refresh_periodic_resources(self, now: datetime.datetime | None = None) -> None:
+        """KST 정규 분에 도달한 회차만 처리하고 기동·절전 중 누락은 보충하지 않는다."""
+        if self._shutting_down or getattr(self, "_beholder_restore_runtime_suspended", False):
+            return
+        coordinators = self._resource_reconcilers.values()
+        for coordinator in coordinators:
+            coordinator.expire_exit_windows()
+        kst = (now or datetime.datetime.now(_RESOURCE_MONITORING_TIMEZONE)).astimezone(_RESOURCE_MONITORING_TIMEZONE)
+        slot = self._resource_monitoring_slot(kst)
+        if slot <= self._last_resource_monitoring_slot:
+            return
+        self._last_resource_monitoring_slot = slot
+        # 10:47 복귀로 알게 된 10:30 회차 등은 실행하지 않는다.
+        if kst.minute not in (0, 30):
+            return
+        for coordinator in coordinators:
+            coordinator.request_periodic_refreshes()
+
     def run_scheduler_check(self):
         """스케줄러 검사를 실행하고 상태 변경이 있을 때만 카드 목록을 업데이트합니다."""
         start_time = time.time()
@@ -1604,6 +1660,7 @@ class MainWindow(QMainWindow):
         status_changed = self.scheduler.run_all_checks() # 게임 관련 스케줄 검사
         if hasattr(self, "_daily_checkin"):
             self._daily_checkin.maybe_run_periodic()
+        self._maybe_refresh_periodic_resources()
 
         if status_changed:
             self.update_process_statuses_only()
@@ -1741,8 +1798,8 @@ class MainWindow(QMainWindow):
             name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
             self.process_table.setItem(row, self.COL_NAME, name_item)
 
-            percentage, time_str = calculate_game_progress(p, now_dt)
-            progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
+            progress = calculate_process_progress(p, now_dt)
+            progress_widget = self._create_progress_bar_widget(p, progress)
             self.process_table.setCellWidget(row, self.COL_LAST_PLAYED, progress_widget)
 
             self.process_table.setCellWidget(row, self.COL_LAUNCH_BTN, self._create_launch_button_cell(p))
@@ -1810,11 +1867,16 @@ class MainWindow(QMainWindow):
                                        resource_percent=getattr(p_edit, 'resource_percent', None) if data.get("resource_tracking_enabled", False) else None,
                                        resource_updated_at=getattr(p_edit, 'resource_updated_at', None) if data.get("resource_tracking_enabled", False) else None,
                                        resource_status=getattr(p_edit, 'resource_status', None) if data.get("resource_tracking_enabled", False) else None,
+                                       resource_current=getattr(p_edit, 'resource_current', None),
+                                       resource_max=getattr(p_edit, 'resource_max', None),
+                                       resource_reserve_current=getattr(p_edit, 'resource_reserve_current', None),
+                                       resource_reserve_max=getattr(p_edit, 'resource_reserve_max', None),
                                        default_volume=getattr(p_edit, 'default_volume', None))  # 기존 볼륨 설정 보존
 
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
-                    self._hoyolab_reconcile.cancel_changed_targets()
-                    self._nikke_resource_reconcile.cancel_changed_targets()
+                    saved_process = self.data_manager.get_process_by_id(upd_p.id)
+                    for coordinator in self._resource_reconcilers.values():
+                        coordinator.handle_process_saved(p_edit, saved_process)
                     self.populate_process_list()
                     QTimer.singleShot(0, self._adjust_window_size_to_content)
                     self._record_status_event(f"'{upd_p.name}' 수정 완료.", 3000)
@@ -1831,8 +1893,8 @@ class MainWindow(QMainWindow):
                                      QMessageBox.StandardButton.No) # 기본 선택은 'No'
         if reply == QMessageBox.StandardButton.Yes: # 'Yes' 클릭 시
             if self.data_manager.remove_process(pid): # 프로세스 삭제
-                self._hoyolab_reconcile.cancel_changed_targets()
-                self._nikke_resource_reconcile.cancel_changed_targets()
+                for coordinator in self._resource_reconcilers.values():
+                    coordinator.cancel_changed_targets()
                 self.populate_process_list()
                 QTimer.singleShot(0, self._adjust_window_size_to_content)
                 self._record_status_event(f"'{p_del.name}' 삭제 완료.", 3000)
@@ -1976,10 +2038,15 @@ class MainWindow(QMainWindow):
                                        resource_provider=data.get("resource_provider"),
                                        resource_key=data.get("resource_key"),
                                        resource_label=data.get("resource_label"))
-                self.data_manager.add_process(new_p) # 데이터 매니저에 프로세스 추가
-                self.populate_process_list()
-                QTimer.singleShot(0, self._adjust_window_size_to_content)
-                self._record_status_event(f"'{new_p.name}' 추가 완료.", 3000)
+                saved_process = self.data_manager.add_process(new_p)
+                if saved_process is not None:
+                    for coordinator in self._resource_reconcilers.values():
+                        coordinator.handle_process_saved(None, saved_process)
+                    self.populate_process_list()
+                    QTimer.singleShot(0, self._adjust_window_size_to_content)
+                    self._record_status_event(f"'{saved_process.name}' 추가 완료.", 3000)
+                else:
+                    QMessageBox.warning(self, "오류", "프로세스 추가 실패.")
 
     # --- 웹 바로 가기 버튼 관련 메소드들 ---
     def _clear_layout(self, layout: QHBoxLayout):
@@ -2286,10 +2353,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_recording_manager'):
             self._recording_manager.shutdown()
 
-        if hasattr(self, '_hoyolab_reconcile'):
-            self._hoyolab_reconcile.shutdown(remaining_ms())
-        if hasattr(self, '_nikke_resource_reconcile'):
-            self._nikke_resource_reconcile.shutdown(remaining_ms())
+        for coordinator in getattr(self, "_resource_reconcilers", {}).values():
+            coordinator.shutdown(remaining_ms())
         if hasattr(self, '_daily_checkin'):
             self._daily_checkin.shutdown(remaining_ms())
         drained = self._work_coordinator.shutdown(
@@ -2905,7 +2970,7 @@ class MainWindow(QMainWindow):
 
     # ─────────────────────────────
 
-    def _create_progress_bar_widget(self, process, percentage: float, time_str: str) -> QWidget:
+    def _create_progress_bar_widget(self, process, progress: dict) -> QWidget:
         """우측 값 행과 셀 전체 폭의 얇은 트랙을 가진 진행률 위젯을 생성합니다."""
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -2921,8 +2986,8 @@ class MainWindow(QMainWindow):
             value_layout.addWidget(self._create_centered_resource_icon_label(icon_path))
         value_layout.addStretch(1)
 
-        expects_bar = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
-        display_text = progress_bar_format(percentage, time_str) if expects_bar else time_str
+        expects_bar = progress["status"] == "ok"
+        display_text = progress["gauge_text"]
         text_label = QLabel(display_text, value_row)
         text_label.setObjectName("progressText")
         text_label.setProperty("hhRole", "muted")
@@ -2932,7 +2997,12 @@ class MainWindow(QMainWindow):
 
         if expects_bar:
             progress_bar = CapsuleProgressBar(container)
-            progress_bar.set_progress(percentage, display_text)
+            progress_bar.set_progress(progress["percentage"], display_text)
+            progress_bar.set_reserve_progress(progress.get("overlay_percentage"))
+            description = resource_gauge_description(progress)
+            if description:
+                container.setToolTip(description)
+                progress_bar.setAccessibleDescription(description)
             layout.addWidget(progress_bar)
 
         return container
@@ -2975,23 +3045,31 @@ class MainWindow(QMainWindow):
             current_widget = self.process_table.cellWidget(row, self.COL_LAST_PLAYED)
             if not current_widget:
                 continue
-            percentage, time_str = calculate_game_progress(process, now_dt)
+            progress = calculate_process_progress(process, now_dt)
+            percentage = progress["percentage"]
             progress_bar = current_widget.findChild(CapsuleProgressBar)
-            expects_progress_widget = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
+            expects_progress_widget = progress["status"] == "ok"
             if expects_progress_widget != (progress_bar is not None):
-                replacement = self._create_progress_bar_widget(process, percentage, time_str)
+                replacement = self._create_progress_bar_widget(process, progress)
                 self.process_table.setCellWidget(row, self.COL_LAST_PLAYED, replacement)
                 updated_count += 1
                 continue
 
-            new_format = progress_bar_format(percentage, time_str) if expects_progress_widget else time_str
+            new_format = progress["gauge_text"]
             text_label = current_widget.findChild(QLabel, "progressText")
             if text_label is not None and text_label.text() != new_format:
                 text_label.setText(new_format)
                 updated_count += 1
 
-            if progress_bar is not None and progress_bar.set_progress(percentage, new_format):
-                updated_count += 1
+            if progress_bar is not None:
+                if progress_bar.set_progress(percentage, new_format):
+                    updated_count += 1
+                if progress_bar.set_reserve_progress(progress.get("overlay_percentage")):
+                    updated_count += 1
+                description = resource_gauge_description(progress)
+                if description:
+                    current_widget.setToolTip(description)
+                    progress_bar.setAccessibleDescription(description)
 
         if updated_count > 0:
             self.process_table.viewport().update()

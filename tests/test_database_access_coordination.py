@@ -372,6 +372,24 @@ def test_restore_prevalidation_and_successful_atomic_replace(monkeypatch, tmp_pa
     assert response.json()["previous_snapshot"]
 
 
+@pytest.mark.usefixtures("resource_test_isolation")
+def test_restored_database_keeps_nullable_and_overcap_resource_quantities(monkeypatch, tmp_path):
+    client, _routes, coordinator, current_db = _restore_client(monkeypatch, tmp_path)
+    with closing(sqlite3.connect(tmp_path / "backups" / "app_data.backup.1.db")) as db:
+        db.execute("CREATE TABLE managed_processes (id TEXT, resource_current INTEGER, resource_max INTEGER, resource_reserve_current INTEGER, resource_reserve_max INTEGER)")
+        db.executemany("INSERT INTO managed_processes VALUES (?,?,?,?,?)", [
+            ("wuwa", 300, 240, 7, 480), ("unknown", None, None, None, None), ("zero", 240, 240, 0, 480),
+        ])
+        db.commit()
+    response = client.post("/api/beholder/backups/restore", json={"slot": 1})
+    assert response.status_code == 200 and response.json()["ok"] is True
+    with closing(sqlite3.connect(current_db)) as db:
+        assert db.execute("SELECT * FROM managed_processes ORDER BY id").fetchall() == [
+            ("unknown", None, None, None, None), ("wuwa", 300, 240, 7, 480), ("zero", 240, 240, 0, 480),
+        ]
+    assert coordinator.snapshot().mode == "normal"
+
+
 def test_restore_reports_sentinel_clear_failure_without_reverting_database(monkeypatch, tmp_path):
     client, _routes, coordinator, current_db = _restore_client(monkeypatch, tmp_path)
     guard_path = current_db.parent / "database_fault_state.json.guard"

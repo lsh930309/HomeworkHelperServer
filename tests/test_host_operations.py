@@ -461,6 +461,8 @@ function gh {
     ("quit", ["release", "payload", "preflight", "backup", "preflight", "quit"]),
     ("setup", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup"]),
     ("service-account", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup"]),
+    ("repair-ok", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup", "repair-wuwa-link", "start", "inspect"]),
+    ("repair-wuwa-link", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup", "repair-wuwa-link"]),
     ("none", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
     ("archive-missing", []), ("archive-duplicate", []), ("archive-invalid", []),
     ("archive-ok", ["payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
@@ -508,6 +510,7 @@ function Invoke-Probe($Kind,$Portable) {
  if ($Kind -eq 'release') {return @{release_id='v1.6.0';setup='test_Setup.exe';portable='test_Portable.zip'}}
  if ($Kind -eq 'payload') {return @{'homework_helper.exe'='expected';'homework_helper_service.exe'='expected'}}
  if ($Kind -eq 'backup') {return @{backup='fixture'}}
+ if ($Kind -eq 'repair-wuwa-link') {return @{ok=$true}}
  $Processes=@()
  if ($Kind -eq 'inspect') {$Processes=@(@{path='C:\Program Files\HomeworkHelper\homework_helper.exe';sid=$Sid;session=1;elevated=$false})}
  return [pscustomobject]@{processes=$Processes;database=@{settings=@{run_on_startup=1}}}
@@ -531,6 +534,8 @@ function Invoke-RestMethod {return @{ok=$true;db_ready=$true;database_access=@{m
     if failure.startswith("archive-"):
         selected = "../invalid" if failure == "archive-invalid" else archived_release
         arguments.append("-ArchivedRelease " + ops.ps_literal(selected))
+    if failure in {"repair-ok", "repair-wuwa-link"}:
+        arguments.append("-RepairWuwaLink")
     text = "$global:Events=[Collections.Generic.List[string]]::new()\n$global:Failed=$false\n$global:Failure=" + ops.ps_literal(failure) + "\ntry {\n& {\n" + source + "\n} -Command install -Repo " + ops.ps_literal(str(repo)) + " -Owner " + ops.ps_literal(getpass.getuser()) + " -ExpectedComputer $env:COMPUTERNAME " + " ".join(arguments) + "\n} catch { $global:Failed=$true }\n@{events=@($global:Events.ToArray());failed=$global:Failed} | ConvertTo-Json -Compress"
     bootstrap = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))"
     environment = {key: value for key, value in os.environ.items() if not key.startswith("HH_")}
@@ -541,7 +546,7 @@ function Invoke-RestMethod {return @{ok=$true;db_ready=$true;database_access=@{m
     tail = result.stdout.strip().splitlines()[-1]
     trace = json.loads(tail)
     assert trace["events"] == expected, result.stdout + result.stderr
-    assert trace["failed"] == (failure not in {"none", "archive-ok", "archive-pair"}), result.stdout + result.stderr
+    assert trace["failed"] == (failure not in {"none", "archive-ok", "archive-pair", "repair-ok"}), result.stdout + result.stderr
 
 
 def test_media_preview_pixels_are_saved_once_and_cannot_escape_report(tmp_path):

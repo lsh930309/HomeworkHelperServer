@@ -1,15 +1,118 @@
 """Shared constants and helpers for external game resource tracking."""
 from __future__ import annotations
 
-import time
 import math
-from typing import Any
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Literal
 
 NIKKE_PROVIDER = "nikke_blablalink"
 NIKKE_OUTPOST_RESOURCE_KEY = "nikke_outpost_storage"
 NIKKE_OUTPOST_LABEL = "전초기지 방어 보상"
 NIKKE_OUTPOST_FULL_CHARGE_SECONDS = 24 * 60 * 60
 STAMINA_RECOVERY_SECONDS_PER_UNIT = 360
+WUWA_PROVIDER = "wuwa"
+WUWA_WAVEPLATE_RESOURCE_KEY = "waveplate"
+WUWA_WAVEPLATE_LABEL = "웨이브플레이트"
+
+
+@dataclass(frozen=True)
+class ResourceDefinition:
+    unit: Literal["count", "percent"]
+    label: str | None = None
+    recovery_seconds_per_unit: int | None = None
+    full_recovery_seconds: int | None = None
+
+
+_RESOURCE_DEFINITIONS = {
+    (NIKKE_PROVIDER, NIKKE_OUTPOST_RESOURCE_KEY): ResourceDefinition(
+        unit="percent", full_recovery_seconds=NIKKE_OUTPOST_FULL_CHARGE_SECONDS,
+    ),
+    (WUWA_PROVIDER, WUWA_WAVEPLATE_RESOURCE_KEY): ResourceDefinition(
+        unit="count", label=WUWA_WAVEPLATE_LABEL, recovery_seconds_per_unit=STAMINA_RECOVERY_SECONDS_PER_UNIT,
+    ),
+}
+
+
+def resource_definition(provider: str | None, key: str | None) -> ResourceDefinition | None:
+    return _RESOURCE_DEFINITIONS.get((provider, key))
+
+
+@dataclass
+class GameResourceSnapshot:
+    provider: str
+    resource_key: str
+    label: str
+    percent: float | None
+    status: str
+    updated_at: datetime
+    message: str = ""
+    raw_debug: dict[str, Any] = field(default_factory=dict)
+    current: int | None = None
+    maximum: int | None = None
+    reserve_current: int | None = None
+    reserve_max: int | None = None
+
+
+def wuwa_role_key(role_id: str) -> str:
+    return f"waveplate@Asia@{role_id}"
+
+
+def wuwa_role_id(resource_key: Any) -> str | None:
+    if not isinstance(resource_key, str) or not resource_key.startswith("waveplate@Asia@"):
+        return None
+    role_id = resource_key.removeprefix("waveplate@Asia@")
+    return role_id if role_id.isascii() and role_id.isdigit() and role_id.startswith("7") else None
+
+
+def is_wuwa_waveplate_resource(provider: Any, resource_key: Any) -> bool:
+    return provider == WUWA_PROVIDER and resource_key == WUWA_WAVEPLATE_RESOURCE_KEY
+
+
+def resource_quantity_percent(current: Any, maximum: Any) -> float | None:
+    if type(current) is not int or type(maximum) is not int or maximum <= 0 or current < 0:
+        return None
+    return 100.0 if current >= maximum else current / maximum * 100.0
+
+
+def resource_base_percentage(
+    definition: ResourceDefinition | None, percent: float | None, current: int | None, maximum: int | None,
+) -> float | None:
+    quantity_percent = resource_quantity_percent(current, maximum)
+    if quantity_percent is not None or (definition is not None and definition.unit == "count"):
+        return quantity_percent
+    return percent
+
+
+def resource_gauge_presentation(
+    percentage: Any,
+    display_text: str,
+    reserve_current: Any = None,
+    reserve_max: Any = None,
+) -> dict[str, Any]:
+    """일반 게이지가 가득 찼고 유효한 초과량이 있을 때만 같은 캡슐에 덧그린다."""
+    normal = clamp_percent(percentage)
+    reserve = resource_quantity_percent(reserve_current, reserve_max)
+    show_reserve = bool(
+        normal is not None and normal >= 100.0 and reserve is not None
+        and reserve_current > 0 and reserve_current <= reserve_max
+    )
+    return {
+        "display_text": f"{reserve_current}/{reserve_max}" if show_reserve else display_text,
+        "overlay_percentage": reserve if show_reserve else None,
+    }
+
+
+def resource_recovery_delta(
+    elapsed: float, *, recovery_seconds_per_unit: int | None = None, full_recovery_seconds: int | None = None,
+) -> int | float:
+    elapsed = max(0.0, elapsed)
+    if recovery_seconds_per_unit is not None:
+        return int(elapsed / recovery_seconds_per_unit)
+    if full_recovery_seconds is not None:
+        return elapsed * 100.0 / full_recovery_seconds
+    return 0
 
 
 def predict_stamina_value(
@@ -18,12 +121,13 @@ def predict_stamina_value(
     updated_at: float | None,
     *,
     now: float,
+    recovery_seconds_per_unit: int = STAMINA_RECOVERY_SECONDS_PER_UNIT,
 ) -> int | None:
     """Return the recovered count at an explicit observation/display time."""
     if stored_current is None or maximum is None:
         return None
-    elapsed = max(0.0, float(now) - float(updated_at)) if updated_at is not None else 0.0
-    recovered = int(elapsed / STAMINA_RECOVERY_SECONDS_PER_UNIT)
+    elapsed = float(now) - float(updated_at) if updated_at is not None else 0.0
+    recovered = int(resource_recovery_delta(elapsed, recovery_seconds_per_unit=recovery_seconds_per_unit))
     return min(int(maximum), max(0, int(stored_current) + recovered))
 
 
@@ -48,6 +152,7 @@ def predict_nikke_outpost_percent(
     updated_at: Any,
     *,
     now: float | None = None,
+    full_recovery_seconds: int = NIKKE_OUTPOST_FULL_CHARGE_SECONDS,
 ) -> float | None:
     """Predict NIKKE outpost defense reward fullness from a stored API snapshot.
 
@@ -63,6 +168,5 @@ def predict_nikke_outpost_percent(
     except (TypeError, ValueError):
         return base
     current_time = time.time() if now is None else float(now)
-    elapsed_seconds = max(0.0, current_time - updated_at_value)
-    predicted = base + (elapsed_seconds * 100.0 / NIKKE_OUTPOST_FULL_CHARGE_SECONDS)
-    return max(0.0, min(predicted, 100.0))
+    predicted = base + resource_recovery_delta(current_time - updated_at_value, full_recovery_seconds=full_recovery_seconds)
+    return clamp_percent(predicted)
