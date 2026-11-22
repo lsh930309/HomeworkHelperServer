@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import ApplicationServices
+import Darwin
 
 struct LocalMoonlightAppInstallation: Equatable {
     let appPath: String
@@ -465,7 +466,15 @@ enum LocalMoonlightManager {
                 targetHostArgument: targetHostArgument,
                 manualStreamWindowTitle: trusted ? manualStreamWindowTitle : nil,
                 windowTitles: accessibilityWindowTitles,
-                commandLine: processCommandLine
+                commandArguments: { pid in
+                    guard let executablePath = runningApps.first(where: { $0.processIdentifier == pid })?.executableURL?.path else {
+                        return ""
+                    }
+                    let commandLine = processCommandLine(pid: pid)
+                    let prefix = executablePath + " "
+                    guard commandLine.hasPrefix(prefix) else { return "" }
+                    return String(commandLine.dropFirst(prefix.count))
+                }
             )
         )
     }
@@ -562,37 +571,36 @@ enum LocalMoonlightManager {
     }
 
     @MainActor
-    static func terminateRunningApplications(_ applications: [NSRunningApplication]) async -> LocalMoonlightCommandResult {
-        let apps = applications.filter { !$0.isTerminated }
-        guard !apps.isEmpty else {
-            return LocalMoonlightCommandResult(action: "moonlight terminate", executablePath: bundleIdentifier, arguments: [], exitStatus: 0, stdout: "종료할 Moonlight 앱이 없습니다.", stderr: "", timedOut: false)
+    static func terminateRunningApplication(_ application: NSRunningApplication) async -> LocalMoonlightCommandResult {
+        let pid = application.processIdentifier
+        guard !Task.isCancelled, pid > 0, application.bundleIdentifier == bundleIdentifier, !application.isTerminated else {
+            return LocalMoonlightCommandResult(action: "moonlight terminate", executablePath: bundleIdentifier, arguments: [], exitStatus: nil, stdout: "", stderr: "종료할 Moonlight 앱을 확인하지 못했습니다.", timedOut: false)
         }
-        apps.forEach { _ = $0.terminate() }
-        await waitForApplicationTermination(apps, timeout: .milliseconds(1_500))
-        if !Task.isCancelled {
-            for app in apps where !app.isTerminated {
-                _ = app.forceTerminate()
-            }
-            await waitForApplicationTermination(apps, timeout: .seconds(1))
+        // Moonlight handles the first SIGTERM by stopping the stream and exiting its app loop.
+        // A second signal can bypass that cleanup.
+        guard Darwin.kill(pid, SIGTERM) == 0 else {
+            return LocalMoonlightCommandResult(action: "moonlight terminate", executablePath: bundleIdentifier, arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight 앱에 정상 종료를 요청하지 못했습니다.", timedOut: false)
         }
-        let remaining = apps.filter { !$0.isTerminated }.count
+        await waitForApplicationTermination(application, timeout: .seconds(32))
+        let terminated = application.isTerminated
         return LocalMoonlightCommandResult(
             action: "moonlight terminate",
             executablePath: bundleIdentifier,
             arguments: [],
-            exitStatus: remaining == 0 ? 0 : nil,
-            stdout: remaining == 0 ? "Moonlight 앱을 종료했습니다." : "Moonlight 종료를 요청했지만 일부 프로세스가 남아 있습니다.",
-            stderr: remaining == 0 ? "" : "remaining=\(remaining)",
-            timedOut: false
+            exitStatus: terminated ? 0 : nil,
+            stdout: terminated ? "Mac의 Moonlight 앱을 종료했습니다." : "",
+            stderr: terminated ? "" : "Moonlight에 정상 종료를 요청했지만 앱이 종료됐는지 확인하지 못했습니다. Moonlight에서 직접 종료해 주세요.",
+            timedOut: !terminated && !Task.isCancelled
         )
     }
 
     @MainActor
-    private static func waitForApplicationTermination(_ apps: [NSRunningApplication], timeout: Duration) async {
-        let deadline = ContinuousClock.now.advanced(by: timeout)
-        while ContinuousClock.now < deadline && apps.contains(where: { !$0.isTerminated }) {
+    static func waitForApplicationTermination(_ application: NSRunningApplication, timeout: Duration? = nil) async {
+        let deadline = timeout.map { ContinuousClock.now.advanced(by: $0) }
+        while !application.isTerminated {
+            if let deadline, ContinuousClock.now >= deadline { return }
             do {
-                try await Task.sleep(for: .milliseconds(100))
+                try await Task.sleep(for: .milliseconds(250))
             } catch {
                 return
             }
@@ -853,11 +861,11 @@ enum LocalMoonlightManager {
         targetHostArgument: String?,
         manualStreamWindowTitle: String?,
         windowTitles: (pid_t) -> [String],
-        commandLine: (pid_t) -> String
+        commandArguments: (pid_t) -> String
     ) -> [pid_t: LocalMoonlightStreamEvidence] {
         var evidence: [pid_t: LocalMoonlightStreamEvidence] = [:]
         for pid in processIDs {
-            if commandLineIndicatesDesktopStream(commandLine(pid), targetHostArgument: targetHostArgument) {
+            if commandLineIndicatesDesktopStream(commandArguments(pid), targetHostArgument: targetHostArgument) {
                 evidence[pid] = .commandLine
             } else if let title = manualStreamWindowTitle, !title.isEmpty, windowTitles(pid).contains(title) {
                 evidence[pid] = .windowTitle
@@ -886,24 +894,17 @@ enum LocalMoonlightManager {
         }
     }
 
-    private static func commandLineIndicatesDesktopStream(_ commandLine: String, targetHostArgument: String?) -> Bool {
-        let normalized = commandLine.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalized.isEmpty else { return false }
-        guard normalized.contains("moonlight"), normalized.contains("stream"), normalized.contains("desktop") else {
-            return false
-        }
-        let target = targetHostArgument?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        guard let target, !target.isEmpty else { return true }
-        return normalized.contains(target)
+    private static func commandLineIndicatesDesktopStream(_ commandArguments: String, targetHostArgument: String?) -> Bool {
+        guard let target = targetHostArgument?.trimmingCharacters(in: .whitespacesAndNewlines), !target.isEmpty else { return false }
+        return commandArguments.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare("stream \(target) Desktop") == .orderedSame
     }
 
     private static func processCommandLine(pid: pid_t) -> String {
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-p", "\(pid)", "-o", "command="]
+        process.arguments = ["-ww", "-p", "\(pid)", "-o", "command="]
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         do {

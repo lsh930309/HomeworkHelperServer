@@ -116,7 +116,7 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
             }}
         }}
 
-        func testManualStreamDetection(_ selected: LocalMoonlightSnapshot) {{
+        func testStreamEvidence(_ selected: LocalMoonlightSnapshot) {{
             let title = "LSH_Desktop"
             expect(selected.manualStreamWindowTitle == title, "the selected registration should supply its exact unique hostname")
 
@@ -145,7 +145,7 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
 
             var titleReads: [pid_t] = []
             let matchingEvidence = LocalMoonlightManager.streamEvidence(
-                for: [11, 22, 33, 44, 55, 66, 77], targetHostArgument: "HOST-2",
+                for: [11, 22, 33, 44, 55, 66, 77, 99, 100, 101, 102], targetHostArgument: "HOST-2",
                 manualStreamWindowTitle: selected.manualStreamWindowTitle,
                 windowTitles: {{ pid in
                     titleReads.append(pid)
@@ -159,15 +159,19 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
                     default: return []
                     }}
                 }},
-                commandLine: {{ pid in
+                commandArguments: {{ pid in
                     switch pid {{
-                    case 66: return "/fixture/Moonlight stream HOST-2 Desktop"
-                    case 77: return "/fixture/Moonlight stream HOST-1 Desktop"
-                    default: return "/fixture/Moonlight"
+                    case 66: return "stream host-2 desktop"
+                    case 77: return "stream HOST-1 Desktop"
+                    case 99: return "stream HOST-20 Desktop"
+                    case 100: return "stream HOST-2 NonDesktop"
+                    case 101: return "quit HOST-2 Desktop"
+                    case 102: return "stream HOST-2 Desktop --extra"
+                    default: return ""
                     }}
                 }}
             )
-            expect(matchingEvidence == [11: .windowTitle, 66: .commandLine], "evidence must distinguish a reusable manual GUI from a CLI stream")
+            expect(matchingEvidence == [11: .windowTitle, 66: .commandLine], "only an exact host and Desktop stream command or an exact manual window title can identify the session")
             expect(!titleReads.contains(66), "the matching CLI evidence should avoid consulting Accessibility")
             expect(!titleReads.contains(88), "a window outside the current running Moonlight PIDs must not be considered")
 
@@ -186,13 +190,22 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
             let noTitleEvidence = LocalMoonlightManager.streamEvidence(
                 for: [11, 66], targetHostArgument: "HOST-2", manualStreamWindowTitle: nil,
                 windowTitles: {{ _ in fatalError("Accessibility reader must not run without an eligible title") }},
-                commandLine: {{ $0 == 66 ? "/fixture/Moonlight stream HOST-2 Desktop" : "/fixture/Moonlight" }}
+                commandArguments: {{ $0 == 66 ? "stream HOST-2 Desktop" : "" }}
             )
-            expect(noTitleEvidence == [66: .commandLine], "permission denial or an ambiguous target must preserve only CLI evidence")
+            expect(noTitleEvidence == [66: .commandLine], "without eligible manual window evidence only the matching CLI stream is confirmed")
+            let unselectedTargets: [String?] = [nil, "", "   "]
+            for target in unselectedTargets {{
+                let noTargetEvidence = LocalMoonlightManager.streamEvidence(
+                    for: [66], targetHostArgument: target, manualStreamWindowTitle: nil,
+                    windowTitles: {{ _ in fatalError("an unselected host cannot identify a manual window") }},
+                    commandArguments: {{ _ in "stream HOST-2 Desktop" }}
+                )
+                expect(noTargetEvidence.isEmpty, "CLI arguments cannot confirm a stream without a selected host")
+            }}
             let closedProcesses = LocalMoonlightManager.streamEvidence(
                 for: [], targetHostArgument: "HOST-2", manualStreamWindowTitle: title,
                 windowTitles: {{ _ in fatalError("a closed process must not be observed") }},
-                commandLine: {{ _ in fatalError("a closed process has no command line") }}
+                commandArguments: {{ _ in fatalError("a closed process has no command arguments") }}
             )
             expect(closedProcesses.isEmpty, "manual evidence cannot survive after its process disappears")
         }}
@@ -233,7 +246,7 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
                 expect(selected.readiness == .ready, "HomeworkHelper address must own the stream target")
                 expect(selected.targetHost?.uuid == "HOST-2", "HomeworkHelper address must select HOST-2")
                 expect(selected.installation?.version == "6.1.0-fixture", "fake app version should be detected")
-                testManualStreamDetection(selected)
+                testStreamEvidence(selected)
 
                 let success = await LocalMoonlightManager.quit(host: "fixture-success", installation: selected.installation)
                 expect(success.succeeded && success.stdout == "fixture quit fixture-success", "quit should pass the selected target and capture normal output")

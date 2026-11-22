@@ -1197,65 +1197,61 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
         moonlightLastCommandSummary = ""
         let identity = currentHostIdentity
-        let target = moonlightSnapshot.targetHost
-        let installation = moonlightSnapshot.installation
-        let evidence = moonlightSessionSnapshot.streamEvidenceByPID
-        let applications = LocalMoonlightManager.runningApplications().filter {
-            evidence[$0.processIdentifier] != nil
-        }
-        guard !applications.isEmpty else {
-            showMoonlightActionResult("Moonlight 세션 상태가 바뀌었습니다. 버튼 상태를 확인하고 다시 눌러 주세요.", failed: true)
-            return
-        }
-        let cliApplications = applications.filter { evidence[$0.processIdentifier] == .commandLine }
-        let hasManualApplication = applications.contains { evidence[$0.processIdentifier] == .windowTitle }
-        let quit: LocalMoonlightCommandResult?
-        if let target {
-            quit = await LocalMoonlightManager.quit(host: target.targetHostArgument, installation: installation)
-        } else {
-            quit = nil
-        }
-        let remoteMessage: String
-        if let quit {
-            if quit.timedOut {
-                remoteMessage = "호스트 종료 명령이 시간 초과됐습니다."
-            } else if quit.succeeded {
-                remoteMessage = "호스트 종료 명령이 끝났습니다. 원격 세션 종료 여부는 미확인입니다."
-            } else {
-                remoteMessage = "호스트 종료 명령이 실패했습니다."
-            }
-        } else {
-            remoteMessage = "호스트 종료 대상을 확인할 수 없습니다."
-        }
         guard !Task.isCancelled else { return }
-        guard currentHostIdentity == identity,
-              moonlightSnapshot.targetHost == target,
-              moonlightSnapshot.installation == installation else {
-            showMoonlightActionResult("\(remoteMessage) Moonlight 대상 설정이 바뀌어 Mac 앱 종료를 중단했습니다.", failed: true)
+        guard let target = moonlightSnapshot.targetHost,
+              let installation = moonlightSnapshot.installation else {
+            showMoonlightActionResult("Moonlight 종료 대상을 확인할 수 없습니다.", failed: true)
             return
         }
-        // A GUI process can open another stream while the remote quit is pending.
-        // Only a CLI-launched process is tied to the session that was selected here.
-        let terminate: LocalMoonlightCommandResult?
-        if cliApplications.isEmpty {
-            terminate = nil
-        } else {
-            terminate = await LocalMoonlightManager.terminateRunningApplications(cliApplications)
+        let runningApplications = LocalMoonlightManager.runningApplications()
+        refreshMoonlightSessionSnapshot()
+        let evidence = moonlightSessionSnapshot.streamEvidenceByPID
+        guard evidence.count == 1,
+              let processID = evidence.keys.first,
+              let application = runningApplications.first(where: { $0.processIdentifier == processID }) else {
+            showMoonlightActionResult("종료할 Moonlight 세션을 하나로 확인하지 못했습니다. 버튼 상태를 확인하고 다시 눌러 주세요.", failed: true)
+            return
         }
-        guard currentHostIdentity == identity,
+
+        let terminate = await LocalMoonlightManager.terminateRunningApplication(application)
+        let targetStillSelected = currentHostIdentity == identity && moonlightSnapshot.targetHost == target
+            && moonlightSnapshot.installation == installation
+        if terminate.timedOut {
+            if !Task.isCancelled, targetStillSelected {
+                moonlightLastCommandSummary = terminate.outputSummary
+                showMoonlightActionResult(terminate.outputSummary, failed: true)
+            }
+            // Keep the operation locked while this app can still receive a second signal.
+            await LocalMoonlightManager.waitForApplicationTermination(application)
+            return
+        }
+        guard !Task.isCancelled, targetStillSelected else { return }
+        moonlightLastCommandSummary = terminate.outputSummary
+        guard terminate.succeeded else {
+            showMoonlightActionResult(terminate.outputSummary, failed: true)
+            return
+        }
+        guard LocalMoonlightManager.runningApplications().isEmpty else {
+            showMoonlightActionResult("\(terminate.outputSummary) 다른 Moonlight 앱이 실행 중이어서 호스트 종료 명령을 보류했습니다.", failed: true)
+            return
+        }
+        let quit = await LocalMoonlightManager.quit(host: target.targetHostArgument, installation: installation)
+        guard !Task.isCancelled,
+              currentHostIdentity == identity,
               moonlightSnapshot.targetHost == target,
               moonlightSnapshot.installation == installation else { return }
-        var messages = [remoteMessage]
-        if let terminate {
-            messages.append(terminate.succeeded ? "Mac의 CLI Moonlight 앱이 종료됐습니다." : "Mac에 CLI Moonlight 앱이 남아 있습니다.")
+
+        let remoteMessage: String
+        if quit.timedOut {
+            remoteMessage = "호스트 종료 명령이 시간 초과됐습니다."
+        } else if quit.succeeded {
+            remoteMessage = "호스트 종료 명령이 끝났습니다. 원격 세션 종료 여부는 미확인입니다."
+        } else {
+            remoteMessage = "호스트 종료 명령이 실패했습니다."
         }
-        if hasManualApplication {
-            messages.append("수동으로 실행한 Moonlight 앱은 열어 뒀습니다.")
-        }
-        moonlightLastCommandSummary = [remoteMessage, quit?.outputSummary, terminate?.outputSummary]
-            .compactMap { $0 }
+        moonlightLastCommandSummary = [terminate.outputSummary, remoteMessage, quit.outputSummary]
             .joined(separator: "\n")
-        showMoonlightActionResult(messages.joined(separator: " "), failed: terminate?.succeeded == false || quit?.succeeded != true)
+        showMoonlightActionResult("\(terminate.outputSummary) \(remoteMessage)", failed: !quit.succeeded)
     }
 
     private func focusMoonlightOnPreferredScreen(target: LocalMoonlightHostCandidate) async -> LocalMoonlightCommandResult {

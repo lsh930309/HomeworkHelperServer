@@ -840,7 +840,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "manualStreamWindowTitle: moonlightSnapshot.manualStreamWindowTitle" in session_refresh
     ensure_moonlight = view_model.split("private func ensureMoonlightDesktopVisible", 1)[1].split("private func stopMoonlightDesktopSession", 1)[0]
     assert ensure_moonlight.index("moonlightSessionSnapshot.hasUnconfirmedSession") < ensure_moonlight.index("LocalMoonlightManager.startDesktopStream(")
-    assert "terminateRunningApplications" not in ensure_moonlight
+    assert "terminateRunningApplication" not in ensure_moonlight
     assert "await prepareMoonlightAutoWake(action: .streamOnly, observation: observation)" in view_model
     assert "hostAvailabilityState == .online" in view_model
     assert "if pendingMoonlightWakeAction != nil { return true }" in view_model
@@ -864,20 +864,44 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert wake_moonlight.index(veto) < wake_moonlight.index("await localWake()")
     assert "observation.apollo == .identityMismatch || latestObservation.apollo == .identityMismatch" in wake_moonlight.split(veto, 1)[0]
     stop_moonlight = view_model.split("private func stopMoonlightDesktopSession()", 1)[1].split("private func focusMoonlightOnPreferredScreen(", 1)[0]
-    assert stop_moonlight.index("LocalMoonlightManager.runningApplications()") < stop_moonlight.index("await LocalMoonlightManager.quit(")
-    before_quit, after_quit = stop_moonlight.split("await LocalMoonlightManager.quit(", 1)
-    assert "streamEvidenceByPID" in before_quit
-    assert "let target = moonlightSnapshot.targetHost" in before_quit
-    assert "let installation = moonlightSnapshot.installation" in before_quit
-    assert "evidence[$0.processIdentifier] == .commandLine" in before_quit
-    assert "evidence[$0.processIdentifier] == .windowTitle" in before_quit
-    before_local_terminate = after_quit.split("await LocalMoonlightManager.terminateRunningApplications(cliApplications)", 1)[0]
-    assert "moonlightSnapshot.targetHost == target" in before_local_terminate
-    assert "moonlightSnapshot.installation == installation" in before_local_terminate
-    assert "await LocalMoonlightManager.terminateRunningApplications(cliApplications)" in after_quit
-    assert "await LocalMoonlightManager.terminateRunningApplications(applications)" not in stop_moonlight
-    assert "원격 세션 종료 여부는 미확인입니다" in stop_moonlight
-    assert "terminate?.succeeded == false || quit?.succeeded != true" in stop_moonlight
+    select_application, finish_stop = stop_moonlight.split("await LocalMoonlightManager.terminateRunningApplication(application)", 1)
+    check_before_quit, report_quit = finish_stop.split("await LocalMoonlightManager.quit(host: target.targetHostArgument, installation: installation)", 1)
+    assert stop_moonlight.count("await LocalMoonlightManager.quit(") == 1
+    assert "moonlightSetupInProgress = true" in select_application
+    assert "defer {\n            moonlightSetupInProgress = false" in select_application
+    assert stop_moonlight.count("moonlightSetupInProgress = false") == 1
+    assert "if moonlightSetupInProgress { return true }" in view_model.split("var moonlightFooterButtonDisabled", 1)[1].split("var moonlightFooterHelp", 1)[0]
+    assert "guard let target = moonlightSnapshot.targetHost" in select_application
+    assert "let installation = moonlightSnapshot.installation else" in select_application
+    running_apps = select_application.index("let runningApplications = LocalMoonlightManager.runningApplications()")
+    refresh_evidence = select_application.index("refreshMoonlightSessionSnapshot()", running_apps)
+    assert refresh_evidence < select_application.index("streamEvidenceByPID")
+    assert "guard evidence.count == 1" in select_application
+    assert "runningApplications.first(where: { $0.processIdentifier == processID })" in select_application
+    assert "currentHostIdentity == identity" in check_before_quit
+    assert "moonlightSnapshot.targetHost == target" in check_before_quit
+    assert "moonlightSnapshot.installation == installation" in check_before_quit
+    assert "guard LocalMoonlightManager.runningApplications().isEmpty else" in check_before_quit
+    timeout_path, resume_stop = check_before_quit.split("guard !Task.isCancelled, targetStillSelected else { return }", 1)
+    timeout_path = timeout_path.split("if terminate.timedOut {", 1)[1]
+    assert "await LocalMoonlightManager.waitForApplicationTermination(application)\n            return" in timeout_path
+    assert "guard terminate.succeeded else" in resume_stop
+    assert "원격 세션 종료 여부는 미확인입니다" in report_quit
+    local_shutdown, observe_exit = local_moonlight.split("static func terminateRunningApplication(", 1)[1].split("static func waitForApplicationTermination(", 1)
+    observe_exit = observe_exit.split("private static func uniqueMatch(", 1)[0]
+    check_before_signal, wait_for_exit = local_shutdown.split("Darwin.kill(", 1)
+    assert "let pid = application.processIdentifier" in check_before_signal
+    assert wait_for_exit.startswith("pid, SIGTERM) == 0 else")
+    assert "!Task.isCancelled" in check_before_signal
+    assert "pid > 0" in check_before_signal
+    assert "application.bundleIdentifier == bundleIdentifier" in check_before_signal
+    assert "!application.isTerminated" in check_before_signal
+    assert wait_for_exit.index("await waitForApplicationTermination(") < wait_for_exit.index("application.isTerminated")
+    assert "exitStatus: terminated ? 0 : nil" in wait_for_exit
+    assert "timeout: Duration? = nil" in observe_exit
+    assert "while !application.isTerminated" in observe_exit
+    assert (local_shutdown + observe_exit).count("kill(") == 1
+    assert all(forbidden not in local_shutdown + observe_exit for forbidden in ("SIGKILL", ".terminate()", ".forceTerminate()"))
     assert "Moonlight 처리 중" in app
     assert "viewModel.moonlightFooterActionFailed" in app
     assert "viewModel.moonlightFooterHelp" in app
