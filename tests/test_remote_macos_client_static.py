@@ -839,7 +839,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     session_refresh = view_model.split("func refreshMoonlightSessionSnapshot()", 1)[1].split("func refreshMoonlightSnapshot()", 1)[0]
     assert "manualStreamWindowTitle: moonlightSnapshot.manualStreamWindowTitle" in session_refresh
     ensure_moonlight = view_model.split("private func ensureMoonlightDesktopVisible", 1)[1].split("private func stopMoonlightDesktopSession", 1)[0]
-    assert ensure_moonlight.index("moonlightSessionSnapshot.hasUnconfirmedSession") < ensure_moonlight.index("LocalMoonlightManager.startDesktopStream(")
+    before_moonlight_start, _ = ensure_moonlight.split("LocalMoonlightManager.startDesktopStream(", 1)
+    assert "moonlightSessionSnapshot.hasUnconfirmedSession" in before_moonlight_start
+    assert "guard !moonlightSetupInProgress, moonlightBindingEnabled, observation.canStream" in before_moonlight_start
+    assert "guard hostObservationStore.identity == identity, hostObservations.canStream else" in before_moonlight_start
     assert "terminateRunningApplication" not in ensure_moonlight
     assert "await prepareMoonlightAutoWake(action: .streamOnly, observation: observation)" in view_model
     assert "hostAvailabilityState == .online" in view_model

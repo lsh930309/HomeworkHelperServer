@@ -1157,6 +1157,10 @@ final class RemoteDashboardViewModel: ObservableObject {
         guard currentHostIdentity == identity,
               moonlightSnapshot.targetHost == target, moonlightSnapshot.installation == installation else { return false }
         if !moonlightSessionSnapshot.hasDesktopSession {
+            guard hostObservationStore.identity == identity, hostObservations.canStream else {
+                showMoonlightActionResult("Moonlight 연결을 확인할 수 없습니다. 호스트 주소와 등록 상태를 확인하세요.", failed: true)
+                return false
+            }
             let start = LocalMoonlightManager.startDesktopStream(host: target.targetHostArgument, installation: installation)
             moonlightLastCommandSummary = [moonlightLastCommandSummary, start.outputSummary]
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
