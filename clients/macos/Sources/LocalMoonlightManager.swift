@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import ApplicationServices
+import Darwin
 
 struct LocalMoonlightAppInstallation: Equatable {
     let appPath: String
@@ -211,6 +212,16 @@ struct LocalMoonlightSnapshot: Equatable {
     var usableHosts: [LocalMoonlightHostCandidate] {
         hosts.filter { !$0.targetHostArgument.isEmpty && $0.hasDesktopApp }
     }
+
+    var manualStreamWindowTitle: String? {
+        guard let hostname = targetHost?.hostname,
+              !hostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              hostname.caseInsensitiveCompare("Moonlight") != .orderedSame,
+              hosts.filter({ $0.hostname.caseInsensitiveCompare(hostname) == .orderedSame }).count == 1 else {
+            return nil
+        }
+        return hostname
+    }
 }
 
 struct LocalMoonlightCommandResult: Equatable {
@@ -238,18 +249,25 @@ struct LocalMoonlightCommandResult: Equatable {
     }
 }
 
+enum LocalMoonlightStreamEvidence: Equatable {
+    case commandLine
+    case windowTitle
+}
+
 struct LocalMoonlightSessionSnapshot: Equatable {
     let runningApplicationCount: Int
     let hasVisibleWindow: Bool
     let hasFocusedApplication: Bool
     let accessibilityTrusted: Bool
-    let desktopStreamProcessCount: Int
+    let streamEvidenceByPID: [pid_t: LocalMoonlightStreamEvidence]
 
     var isRunning: Bool { runningApplicationCount > 0 }
     var isVisible: Bool { isRunning && (hasVisibleWindow || hasFocusedApplication) }
-    var hasDesktopStreamSession: Bool { desktopStreamProcessCount > 0 }
+    var streamProcessIDs: Set<pid_t> { Set(streamEvidenceByPID.keys) }
+    var hasDesktopStreamSession: Bool { !streamEvidenceByPID.isEmpty }
     var isDesktopStreamVisible: Bool { hasDesktopStreamSession && (hasVisibleWindow || hasFocusedApplication) }
-    var hasDesktopSession: Bool { hasDesktopStreamSession || isVisible }
+    var hasDesktopSession: Bool { hasDesktopStreamSession }
+    var hasUnconfirmedSession: Bool { isRunning && !hasDesktopSession }
 }
 
 enum LocalMoonlightManager {
@@ -432,16 +450,31 @@ enum LocalMoonlightManager {
     }
 
     @MainActor
-    static func sessionSnapshot(targetHostArgument: String? = nil) -> LocalMoonlightSessionSnapshot {
+    static func sessionSnapshot(
+        targetHostArgument: String? = nil,
+        manualStreamWindowTitle: String? = nil
+    ) -> LocalMoonlightSessionSnapshot {
         let runningApps = runningApplications()
+        let trusted = accessibilityTrusted(prompt: false)
         return LocalMoonlightSessionSnapshot(
             runningApplicationCount: runningApps.count,
             hasVisibleWindow: hasVisibleWindow(for: runningApps),
             hasFocusedApplication: hasFocusedApplication(for: runningApps),
-            accessibilityTrusted: accessibilityTrusted(prompt: false),
-            desktopStreamProcessCount: desktopStreamProcessCount(
-                for: runningApps,
-                targetHostArgument: targetHostArgument
+            accessibilityTrusted: trusted,
+            streamEvidenceByPID: streamEvidence(
+                for: runningApps.map(\.processIdentifier),
+                targetHostArgument: targetHostArgument,
+                manualStreamWindowTitle: trusted ? manualStreamWindowTitle : nil,
+                windowTitles: accessibilityWindowTitles,
+                commandArguments: { pid in
+                    guard let executablePath = runningApps.first(where: { $0.processIdentifier == pid })?.executableURL?.path else {
+                        return ""
+                    }
+                    let commandLine = processCommandLine(pid: pid)
+                    let prefix = executablePath + " "
+                    guard commandLine.hasPrefix(prefix) else { return "" }
+                    return String(commandLine.dropFirst(prefix.count))
+                }
             )
         )
     }
@@ -501,15 +534,16 @@ enum LocalMoonlightManager {
             action: "moonlight quit",
             executablePath: executable,
             arguments: ["quit", trimmedHost],
-            timeoutSeconds: timeoutSeconds
+            timeoutSeconds: timeoutSeconds,
+            forceApplicationOnTimeout: true
         )
     }
 
     @MainActor
-    static func focusAndMoveToScreen(visibleFrame: CGRect?, requireAccessibility: Bool, promptForAccessibility: Bool) -> LocalMoonlightCommandResult {
-        let runningApps = runningApplications()
+    static func focusAndMoveToScreen(processIDs: Set<pid_t>, visibleFrame: CGRect?, requireAccessibility: Bool, promptForAccessibility: Bool) -> LocalMoonlightCommandResult {
+        let runningApps = runningApplications().filter { processIDs.contains($0.processIdentifier) }
         guard !runningApps.isEmpty else {
-            return LocalMoonlightCommandResult(action: "moonlight focus", executablePath: bundleIdentifier, arguments: [], exitStatus: nil, stdout: "", stderr: "실행 중인 Moonlight 앱을 찾지 못했습니다.", timedOut: false)
+            return LocalMoonlightCommandResult(action: "moonlight focus", executablePath: bundleIdentifier, arguments: [], exitStatus: nil, stdout: "", stderr: "확인된 Moonlight 스트림을 찾지 못했습니다.", timedOut: false)
         }
 
         if requireAccessibility && !accessibilityTrusted(prompt: promptForAccessibility) {
@@ -537,26 +571,40 @@ enum LocalMoonlightManager {
     }
 
     @MainActor
-    static func terminateRunningApplications(forceAfterSeconds: Double = 1.5) async -> LocalMoonlightCommandResult {
-        let apps = runningApplications()
-        guard !apps.isEmpty else {
-            return LocalMoonlightCommandResult(action: "moonlight terminate", executablePath: bundleIdentifier, arguments: [], exitStatus: 0, stdout: "종료할 Moonlight 앱이 없습니다.", stderr: "", timedOut: false)
+    static func terminateRunningApplication(_ application: NSRunningApplication) async -> LocalMoonlightCommandResult {
+        let pid = application.processIdentifier
+        guard !Task.isCancelled, pid > 0, application.bundleIdentifier == bundleIdentifier, !application.isTerminated else {
+            return LocalMoonlightCommandResult(action: "moonlight terminate", executablePath: bundleIdentifier, arguments: [], exitStatus: nil, stdout: "", stderr: "종료할 Moonlight 앱을 확인하지 못했습니다.", timedOut: false)
         }
-        apps.forEach { _ = $0.terminate() }
-        let nanoseconds = UInt64(max(0.1, forceAfterSeconds) * 1_000_000_000)
-        try? await Task.sleep(nanoseconds: nanoseconds)
-        let survivors = runningApplications()
-        survivors.forEach { _ = $0.forceTerminate() }
-        let remaining = runningApplications().count
+        // Moonlight handles the first SIGTERM by stopping the stream and exiting its app loop.
+        // A second signal can bypass that cleanup.
+        guard Darwin.kill(pid, SIGTERM) == 0 else {
+            return LocalMoonlightCommandResult(action: "moonlight terminate", executablePath: bundleIdentifier, arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight 앱에 정상 종료를 요청하지 못했습니다.", timedOut: false)
+        }
+        await waitForApplicationTermination(application, timeout: .seconds(32))
+        let terminated = application.isTerminated
         return LocalMoonlightCommandResult(
             action: "moonlight terminate",
             executablePath: bundleIdentifier,
             arguments: [],
-            exitStatus: remaining == 0 ? 0 : nil,
-            stdout: remaining == 0 ? "Moonlight 앱을 종료했습니다." : "Moonlight 종료를 요청했지만 일부 프로세스가 남아 있습니다.",
-            stderr: remaining == 0 ? "" : "remaining=\(remaining)",
-            timedOut: false
+            exitStatus: terminated ? 0 : nil,
+            stdout: terminated ? "Mac의 Moonlight 앱을 종료했습니다." : "",
+            stderr: terminated ? "" : "Moonlight에 정상 종료를 요청했지만 앱이 종료됐는지 확인하지 못했습니다. Moonlight에서 직접 종료해 주세요.",
+            timedOut: !terminated && !Task.isCancelled
         )
+    }
+
+    @MainActor
+    static func waitForApplicationTermination(_ application: NSRunningApplication, timeout: Duration? = nil) async {
+        let deadline = timeout.map { ContinuousClock.now.advanced(by: $0) }
+        while !application.isTerminated {
+            if let deadline, ContinuousClock.now >= deadline { return }
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+            } catch {
+                return
+            }
+        }
     }
 
     private static func uniqueMatch(_ matches: [LocalMoonlightHostCandidate]) -> LocalMoonlightHostCandidate? {
@@ -777,7 +825,7 @@ enum LocalMoonlightManager {
     }
 
     @MainActor
-    private static func runningApplications() -> [NSRunningApplication] {
+    static func runningApplications() -> [NSRunningApplication] {
         if ProcessInfo.processInfo.environment[ignoreRunningAppsKey] == "1" {
             return []
         }
@@ -808,34 +856,55 @@ enum LocalMoonlightManager {
         apps.contains { $0.isActive }
     }
 
-    @MainActor
-    private static func desktopStreamProcessCount(for apps: [NSRunningApplication], targetHostArgument: String?) -> Int {
-        apps.filter { app in
-            commandLineIndicatesDesktopStream(
-                processCommandLine(pid: app.processIdentifier),
-                targetHostArgument: targetHostArgument
-            )
-        }.count
+    static func streamEvidence(
+        for processIDs: [pid_t],
+        targetHostArgument: String?,
+        manualStreamWindowTitle: String?,
+        windowTitles: (pid_t) -> [String],
+        commandArguments: (pid_t) -> String
+    ) -> [pid_t: LocalMoonlightStreamEvidence] {
+        var evidence: [pid_t: LocalMoonlightStreamEvidence] = [:]
+        for pid in processIDs {
+            if commandLineIndicatesDesktopStream(commandArguments(pid), targetHostArgument: targetHostArgument) {
+                evidence[pid] = .commandLine
+            } else if let title = manualStreamWindowTitle, !title.isEmpty, windowTitles(pid).contains(title) {
+                evidence[pid] = .windowTitle
+            }
+        }
+        return evidence
     }
 
-    private static func commandLineIndicatesDesktopStream(_ commandLine: String, targetHostArgument: String?) -> Bool {
-        let normalized = commandLine.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalized.isEmpty else { return false }
-        guard normalized.contains("moonlight"), normalized.contains("stream"), normalized.contains("desktop") else {
-            return false
+    private static func accessibilityWindowTitles(pid: pid_t) -> [String] {
+        // Moonlight names its macOS stream window after the host.
+        // Bound each cross-process read because this also runs when the popover opens.
+        let app = AXUIElementCreateApplication(pid)
+        var windowsValue: CFTypeRef?
+        guard AXUIElementSetMessagingTimeout(app, 0.1) == .success,
+              AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsValue) == .success,
+              let windows = windowsValue as? [AXUIElement] else {
+            return []
         }
-        let target = targetHostArgument?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        guard let target, !target.isEmpty else { return true }
-        return normalized.contains(target)
+        return windows.compactMap { window in
+            var title: CFTypeRef?
+            guard AXUIElementSetMessagingTimeout(window, 0.1) == .success,
+                  AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &title) == .success else {
+                return nil
+            }
+            return title as? String
+        }
+    }
+
+    private static func commandLineIndicatesDesktopStream(_ commandArguments: String, targetHostArgument: String?) -> Bool {
+        guard let target = targetHostArgument?.trimmingCharacters(in: .whitespacesAndNewlines), !target.isEmpty else { return false }
+        return commandArguments.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare("stream \(target) Desktop") == .orderedSame
     }
 
     private static func processCommandLine(pid: pid_t) -> String {
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-p", "\(pid)", "-o", "command="]
+        process.arguments = ["-ww", "-p", "\(pid)", "-o", "command="]
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         do {
@@ -900,7 +969,13 @@ enum LocalMoonlightManager {
         return didMove
     }
 
-    private static func runCommand(action: String, executablePath: String, arguments: [String], timeoutSeconds: Int) async -> LocalMoonlightCommandResult {
+    private static func runCommand(
+        action: String,
+        executablePath: String,
+        arguments: [String],
+        timeoutSeconds: Int,
+        forceApplicationOnTimeout: Bool = false
+    ) async -> LocalMoonlightCommandResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let process = Process()
@@ -910,23 +985,64 @@ enum LocalMoonlightManager {
                 process.arguments = arguments
                 process.standardOutput = output
                 process.standardError = error
+                let exited = DispatchSemaphore(value: 0)
+                process.terminationHandler = { _ in exited.signal() }
+                var captureDirectory: URL?
+                defer {
+                    if let captureDirectory { try? FileManager.default.removeItem(at: captureDirectory) }
+                }
                 do {
-                    try process.run()
-                    let timeoutLock = NSLock()
-                    var didTimeOut = false
-                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(max(1, timeoutSeconds))) {
-                        guard process.isRunning else { return }
-                        timeoutLock.lock()
-                        didTimeOut = true
-                        timeoutLock.unlock()
-                        process.terminate()
+                    if forceApplicationOnTimeout {
+                        let directory = FileManager.default.temporaryDirectory
+                            .appendingPathComponent("HomeworkHelperMoonlight-\(UUID().uuidString)", isDirectory: true)
+                        try FileManager.default.createDirectory(
+                            at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]
+                        )
+                        captureDirectory = directory
+                        // The quit helper can fill a pipe or leave a descendant holding it open.
+                        process.standardOutput = try commandCaptureFile(named: "stdout", in: directory)
+                        process.standardError = try commandCaptureFile(named: "stderr", in: directory)
                     }
-                    process.waitUntilExit()
-                    let stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    timeoutLock.lock()
-                    let timedOut = didTimeOut
-                    timeoutLock.unlock()
+                    try process.run()
+                    let timedOut = exited.wait(timeout: .now() + .seconds(max(1, timeoutSeconds))) == .timedOut
+                    if timedOut {
+                        // Keep the exact child application handle before asking it to quit.
+                        let application = forceApplicationOnTimeout && process.isRunning
+                            ? NSRunningApplication(processIdentifier: process.processIdentifier)
+                            : nil
+                        if process.isRunning { process.terminate() }
+                        if forceApplicationOnTimeout {
+                            if exited.wait(timeout: .now() + .seconds(1)) == .timedOut {
+                                if process.isRunning, let application, !application.isTerminated,
+                                   application.executableURL?.resolvingSymlinksInPath() == process.executableURL?.resolvingSymlinksInPath() {
+                                    _ = application.forceTerminate()
+                                }
+                                if exited.wait(timeout: .now() + .seconds(1)) == .timedOut {
+                                    continuation.resume(returning: LocalMoonlightCommandResult(
+                                        action: action,
+                                        executablePath: executablePath,
+                                        arguments: arguments,
+                                        exitStatus: nil,
+                                        stdout: "",
+                                        stderr: "시간이 초과된 Moonlight 종료 도우미가 끝났는지 확인하지 못했습니다.",
+                                        timedOut: true
+                                    ))
+                                    return
+                                }
+                            }
+                        } else {
+                            exited.wait()
+                        }
+                    }
+                    let stdout: String
+                    let stderr: String
+                    if let captureDirectory {
+                        stdout = readCommandCapture(named: "stdout", in: captureDirectory)
+                        stderr = readCommandCapture(named: "stderr", in: captureDirectory)
+                    } else {
+                        stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                        stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    }
                     continuation.resume(returning: LocalMoonlightCommandResult(
                         action: action,
                         executablePath: executablePath,
@@ -949,5 +1065,22 @@ enum LocalMoonlightManager {
                 }
             }
         }
+    }
+
+    private static func commandCaptureFile(named name: String, in directory: URL) throws -> FileHandle {
+        let file = directory.appendingPathComponent(name)
+        guard FileManager.default.createFile(atPath: file.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        return try FileHandle(forWritingTo: file)
+    }
+
+    private static func readCommandCapture(named name: String, in directory: URL) -> String {
+        let file = directory.appendingPathComponent(name)
+        guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0,
+              let reader = try? FileHandle(forReadingFrom: file) else { return "" }
+        defer { try? reader.close() }
+        guard let output = try? reader.read(upToCount: size) else { return "" }
+        return String(decoding: output, as: UTF8.self)
     }
 }

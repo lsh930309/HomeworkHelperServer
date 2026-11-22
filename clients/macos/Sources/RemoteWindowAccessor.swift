@@ -133,24 +133,45 @@ struct RemoteWindowAccessor: NSViewRepresentable {
 }
 
 struct RemotePlaceholderWindowAccessor: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { configure(window: view.window) }
-        return view
+    @Environment(\.openSettings) private var openSettings
+
+    func makeNSView(context: Context) -> PlaceholderView {
+        PlaceholderView(openSettings: openSettings)
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { configure(window: nsView.window) }
+    func updateNSView(_ nsView: PlaceholderView, context: Context) {
+        nsView.openSettings = openSettings
     }
 
-    private func configure(window: NSWindow?) {
-        guard let window else { return }
-        window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.placeholderWindowIdentifier)
-        window.title = RemoteAppDelegate.placeholderWindowTitle
-        window.alphaValue = 0
-        window.ignoresMouseEvents = true
-        window.setFrame(NSRect(x: -10_000, y: -10_000, width: 160, height: 96), display: false)
-        window.orderOut(nil)
+    final class PlaceholderView: NSView {
+        var openSettings: OpenSettingsAction
+
+        init(openSettings: OpenSettingsAction) {
+            self.openSettings = openSettings
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) {
+            return nil
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.placeholderWindowIdentifier)
+            window.title = RemoteAppDelegate.placeholderWindowTitle
+            window.alphaValue = 0
+            window.ignoresMouseEvents = true
+            window.setFrame(NSRect(x: -10_000, y: -10_000, width: 160, height: 96), display: false)
+
+            // The pending request may present another scene, so leave SwiftUI's attachment callback first.
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window, self.window === window else { return }
+                let openSettings = self.openSettings
+                RemoteAppDelegate.installSettingsOpener { openSettings() }
+                window.orderOut(nil)
+            }
+        }
     }
 }
 

@@ -96,6 +96,7 @@ Primary UX contract:
 - Settings opens only through explicit settings actions or the app shortcut.
 - Pairing state, host reachability, Remote Agent auth, game/process state, and Moonlight desktop-session state must update the popover immediately enough for user decisions.
 - Moonlight state is client-observed as well as app-command-observed; a visible Moonlight desktop session should be reflected even if it was launched externally.
+- `Moonlight OFF`는 설정된 호스트의 스트림을 하나로 확인한 뒤 해당 Mac 앱에 정상 종료를 요청한다. 앱이 종료됐고 다른 Moonlight 앱이 실행 중이지 않을 때 기존 호스트 종료 명령을 실행한다.
 
 Supervisor state contract:
 

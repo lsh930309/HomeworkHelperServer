@@ -475,6 +475,7 @@ private enum RemoteClientDesktopLogger {
 
 @MainActor
 final class RemoteDashboardViewModel: ObservableObject {
+    private static let unconfirmedMoonlightSessionMessage = "Moonlight에서 선택한 호스트의 세션을 확인할 수 없습니다. 열린 Moonlight에서 연결하거나, 앱을 정상 종료한 뒤 Moonlight ON을 눌러 주세요."
     private static let shortDateTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "ko_KR")
@@ -499,7 +500,15 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published private(set) var moonlightSetupInProgress = false
     @Published private(set) var moonlightPairingPIN = ""
     @Published private(set) var moonlightTailscalePing: LocalTailscalePingResult?
-    @Published private(set) var moonlightLastCommandSummary = ""
+    private struct MoonlightCommandFeedback {
+        var summary = ""
+        var action: (message: String, failed: Bool)?
+    }
+    @Published private var moonlightCommandFeedback = MoonlightCommandFeedback()
+    private(set) var moonlightLastCommandSummary: String {
+        get { moonlightCommandFeedback.summary }
+        set { moonlightCommandFeedback.summary = newValue }
+    }
     @Published private(set) var moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot() {
         didSet {
             if oldValue != moonlightSessionSnapshot {
@@ -740,17 +749,32 @@ final class RemoteDashboardViewModel: ObservableObject {
         return false
     }
 
+    var moonlightFooterHelp: String {
+        if let action = moonlightCommandFeedback.action { return action.message }
+        if moonlightSessionSnapshot.hasUnconfirmedSession { return Self.unconfirmedMoonlightSessionMessage }
+        return moonlightBindingStatusDisplay
+    }
+
+    var moonlightFooterActionFailed: Bool {
+        moonlightCommandFeedback.action?.failed == true
+    }
+
+    private func showMoonlightActionResult(_ result: String, failed: Bool) {
+        moonlightCommandFeedback.action = (result, failed)
+        message = result
+    }
+
     var moonlightBindingStatusDisplay: String {
         let optIn = moonlightBindingEnabled ? "Opt-in ON" : "Opt-in OFF"
         let session: String
         if moonlightSessionSnapshot.isDesktopStreamVisible {
-            session = "Desktop 세션 표시 중"
+            session = "Moonlight 스트림 표시 중"
         } else if moonlightSessionSnapshot.hasDesktopStreamSession {
-            session = "Desktop 세션 실행 중 · 창 미표시"
+            session = "Moonlight 스트림 실행 중 · 창 미표시"
         } else if moonlightSessionSnapshot.isVisible {
-            session = "Moonlight 창 표시 중 · Desktop 세션으로 간주"
+            session = "Moonlight 창 표시 중 · 스트림 미확인"
         } else if moonlightSessionSnapshot.isRunning {
-            session = "Moonlight 실행 중 · Desktop 세션 미확인"
+            session = "Moonlight 실행 중 · 스트림 미확인"
         } else if let pendingMoonlightWakeAction {
             session = "호스트 부팅 후 \(pendingMoonlightWakeAction.label) 대기 중"
         } else {
@@ -806,6 +830,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         pendingLaunchProcessIDs.removeAll()
         pendingStopProcessIDs.removeAll()
         if hostChanged {
+            moonlightCommandFeedback.action = nil
             processes = RemoteClientCache.loadProcesses(baseURL: URL(string: baseURLText))
             dashboardSummary = nil
             beholderIncidents = []
@@ -846,9 +871,10 @@ final class RemoteDashboardViewModel: ObservableObject {
         return await LocalSSHPowerManager.health(config: config, timeoutSeconds: 3)
     }
 
-    private func observeConnectionNow(trigger: String) async {
-        guard bootstrapEnabled, let client else { return }
-        _ = await evaluateConnectivity(using: RemoteDashboardService(client: client), client: client, trigger: trigger)
+    @discardableResult
+    private func observeConnectionNow(trigger: String) async -> ConnectivityEvaluation? {
+        guard bootstrapEnabled, let client else { return nil }
+        return await evaluateConnectivity(using: RemoteDashboardService(client: client), client: client, trigger: trigger)
     }
 
     func connectionScreenVisibilityChanged(_ visible: Bool) {
@@ -874,7 +900,8 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     func refreshMoonlightSessionSnapshot() {
         moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot(
-            targetHostArgument: moonlightSnapshot.targetHost?.targetHostArgument
+            targetHostArgument: moonlightSnapshot.targetHost?.targetHostArgument,
+            manualStreamWindowTitle: moonlightSnapshot.manualStreamWindowTitle
         )
     }
 
@@ -924,6 +951,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         moonlightSetupInProgress = false
         refreshMoonlightSnapshot()
         if result.succeeded, moonlightSnapshot.installation != nil {
+            moonlightCommandFeedback.action = nil
             message = "Moonlight 설치를 확인했습니다. 이제 Tailscale Direct 등록 또는 기존 host 감지를 진행할 수 있습니다."
         } else if result.succeeded {
             message = "Moonlight 설치 명령은 완료됐지만 앱을 아직 찾지 못했습니다. 설치 위치를 확인한 뒤 설정을 다시 읽어 주세요."
@@ -972,6 +1000,7 @@ final class RemoteDashboardViewModel: ObservableObject {
                 .joined(separator: "\n")
             refreshMoonlightSnapshot()
             if listResult.succeeded {
+                moonlightCommandFeedback.action = nil
                 message = "Moonlight Tailscale Direct 등록을 완료했고 앱 목록을 확인했습니다."
             } else {
                 message = "Moonlight pairing은 완료됐지만 앱 목록 확인은 실패했습니다: \(listSummary)"
@@ -982,41 +1011,81 @@ final class RemoteDashboardViewModel: ObservableObject {
         moonlightSetupInProgress = false
     }
 
-    func toggleMoonlightDesktopSession() async {
-        guard !moonlightSetupInProgress else { return }
-        refreshMoonlightSessionSnapshot()
-        if moonlightSessionSnapshot.hasDesktopSession {
+    func toggleMoonlightDesktopSession(stopRequested: Bool) async {
+        guard !moonlightFooterButtonDisabled else { return }
+        moonlightCommandFeedback.action = nil
+        refreshMoonlightSnapshot()
+        guard moonlightSessionSnapshot.hasDesktopSession == stopRequested else {
+            showMoonlightActionResult("Moonlight 세션 상태가 바뀌었습니다. 버튼 상태를 확인하고 다시 눌러 주세요.", failed: true)
+            return
+        }
+        if stopRequested {
             await stopMoonlightDesktopSession()
+            return
+        }
+        guard !moonlightSessionSnapshot.hasUnconfirmedSession else {
+            showMoonlightActionResult(Self.unconfirmedMoonlightSessionMessage, failed: true)
             return
         }
         if !moonlightBindingEnabled {
             moonlightBindingEnabled = true
         }
-        await observeConnectionNow(trigger: "moonlight.clicked")
-        guard hostObservations.canStream else {
-            await prepareMoonlightAutoWake(action: .streamOnly)
+        let identity = currentHostIdentity
+        let target = moonlightSnapshot.targetHost
+        let installation = moonlightSnapshot.installation
+        moonlightSetupInProgress = true
+        let evaluation = await observeConnectionNow(trigger: "moonlight.clicked")
+        moonlightSetupInProgress = false
+        guard !Task.isCancelled, currentHostIdentity.baseURL == identity.baseURL else { return }
+        guard currentHostIdentity == identity, moonlightSnapshot.targetHost == target, moonlightSnapshot.installation == installation else {
+            showMoonlightActionResult("Moonlight 등록 상태가 바뀌었습니다. 버튼을 다시 눌러 주세요.", failed: true)
             return
         }
-        _ = await ensureMoonlightDesktopVisible(trigger: "moonlight.button")
+        guard let evaluation, evaluation.moonlightTarget == target else {
+            showMoonlightActionResult("Moonlight 연결을 확인할 수 없습니다. 호스트 주소와 등록 상태를 확인하세요.", failed: true)
+            return
+        }
+        let observation = evaluation.observation
+        guard observation.canStream else {
+            await prepareMoonlightAutoWake(action: .streamOnly, observation: observation)
+            return
+        }
+        _ = await ensureMoonlightDesktopVisible(trigger: "moonlight.button", observation: observation)
     }
 
-    private func prepareMoonlightAutoWake(action: PendingMoonlightWakeAction) async {
+    private func prepareMoonlightAutoWake(action: PendingMoonlightWakeAction, observation: RemoteHostObservationSnapshot) async {
         guard pendingMoonlightWakeAction == nil else {
             message = "이미 호스트 부팅 후 \(pendingMoonlightWakeAction?.label ?? "Moonlight 동작")을 기다리는 중입니다."
             return
         }
         guard moonlightSnapshot.readiness == .ready else {
-            message = "Moonlight Desktop host가 준비된 뒤 자동 깨우기를 사용할 수 있습니다."
+            showMoonlightActionResult(moonlightSnapshot.message, failed: true)
+            return
+        }
+        guard hostObservationStore.identity == currentHostIdentity else {
+            showMoonlightActionResult("Moonlight 등록 상태가 바뀌었습니다. 버튼을 다시 눌러 주세요.", failed: true)
+            return
+        }
+        let latestObservation = hostObservations
+        if observation.apollo == .identityMismatch || latestObservation.apollo == .identityMismatch {
+            showMoonlightActionResult("Apollo 서버 식별자가 Moonlight 등록과 다릅니다. Moonlight 등록을 확인하세요.", failed: true)
+            return
+        }
+        guard observation.shouldWake, latestObservation.shouldWake else {
+            let guidance: String
+            if latestObservation.canStream {
+                guidance = "Apollo 스트리밍이 준비됐습니다. Moonlight 버튼을 다시 눌러 주세요."
+            } else if latestObservation.pc == .reachable || latestObservation.appReady
+                || observation.pc == .reachable || observation.appReady {
+                guidance = "PC가 연결되어 있습니다. Apollo 스트리밍 준비 상태를 확인하세요."
+            } else {
+                guidance = "PC 응답 여부를 확인한 뒤 자동 깨우기를 사용할 수 있습니다."
+            }
+            showMoonlightActionResult(guidance, failed: true)
             return
         }
         guard powerConfig.localWakeConfigured else {
-            message = "SmartThings Wake 설정이 준비되어야 호스트를 자동으로 깨운 뒤 Moonlight를 시작할 수 있습니다."
-            return
-        }
-        guard hostObservations.shouldWake else {
-            message = hostObservations.pc == .reachable
-                ? "PC가 연결되어 있습니다. Apollo 스트리밍 준비 상태를 확인하세요."
-                : "PC 응답 여부를 확인한 뒤 자동 깨우기를 사용할 수 있습니다."
+            showMoonlightActionResult("SmartThings Wake 설정이 준비되어야 호스트를 자동으로 깨운 뒤 Moonlight를 시작할 수 있습니다.", failed: true)
             return
         }
 
@@ -1037,6 +1106,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         guard currentHostIdentity == identity else { return }
         guard accepted else {
             pendingMoonlightWakeAction = nil
+            showMoonlightActionResult("Moonlight 시작을 위한 Wake 명령이 실패했습니다. 전원 설정을 확인하세요.", failed: true)
             return
         }
         beginPowerTransition(for: "wake")
@@ -1044,14 +1114,14 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func resumePendingMoonlightWakeActionIfReady(trigger: String) async {
-        guard pendingMoonlightWakeAction != nil,
+        guard !moonlightSetupInProgress, pendingMoonlightWakeAction != nil,
               hostObservations.canStream else { return }
         pendingMoonlightWakeAction = nil
         if !moonlightBindingEnabled {
             moonlightBindingEnabled = true
         }
 
-        _ = await ensureMoonlightDesktopVisible(trigger: "\(trigger).autoWake.stream")
+        _ = await ensureMoonlightDesktopVisible(trigger: "\(trigger).autoWake.stream", observation: hostObservations)
     }
 
     private func clearPendingMoonlightWakeActionIfBlocked() {
@@ -1059,96 +1129,141 @@ final class RemoteDashboardViewModel: ObservableObject {
               !hostObservations.canStream,
               reconnectSchedule.isEmpty else { return }
         pendingMoonlightWakeAction = nil
-        message = "Apollo 스트리밍 준비를 확인하지 못해 \(action.label)을 중단했습니다. PC·Apollo 상태를 확인한 뒤 다시 시도하세요."
+        showMoonlightActionResult("Apollo 스트리밍 준비를 확인하지 못해 \(action.label)을 중단했습니다. PC·Apollo 상태를 확인한 뒤 다시 시도하세요.", failed: true)
     }
 
-    private func ensureMoonlightDesktopVisible(trigger: String) async -> Bool {
+    private func ensureMoonlightDesktopVisible(trigger: String, observation: RemoteHostObservationSnapshot) async -> Bool {
         let identity = currentHostIdentity
-        guard moonlightBindingEnabled else { return false }
-        guard hostObservations.canStream else { return false }
+        guard !moonlightSetupInProgress, moonlightBindingEnabled, observation.canStream else { return false }
         guard moonlightSnapshot.readiness == .ready,
               let target = moonlightSnapshot.targetHost,
               let installation = moonlightSnapshot.installation else {
-            message = "Moonlight Desktop host가 준비되지 않았습니다."
+            showMoonlightActionResult(moonlightSnapshot.message, failed: true)
             return false
         }
-        guard ensureMoonlightAccessibilityIfNeeded() else { return false }
-
         moonlightSetupInProgress = true
         defer { moonlightSetupInProgress = false }
         moonlightLastCommandSummary = ""
         refreshMoonlightSessionSnapshot()
-
-        if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopSession {
-            let cleanup = await LocalMoonlightManager.terminateRunningApplications()
-            moonlightLastCommandSummary = cleanup.outputSummary
-            refreshMoonlightSessionSnapshot()
+        guard !moonlightSessionSnapshot.hasUnconfirmedSession else {
+            showMoonlightActionResult(Self.unconfirmedMoonlightSessionMessage, failed: true)
+            return false
+        }
+        guard ensureMoonlightAccessibilityIfNeeded() else {
+            showMoonlightActionResult(message, failed: true)
+            return false
         }
 
-        guard currentHostIdentity == identity else { return false }
+        guard currentHostIdentity == identity,
+              moonlightSnapshot.targetHost == target, moonlightSnapshot.installation == installation else { return false }
         if !moonlightSessionSnapshot.hasDesktopSession {
+            guard hostObservationStore.identity == identity, hostObservations.canStream else {
+                showMoonlightActionResult("Moonlight 연결을 확인할 수 없습니다. 호스트 주소와 등록 상태를 확인하세요.", failed: true)
+                return false
+            }
             let start = LocalMoonlightManager.startDesktopStream(host: target.targetHostArgument, installation: installation)
             moonlightLastCommandSummary = [moonlightLastCommandSummary, start.outputSummary]
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n")
             guard start.succeeded else {
-                moonlightSetupInProgress = false
                 refreshMoonlightSessionSnapshot()
-                message = "\(trigger): Moonlight Desktop 시작 실패: \(start.outputSummary)"
+                showMoonlightActionResult("Moonlight Desktop 실행을 시작하지 못했습니다. Moonlight 설치 상태를 확인하세요.", failed: true)
                 return false
             }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             refreshMoonlightSessionSnapshot()
         }
 
-        guard currentHostIdentity == identity else { return false }
-        let focus = await focusMoonlightOnPreferredScreen()
+        guard currentHostIdentity == identity,
+              moonlightSnapshot.targetHost == target, moonlightSnapshot.installation == installation else { return false }
+        let focus = await focusMoonlightOnPreferredScreen(target: target)
+        guard currentHostIdentity == identity,
+              moonlightSnapshot.targetHost == target, moonlightSnapshot.installation == installation else { return false }
         moonlightLastCommandSummary = [moonlightLastCommandSummary, focus.outputSummary]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
-        moonlightSetupInProgress = false
         refreshMoonlightSessionSnapshot()
         if moonlightSessionSnapshot.hasDesktopSession || focus.succeeded {
-            message = "Moonlight Desktop 세션을 현재 화면으로 불러왔습니다."
+            showMoonlightActionResult("Moonlight 세션을 현재 화면으로 불러왔습니다.", failed: false)
             return true
         }
-        message = "\(trigger): Moonlight Desktop focus 실패: \(focus.outputSummary)"
+        showMoonlightActionResult("Moonlight Desktop 창을 확인하지 못했습니다. Moonlight에서 연결 오류가 표시되는지 확인하세요.", failed: true)
         return false
     }
 
     private func stopMoonlightDesktopSession() async {
         moonlightSetupInProgress = true
-        moonlightLastCommandSummary = ""
-        let quit: LocalMoonlightCommandResult
-        if let target = moonlightSnapshot.targetHost {
-            quit = await LocalMoonlightManager.quit(host: target.targetHostArgument, installation: moonlightSnapshot.installation)
-        } else {
-            quit = LocalMoonlightCommandResult(
-                action: "moonlight quit",
-                executablePath: "",
-                arguments: [],
-                exitStatus: 0,
-                stdout: "Moonlight quit 대상 host를 찾지 못해 앱 종료 fallback만 수행합니다.",
-                stderr: "",
-                timedOut: false
-            )
+        defer {
+            moonlightSetupInProgress = false
+            refreshMoonlightSessionSnapshot()
         }
-        let terminate = await LocalMoonlightManager.terminateRunningApplications()
-        moonlightLastCommandSummary = [quit.outputSummary, terminate.outputSummary]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
-        moonlightSetupInProgress = false
+        moonlightLastCommandSummary = ""
+        let identity = currentHostIdentity
+        guard !Task.isCancelled else { return }
+        guard let target = moonlightSnapshot.targetHost,
+              let installation = moonlightSnapshot.installation else {
+            showMoonlightActionResult("Moonlight 종료 대상을 확인할 수 없습니다.", failed: true)
+            return
+        }
+        let runningApplications = LocalMoonlightManager.runningApplications()
         refreshMoonlightSessionSnapshot()
-        message = terminate.succeeded ? "Moonlight Desktop 세션을 종료했습니다." : "Moonlight 종료를 시도했습니다: \(terminate.outputSummary)"
+        let evidence = moonlightSessionSnapshot.streamEvidenceByPID
+        guard evidence.count == 1,
+              let processID = evidence.keys.first,
+              let application = runningApplications.first(where: { $0.processIdentifier == processID }) else {
+            showMoonlightActionResult("종료할 Moonlight 세션을 하나로 확인하지 못했습니다. 버튼 상태를 확인하고 다시 눌러 주세요.", failed: true)
+            return
+        }
+
+        let terminate = await LocalMoonlightManager.terminateRunningApplication(application)
+        let targetStillSelected = currentHostIdentity == identity && moonlightSnapshot.targetHost == target
+            && moonlightSnapshot.installation == installation
+        if terminate.timedOut {
+            if !Task.isCancelled, targetStillSelected {
+                moonlightLastCommandSummary = terminate.outputSummary
+                showMoonlightActionResult(terminate.outputSummary, failed: true)
+            }
+            // Keep the operation locked while this app can still receive a second signal.
+            await LocalMoonlightManager.waitForApplicationTermination(application)
+            return
+        }
+        guard !Task.isCancelled, targetStillSelected else { return }
+        moonlightLastCommandSummary = terminate.outputSummary
+        guard terminate.succeeded else {
+            showMoonlightActionResult(terminate.outputSummary, failed: true)
+            return
+        }
+        guard LocalMoonlightManager.runningApplications().isEmpty else {
+            showMoonlightActionResult("\(terminate.outputSummary) 다른 Moonlight 앱이 실행 중이어서 호스트 종료 명령을 보류했습니다.", failed: true)
+            return
+        }
+        let quit = await LocalMoonlightManager.quit(host: target.targetHostArgument, installation: installation)
+        guard !Task.isCancelled,
+              currentHostIdentity == identity,
+              moonlightSnapshot.targetHost == target,
+              moonlightSnapshot.installation == installation else { return }
+
+        let remoteMessage: String
+        if quit.timedOut {
+            remoteMessage = "호스트 종료 명령이 시간 초과됐습니다."
+        } else if quit.succeeded {
+            remoteMessage = "호스트 종료 명령이 끝났습니다. 원격 세션 종료 여부는 미확인입니다."
+        } else {
+            remoteMessage = "호스트 종료 명령이 실패했습니다."
+        }
+        moonlightLastCommandSummary = [terminate.outputSummary, remoteMessage, quit.outputSummary]
+            .joined(separator: "\n")
+        showMoonlightActionResult("\(terminate.outputSummary) \(remoteMessage)", failed: !quit.succeeded)
     }
 
-    private func focusMoonlightOnPreferredScreen() async -> LocalMoonlightCommandResult {
+    private func focusMoonlightOnPreferredScreen(target: LocalMoonlightHostCandidate) async -> LocalMoonlightCommandResult {
+        let identity = currentHostIdentity
         let requiresAccessibility = NSScreen.screens.count > 1
         let frame = requiresAccessibility ? (moonlightPreferredScreenFrame ?? NSScreen.main?.visibleFrame) : nil
         var last = LocalMoonlightManager.focusAndMoveToScreen(
+            processIDs: moonlightSessionSnapshot.streamProcessIDs,
             visibleFrame: frame,
             requireAccessibility: requiresAccessibility,
             promptForAccessibility: false
@@ -1156,7 +1271,12 @@ final class RemoteDashboardViewModel: ObservableObject {
         if last.succeeded { return last }
         for _ in 0..<6 {
             try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled,
+                  currentHostIdentity == identity,
+                  moonlightSnapshot.targetHost == target else { return last }
+            refreshMoonlightSessionSnapshot()
             last = LocalMoonlightManager.focusAndMoveToScreen(
+                processIDs: moonlightSessionSnapshot.streamProcessIDs,
                 visibleFrame: frame,
                 requireAccessibility: requiresAccessibility,
                 promptForAccessibility: false
@@ -1803,9 +1923,9 @@ final class RemoteDashboardViewModel: ObservableObject {
             }
             await runMirrorRemoteState(trigger: "smartSchedule.observe", syncScope: .revisionAware)
             if hostObservations.canStream {
-                _ = await ensureMoonlightDesktopVisible(trigger: "smartSchedule.\(rule.id)")
+                _ = await ensureMoonlightDesktopVisible(trigger: "smartSchedule.\(rule.id)", observation: hostObservations)
             } else if rule.wakeHost {
-                await prepareMoonlightAutoWake(action: .streamOnly)
+                await prepareMoonlightAutoWake(action: .streamOnly, observation: hostObservations)
             } else {
                 message = "스마트 스케줄 '\(rule.name)'은 Moonlight 시작을 요청했지만 호스트가 온라인이 아닙니다."
             }
@@ -1914,13 +2034,19 @@ final class RemoteDashboardViewModel: ObservableObject {
         return decision
     }
 
+    private struct ConnectivityEvaluation {
+        let observation: RemoteHostObservationSnapshot
+        let moonlightTarget: LocalMoonlightHostCandidate?
+        let connected: (status: RemoteStatus, decision: RemoteConnectionDecision)?
+    }
+
     @discardableResult
     private func evaluateConnectivity(
         using service: RemoteDashboardService,
         client: RemoteAPIClient,
         trigger: String,
         updateMessage: Bool = true
-    ) async -> (status: RemoteStatus, decision: RemoteConnectionDecision)? {
+    ) async -> ConnectivityEvaluation? {
         let identity = currentHostIdentity
         let request = hostObservationStore.begin(for: identity)
         let target = moonlightSnapshot.targetHost
@@ -1957,7 +2083,9 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
         let observed = RemoteHostObservationSnapshot(pc: pcObservation, apollo: apollo,
             app: appObservation, sshPowerReady: ssh.authenticated, observedAt: Date())
-        guard hostObservationStore.accept(observed, for: request) else { return nil }
+        guard hostObservationStore.accept(observed, for: request) else {
+            return ConnectivityEvaluation(observation: observed, moonlightTarget: target, connected: nil)
+        }
         if apollo == .identityMismatch {
             moonlightLastCommandSummary = "해당 호스트의 Apollo 서버 식별자가 기존 Moonlight 등록과 다릅니다. 서버 등록이 변경됐다면 기존 Tailscale Direct PIN 페어링으로 다시 등록하세요."
         }
@@ -1975,7 +2103,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             writeConnectivityEvaluationLog(evaluationLog)
             await resumePendingMoonlightWakeActionIfReady(trigger: trigger)
             clearPendingMoonlightWakeActionIfBlocked()
-            return (latestStatus, decision)
+            return ConnectivityEvaluation(observation: observed, moonlightTarget: target, connected: (latestStatus, decision))
         case .failure(let error):
             evaluationLog.httpOutcome = "failed"
             evaluationLog.httpFailureKind = "\(failureKind(for: error))"
@@ -1999,7 +2127,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         writeConnectivityEvaluationLog(evaluationLog)
         await resumePendingMoonlightWakeActionIfReady(trigger: trigger)
         clearPendingMoonlightWakeActionIfBlocked()
-        return nil
+        return ConnectivityEvaluation(observation: observed, moonlightTarget: target, connected: nil)
     }
 
     private func handlePayloadSyncFailure(_ error: Error, fallbackMessage: String? = nil) {
@@ -2706,7 +2834,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             setupProgress = pairingRecoveryMessage
             return
         }
-        guard let _ = await evaluateConnectivity(using: service, client: client, trigger: silent ? "recoverPairing.silent" : "recoverPairing", updateMessage: !silent) else {
+        guard await evaluateConnectivity(using: service, client: client, trigger: silent ? "recoverPairing.silent" : "recoverPairing", updateMessage: !silent)?.connected != nil else {
             if hostAvailabilityState != .authRejected {
                 setupProgress = "호스트가 오프라인이거나 Remote Agent가 응답하지 않습니다. 저장된 토큰과 캐시 데이터는 보존합니다."
             }
@@ -2784,7 +2912,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
         let service = RemoteDashboardService(client: client)
         setupProgress = "3/5 Windows Remote Agent 상태 확인 중..."
-        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.status") else {
+        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.status")?.connected else {
             if hostAvailabilityState != .authRejected {
                 setupProgress = "Tailscale/SSH 관리 계층 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 저장된 캐시 데이터는 유지합니다."
             }
@@ -2805,7 +2933,7 @@ final class RemoteDashboardViewModel: ObservableObject {
                 applyDevices(remoteDevices)
             }
             serverTailscaleEnsure = try? await service.ensureServerTailscale()
-            if let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.pairedStatus") {
+            if let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.pairedStatus")?.connected {
                 readiness = evaluation.status.readiness
             }
         } else {
@@ -2829,7 +2957,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             serverTailscaleEnsure = try await service.ensureServerTailscale()
-            if let client, let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "ensureServerTailscale") {
+            if let client, let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "ensureServerTailscale")?.connected {
                 readiness = evaluation.status.readiness
             }
             message = serverTailscaleEnsure?.message ?? "서버 Tailscale 확인 완료"
@@ -2862,7 +2990,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         let identity = currentHostIdentity
         let service = RemoteDashboardService(client: client)
         let previousAvailabilityState = hostAvailabilityState
-        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: trigger, updateMessage: false) else {
+        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: trigger, updateMessage: false)?.connected else {
             return
         }
         guard currentHostIdentity == identity else { return }
@@ -3004,7 +3132,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         guard let client else { return }
-        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "refresh") else { return }
+        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "refresh")?.connected else { return }
         let latestStatus = evaluation.status
         do {
             // Keep refreshes sequential. The Remote Agent's file-backed device
@@ -3265,7 +3393,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             if result.accepted {
                 startLaunchChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)
                 if moonlightBindingEnabled, moonlightSnapshot.readiness == .ready {
-                    _ = await ensureMoonlightDesktopVisible(trigger: "launch.\(processID)")
+                    _ = await ensureMoonlightDesktopVisible(trigger: "launch.\(processID)", observation: hostObservations)
                 }
             } else {
                 pendingLaunchProcessIDs.remove(processID)

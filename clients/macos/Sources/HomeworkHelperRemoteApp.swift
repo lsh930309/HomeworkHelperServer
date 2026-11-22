@@ -55,7 +55,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     private var settingsWindow: NSWindow?
     private static var settingsOpener: (@MainActor () -> Void)?
     private static var pendingSettingsOpen = false
-    private let popover = NSPopover()
+    private lazy var popover = makePopover()
     private var popoverFocusIntent: PopoverFocusIntent?
     private let popoverLogger = Logger(subsystem: "dev.homeworkhelper.remote.macos", category: "popup-lifecycle")
 
@@ -84,9 +84,6 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         installMoonlightStateObservers()
         Task {
             await RemoteSharedModel.viewModel.bootstrap()
-        }
-        DispatchQueue.main.async {
-            Self.schedulePlaceholderHide()
         }
         if Self.pendingSettingsOpen {
             presentSettingsWindow()
@@ -132,11 +129,15 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         item.button?.isEnabled = true
         statusItem = item
         installLocalMouseClickMonitor()
+        updatePopoverContentSize()
+    }
 
+    private func makePopover() -> NSPopover {
+        let popover = NSPopover()
         popover.behavior = .semitransient
         popover.delegate = self
         popover.contentViewController = Self.makePopoverController()
-        updatePopoverContentSize()
+        return popover
     }
 
     private func installMoonlightStateObservers() {
@@ -220,9 +221,11 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     private func installPopoverOutsideClickMonitor() {
         guard popoverOutsideClickMonitor == nil else { return }
-        popoverOutsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+        let monitoredPopover = popover
+        popoverOutsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self, weak monitoredPopover] _ in
             Task { @MainActor in
-                self?.closePopoverForFocusLoss(origin: "outsideClick")
+                guard let self, let monitoredPopover, self.popover === monitoredPopover else { return }
+                self.closePopoverForFocusLoss(origin: "outsideClick")
             }
         }
     }
@@ -267,10 +270,12 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     func popoverWillShow(_ notification: Notification) {
+        guard (notification.object as? NSPopover) === popover else { return }
         tracePopover("popover.willShow")
     }
 
     func popoverDidShow(_ notification: Notification) {
+        guard (notification.object as? NSPopover) === popover else { return }
         tracePopover("popover.didShow")
         guard let intent = popoverFocusIntent else { return }
         DispatchQueue.main.async { [weak self] in
@@ -279,6 +284,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     func popoverWillClose(_ notification: Notification) {
+        guard (notification.object as? NSPopover) === popover else { return }
         popoverFocusIntent = nil
         let reason = notification.userInfo?[NSPopover.closeReasonUserInfoKey] as? String
         let reasonCode = reason == NSPopover.CloseReason.standard.rawValue ? 0
@@ -287,26 +293,28 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     func popoverDidClose(_ notification: Notification) {
-        popoverFocusIntent = nil
+        guard (notification.object as? NSPopover) === popover else { return }
         tracePopover("popover.didClose")
         RemoteSharedModel.viewModel.connectionScreenVisibilityChanged(false)
-        removePopoverOutsideClickMonitor()
-        removePopoverKeyDownMonitor()
+        stopPopoverPresentationTracking()
         NSApp.setActivationPolicy(.accessory)
         tracePopover("popover.didClose.cleaned")
     }
 
-    private func closePopoverForFocusLoss(origin: String) {
+    private func stopPopoverPresentationTracking() {
         popoverFocusIntent = nil
+        removePopoverOutsideClickMonitor()
+        removePopoverKeyDownMonitor()
+    }
+
+    private func closePopoverForFocusLoss(origin: String) {
+        stopPopoverPresentationTracking()
         tracePopover("close.request.\(origin)")
         guard popover.isShown else {
-            removePopoverOutsideClickMonitor()
             tracePopover("close.hiddenCleanup.\(origin)")
             return
         }
         popover.performClose(nil)
-        removePopoverOutsideClickMonitor()
-        removePopoverKeyDownMonitor()
         tracePopover("close.return.\(origin)")
     }
 
@@ -365,15 +373,33 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         showPopover(relativeTo: button)
     }
 
+    private var popoverIsOutsideActiveSpace: Bool {
+        guard popover.isShown,
+              let window = popover.contentViewController?.viewIfLoaded?.window else { return false }
+        return !window.isOnActiveSpace
+    }
+
     private func togglePopover(relativeTo button: NSStatusBarButton) {
-        if popover.isShown {
+        if popover.isShown && !popoverIsOutsideActiveSpace {
             closePopoverForFocusLoss(origin: "statusToggle")
             return
         }
         showPopover(relativeTo: button)
     }
 
+    private func replacePopoverOutsideActiveSpace() {
+        guard popoverIsOutsideActiveSpace else { return }
+        tracePopover("show.replaceOutsideActiveSpace")
+        let previousPopover = popover
+        previousPopover.delegate = nil
+        stopPopoverPresentationTracking()
+        popover = makePopover()
+        previousPopover.close()
+    }
+
     private func showPopover(relativeTo button: NSStatusBarButton) {
+        replacePopoverOutsideActiveSpace()
+        let displayedPopover = popover
         let wasShown = popover.isShown
         let intent = PopoverFocusIntent(inputCounters: Self.popoverFocusInputCounters())
         popoverFocusIntent = intent
@@ -390,12 +416,13 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         RemoteSharedModel.viewModel.updateMoonlightPreferredScreen(button.window?.screen ?? NSScreen.main)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         tracePopover("show.return")
-        DispatchQueue.main.async { [weak self] in
-            self?.tracePopover("show.nextTurn")
-            RemoteSharedModel.viewModel.updateMoonlightPreferredScreen(self?.popover.contentViewController?.view.window?.screen ?? button.window?.screen ?? NSScreen.main)
+        DispatchQueue.main.async { [weak self, weak displayedPopover] in
+            guard let self, let displayedPopover, self.popover === displayedPopover, displayedPopover.isShown else { return }
+            self.tracePopover("show.nextTurn")
+            RemoteSharedModel.viewModel.updateMoonlightPreferredScreen(displayedPopover.contentViewController?.view.window?.screen ?? button.window?.screen ?? NSScreen.main)
             RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()
             if wasShown {
-                self?.focusPopoverWindow(for: intent)
+                self.focusPopoverWindow(for: intent)
             }
         }
     }
@@ -552,38 +579,24 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         window.orderFrontRegardless()
     }
 
-    static func hideMainWindow() {
-        hidePlaceholderWindows()
-        NSApp.setActivationPolicy(.accessory)
-    }
-
-    static func hidePlaceholderWindows() {
-        NSApp.windows
-            .filter { $0.identifier?.rawValue == placeholderWindowIdentifier || $0.title == placeholderWindowTitle }
-            .forEach { $0.orderOut(nil) }
-    }
-
-    static func schedulePlaceholderHide() {
-        for delay in [0.0, 0.1, 0.5, 1.5] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                hidePlaceholderWindows()
-            }
-        }
-    }
-
     static func showSettingsWindow() {
         pendingSettingsOpen = true
+        shared?.tracePopover("settings.openRequested")
         shared?.presentSettingsWindow()
     }
 
     static func installSettingsOpener(_ opener: @escaping @MainActor () -> Void) {
         settingsOpener = opener
+        shared?.tracePopover("settings.openerInstalled")
         guard pendingSettingsOpen else { return }
         shared?.presentSettingsWindow()
     }
 
     static func registerSettingsWindow(_ window: NSWindow) {
         guard let shared else { return }
+        if shared.settingsWindow !== window {
+            shared.tracePopover("settings.windowAttached")
+        }
         shared.settingsWindow = window
         guard pendingSettingsOpen else { return }
         shared.presentSettingsWindow()
@@ -596,14 +609,17 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             NSApp.activate(ignoringOtherApps: true)
             settingsWindow.makeKeyAndOrderFront(nil)
             settingsWindow.orderFrontRegardless()
+            popoverLogger.notice("event=settings.windowOrdered visible=\(settingsWindow.isVisible) key=\(settingsWindow.isKeyWindow) activeSpace=\(settingsWindow.isOnActiveSpace)")
             Self.pendingSettingsOpen = false
             return
         }
         NSApp.activate(ignoringOtherApps: true)
         guard let settingsOpener = Self.settingsOpener else {
             Self.pendingSettingsOpen = true
+            tracePopover("settings.openerUnavailable")
             return
         }
+        tracePopover("settings.openerInvoked")
         settingsOpener()
     }
 
@@ -638,12 +654,6 @@ struct HomeworkHelperRemoteApp: App {
             Color.clear
                 .frame(width: 160, height: 96)
                 .background(RemotePlaceholderWindowAccessor())
-                .background(RemoteSettingsOpenBridge())
-                .onAppear {
-                    DispatchQueue.main.async {
-                        RemoteAppDelegate.schedulePlaceholderHide()
-                    }
-                }
         }
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(.presented)
@@ -666,19 +676,6 @@ struct HomeworkHelperRemoteApp: App {
         Settings {
             RemoteSettingsView(viewModel: viewModel)
         }
-    }
-}
-
-struct RemoteSettingsOpenBridge: View {
-    @Environment(\.openSettings) private var openSettings
-
-    var body: some View {
-        Color.clear
-            .onAppear {
-                RemoteAppDelegate.installSettingsOpener {
-                    openSettings()
-                }
-            }
     }
 }
 
@@ -1318,17 +1315,36 @@ struct MenuBarMoonlightButton: View {
 
     var body: some View {
         let disabled = viewModel.moonlightFooterButtonDisabled
+        let failed = !disabled && viewModel.moonlightFooterActionFailed
+        let stopRequested = viewModel.moonlightSessionSnapshot.hasDesktopSession
+        let actionIcon = viewModel.moonlightFooterButtonIcon
+        let icon = if disabled {
+            "hourglass"
+        } else if failed {
+            "exclamationmark.triangle.fill"
+        } else {
+            actionIcon
+        }
+        let tone: MenuBarCTAButtonTone = if failed {
+            .warning
+        } else if !disabled && actionIcon == "stop.circle.fill" {
+            .destructive
+        } else {
+            .normal
+        }
+        let help = viewModel.moonlightFooterHelp
         MenuBarCTAButton(
-            title: viewModel.moonlightFooterButtonTitle,
-            systemImage: viewModel.moonlightFooterButtonIcon,
+            title: disabled ? "Moonlight 처리 중" : viewModel.moonlightFooterButtonTitle,
+            systemImage: icon,
             disabled: disabled,
-            tone: viewModel.moonlightFooterButtonIcon == "stop.circle.fill" ? .destructive : .normal,
+            tone: tone,
             layout: .horizontal(minHeight: 30),
-            help: viewModel.moonlightBindingStatusDisplay
+            help: help
         ) {
             viewModel.updateMoonlightPreferredScreen(NSApp.keyWindow?.screen ?? NSApp.mainWindow?.screen ?? NSScreen.main)
-            Task { await viewModel.toggleMoonlightDesktopSession() }
+            Task { await viewModel.toggleMoonlightDesktopSession(stopRequested: stopRequested) }
         }
+        .accessibilityHint(Text(help))
     }
 }
 
